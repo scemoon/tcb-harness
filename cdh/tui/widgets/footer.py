@@ -8,15 +8,19 @@ from textual.timer import Timer
 from rich.text import Text
 
 
-_WAVE_FRAMES = [
-    "  \u25d4 \u00b7\u00b7\u00b7 \u2571\u2572 \u2728 \u2572\u2571 \u00b7\u00b7\u00b7 \u25d4  ",
-    "  \u25d5 \u00b7 \u2571\u2572\u2571 \u2728 \u2572\u2571\u2572 \u00b7 \u25d5  ",
-    "  \u25d6 \u2571\u2572\u2571\u2572 \u2728 \u2572\u2571\u2572\u2571 \u25d6  ",
-    "  \u25d4 \u2572\u2571\u2572\u2571 \u2728 \u2571\u2572\u2571\u2572 \u25d4  ",
-    "  \u25d5 \u00b7 \u2572\u2571\u2572 \u2728 \u2571\u2572\u2571 \u00b7 \u25d5  ",
-    "  \u25d6 \u00b7\u00b7 \u2572\u2571 \u2728 \u2571\u2572 \u00b7\u00b7 \u25d6  ",
+_WAVE_BARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+_LOADING_TEXT = " Generating"
+
+_WAVE_PATTERNS = [
+    "▁▂▃▄▅▆▇█▇▆▅▄▃▂",
+    "▂▃▄▅▆▇█▇▆▅▄▃▂▁",
+    "▃▄▅▆▇█▇▆▅▄▃▂▁▁",
+    "▄▅▆▇█▇▆▅▄▃▂▁▁▂",
+    "▅▆▇█▇▆▅▄▃▂▁▁▂▃",
+    "▆▇█▇▆▅▄▃▂▁▁▂▃▄",
+    "▇█▇▆▅▄▃▂▁▁▂▃▄▅",
+    "█▇▆▅▄▃▂▁▁▂▃▄▅▆",
 ]
-_LOADING_TEXT = " Generating..."
 
 
 class FooterBar(Container):
@@ -53,20 +57,21 @@ class FooterBar(Container):
 
         left = Text.assemble(
             (" Ctrl+F ", key_style), ("Focus", text_style),
-            (" \u2502 ", dim),
+            (" │ ", dim),
             (" Tab ", key_style), ("Mode", text_style),
-            (" \u2502 ", dim),
+            (" │ ", dim),
             (" Ctrl+P ", key_style), ("Menu", text_style),
-            (" \u2502 ", dim),
+            (" │ ", dim),
             (" Ctrl+Q ", key_style), ("Quit", text_style),
         )
 
         if animated and self._loading:
-            wave = _WAVE_FRAMES[self._anim_frame % len(_WAVE_FRAMES)]
+            wave = _WAVE_PATTERNS[self._anim_frame % len(_WAVE_PATTERNS)]
             loading_style = t.warning if t else "#f7c873"
+            dim_style = t.variables.get('text_dim', '#565f89') if t else "#565f89"
             status_text = Text.assemble(
                 (wave, loading_style),
-                (_LOADING_TEXT, t.variables.get('text_dim', '#565f89') if t else "#565f89"),
+                (_LOADING_TEXT, dim_style),
             )
             static.update(Text.assemble(
                 (left.plain, left.style),
@@ -80,7 +85,7 @@ class FooterBar(Container):
             static.update(Text.assemble(
                 left,
                 ("       ", ""),
-                ("\u2606", ready_mark),
+                ("☆", ready_mark),
                 (" Ready", ready_style),
             ))
 
@@ -89,6 +94,18 @@ class FooterBar(Container):
             return
         self._loading = True
         self._anim_frame = 0
+        self._update_footer(animated=True)
+        self._timer = self.set_interval(0.08, self._tick)
+
+    def stop_loading(self) -> None:
+        self._loading = False
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+        self._update_footer()
+
+    def _tick(self) -> None:
+        self._anim_frame += 1
         self._update_footer(animated=True)
         self._timer = self.set_interval(0.12, self._tick)
 
