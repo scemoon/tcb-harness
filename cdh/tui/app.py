@@ -18,6 +18,7 @@ from cdh.lifecycle.manager import LifecycleManager
 from cdh.models.providers import *  # noqa: F401, F403
 from cdh.models.registry import ModelRegistry
 from cdh.storage.session import SessionStore
+from cdh.storage.activity import ActivityRecorder
 from cdh.trace.tracer import Tracer
 from cdh.tui.theme import THEMES
 from cdh.tui.widgets.header import HeaderBar
@@ -213,6 +214,7 @@ class CloudDevHarnessApp(App):
         cfg = load_config()
         self.config = cfg
         self.session_store = SessionStore()
+        self.activity_recorder = ActivityRecorder()
         self.lifecycle = LifecycleManager()
         self.tracer = Tracer()
         self.current_mode    = cfg.default_mode
@@ -310,6 +312,12 @@ class CloudDevHarnessApp(App):
             record = self.session_store.create(name="Default", mode=self.current_mode, project=project)
             self._session = record
             self._attach_agent_session()
+            self.activity_recorder.record(
+                event_type="session_auto_create",
+                project=project,
+                session=record.id,
+                details={"name": "Default", "mode": self.current_mode},
+            )
 
     def _attach_agent_session(self) -> None:
         if not self._session:

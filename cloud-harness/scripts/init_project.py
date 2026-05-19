@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent  # cloud-harness root
-WORKSPACE = Path(os.environ.get("OPENCLAW_WORKSPACE", SKILL_DIR.parent.parent))
+WORKSPACE = Path(os.environ.get("CLOUD_HARNESS_WORKSPACE", SKILL_DIR.parent.parent))
 PROJECTS_DIR = WORKSPACE / "projects"
 HARNESS_DIR = WORKSPACE / ".harness"
 CURRENT_FILE = HARNESS_DIR / "current"  # stores current project name

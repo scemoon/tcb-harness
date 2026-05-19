@@ -3,6 +3,22 @@ from __future__ import annotations
 from cdh.tui.commands.registry import command
 
 
+@command("activity list", "List recent project/session activities", "[project]")
+def cmd_activity_list(app, *args):
+    project = args[0] if args else ""
+    activities = app.activity_recorder.list_activities(project=project, limit=50)
+    if not activities:
+        return "No activities recorded."
+    lines = []
+    for a in activities:
+        ts = a.created_at.strftime("%Y-%m-%d %H:%M") if a.created_at else "N/A"
+        detail = ""
+        if a.details:
+            detail = " | " + ", ".join(f"{k}={v}" for k, v in a.details.items() if v)
+        lines.append(f"{ts}  [{a.event_type}]  project={a.project}  session={a.session[:8]}...{detail}")
+    return "\n".join(lines)
+
+
 @command("session list", "List all sessions", "")
 def cmd_session_list(app, *args):
     sessions = app.session_store.list_all()
@@ -28,6 +44,12 @@ def cmd_session_new(app, *args):
     app.agent.attach_session(agent_s)
     chat = app.query_one("ChatPanel")
     chat.clear_chat()
+    app.activity_recorder.record(
+        event_type="session_new",
+        project=app.current_project or "",
+        session=record.id,
+        details={"name": name, "mode": app.current_mode},
+    )
     return f"Created session: {record.id[:8]}... ({name})"
 
 
@@ -47,5 +69,11 @@ def cmd_session_load(app, *args):
                 agent_s.save()
             app.agent.attach_session(agent_s)
             app._display_session_messages()
+            app.activity_recorder.record(
+                event_type="session_load",
+                project=s.project or "",
+                session=s.id,
+                details={"name": s.name, "mode": s.mode},
+            )
             return f"Loaded session: {s.name} ({s.id[:8]}...)"
     return f"Session not found: {query}"

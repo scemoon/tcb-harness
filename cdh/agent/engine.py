@@ -101,6 +101,51 @@ class AgentEngine:
         self._hooks = HookManager()
         self._permissions = PermissionChecker(create_safe_permission_set())
         self._task_manager = TaskManager()
+        self._project_config: dict = {}
+        self._harness_mode = False
+
+    def _detect_harness_mode(self) -> bool:
+        """Detect if current workspace is a harness project."""
+        ws = Path(self.app.config.default_workspace).expanduser() if self.app.config.default_workspace else Path.cwd()
+        harness_dir = ws / ".harness"
+        if harness_dir.exists() and (harness_dir / "config.json").exists():
+            return True
+        projects_dir = ws / "projects"
+        if projects_dir.exists():
+            for d in projects_dir.iterdir():
+                if d.is_dir() and (d / ".harness").exists():
+                    return True
+        return False
+
+    def _load_project_config(self, project_name: str) -> dict:
+        """Load project config into memory."""
+        ws = Path(self.app.config.default_workspace).expanduser() if self.app.config.default_workspace else Path.cwd()
+        config_path = ws / "projects" / project_name / ".harness" / "config.json"
+        if config_path.exists():
+            try:
+                self._project_config = json.loads(config_path.read_text(encoding="utf-8"))
+                return self._project_config
+            except Exception:
+                pass
+        state_path = ws / "projects" / project_name / ".harness" / "state.json"
+        if state_path.exists():
+            try:
+                return json.loads(state_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {}
+
+    def _auto_init_harness(self) -> str:
+        """Auto-initialize harness mode if project detected but not initialized."""
+        if self._detect_harness_mode():
+            self._harness_mode = True
+            return ""
+        ws = Path(self.app.config.default_workspace).expanduser() if self.app.config.default_workspace else Path.cwd()
+        has_code = any(ws.glob("*.json")) or any(ws.glob("*.py")) or any(ws.glob("*.js"))
+        if has_code:
+            self._harness_mode = True
+            return "Project detected. Run `/harness init <name> --platform <mp|web|oa|hybrid>` to initialize harness mode."
+        return ""
 
     def set_agent(self, agent_type: str) -> None:
         self.current_agent = create_agent(agent_type)
@@ -118,6 +163,19 @@ class AgentEngine:
 
         if agent_type in ("plan", "solo"):
             system_parts.append(PLAN_INSTRUCTIONS)
+
+        if self._harness_mode:
+            system_parts.append(
+                "\n## Harness Mode Active\n"
+                "You are in harness development mode. Follow the pipeline:\n"
+                "1. **Init**: Project scaffold, cloud environment config\n"
+                "2. **Spec**: EARS requirements, validate with spec guide\n"
+                "3. **Design**: UI components, API contracts, data models\n"
+                "4. **Coding**: TDD cycle (RED → GREEN → REFACTOR)\n"
+                "5. **Testing**: Generate test cases, verify coverage ≥80%\n"
+                "6. **Deploy**: Deploy to cloud, verify all components\n"
+                "Use `/harness status` to check current phase.\n"
+            )
 
         system_parts.append(TOOL_DESCRIPTIONS)
 
@@ -138,9 +196,12 @@ class AgentEngine:
 
     def _inject_project_context(self, project_name: str) -> None:
         if not project_name:
+            self._auto_init_harness()
             return
 
+        self._harness_mode = True
         self._pipeline = PipelineManager(project_name)
+        self._project_config = self._load_project_config(project_name)
 
         pipeline_info = self._pipeline.get_pipeline_summary()
         self.context.add_system(f"\n## Development Pipeline\n{pipeline_info}\n")
@@ -328,6 +389,10 @@ class AgentEngine:
         project_name = getattr(self.app, "current_project", None) or ""
         if project_name:
             self._inject_project_context(project_name)
+        else:
+            init_msg = self._auto_init_harness()
+            if init_msg:
+                logger.info(f"Harness auto-init: {init_msg}")
 
         self.context.add_user(user_input)
 

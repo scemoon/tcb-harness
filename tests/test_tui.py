@@ -138,8 +138,8 @@ class TestInput:
             await inp.action_submit()
             await pilot.pause()
 
-            from textual.widgets import RichLog
-            log = chat.query_one("#chat-log", RichLog)
+            from textual.widgets import Static
+            log = chat.query_one("#chat-log", Static)
             assert log is not None
 
 

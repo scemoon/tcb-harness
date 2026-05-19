@@ -85,6 +85,11 @@ def cmd_harness_init(app, *args):
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(WORKSPACE))
         if result.returncode == 0:
+            app.activity_recorder.record(
+                event_type="harness_init",
+                project=name,
+                details={"platform": platform, "appid": appid, "envId": envId},
+            )
             return f"Project '{name}' initialized.\n{result.stdout}"
         else:
             return f"Init failed: {result.stderr}"
@@ -161,6 +166,12 @@ def cmd_harness_switch(app, *args):
         CURRENT_FILE.write_text(name, encoding="utf-8")
         app.current_project = name
         app._load_session_for_project(name)
+        app.activity_recorder.record(
+            event_type="harness_switch",
+            project=name,
+            session=app._session.id if app._session else "",
+            details={"previous_project": get_current_project()},
+        )
         return f"Switched to project: {name}"
     except Exception as e:
         return f"Failed to switch: {e}"
