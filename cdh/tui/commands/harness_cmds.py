@@ -5,23 +5,22 @@ import os
 import subprocess
 from pathlib import Path
 
+from cdh.config import CLOUD_DEV_HARNESS_DIR, load_config, save_config
 from cdh.tui.commands.registry import command
 
 
 HARNESS_SKILL_DIR = Path(__file__).parent.parent.parent.parent / "cloud-harness"
-WORKSPACE = HARNESS_SKILL_DIR.parent
-PROJECTS_DIR = WORKSPACE / "projects"
-HARNESS_DIR = WORKSPACE / ".harness"
-CURRENT_FILE = HARNESS_DIR / "current"
+PROJECTS_DIR = CLOUD_DEV_HARNESS_DIR / "projects"
 
 
 def get_current_project() -> str:
-    if not CURRENT_FILE.exists():
-        return ""
-    try:
-        return CURRENT_FILE.read_text(encoding="utf-8").strip()
-    except Exception:
-        return ""
+    return load_config().current_project
+
+
+def write_current_project(name: str) -> None:
+    cfg = load_config()
+    cfg.current_project = name
+    save_config(cfg)
 
 
 def get_project_state(project_name: str) -> dict:
@@ -83,8 +82,10 @@ def cmd_harness_init(app, *args):
         cmd.extend(["--envId", envId])
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(WORKSPACE))
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
+            write_current_project(name)
+            app.current_project = name
             app.activity_recorder.record(
                 event_type="harness_init",
                 project=name,
@@ -137,8 +138,10 @@ def cmd_harness_import(app, *args):
         cmd.extend(["--token", token])
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(WORKSPACE))
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
+            write_current_project(name)
+            app.current_project = name
             return f"Project '{name}' imported from GitHub.\n{result.stdout}"
         else:
             return f"Import failed: {result.stderr}"
@@ -162,15 +165,15 @@ def cmd_harness_switch(app, *args):
         return f"Not a harness project: {name}"
     
     try:
-        HARNESS_DIR.mkdir(parents=True, exist_ok=True)
-        CURRENT_FILE.write_text(name, encoding="utf-8")
+        prev = get_current_project()
+        write_current_project(name)
         app.current_project = name
         app._load_session_for_project(name)
         app.activity_recorder.record(
             event_type="harness_switch",
             project=name,
             session=app._session.id if app._session else "",
-            details={"previous_project": get_current_project()},
+            details={"previous_project": prev},
         )
         return f"Switched to project: {name}"
     except Exception as e:
@@ -248,7 +251,7 @@ def cmd_harness_run(app, *args):
     cmd = ["python3", str(script_path), "--project", project_name] + list(args[1:])
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(WORKSPACE))
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             return result.stdout if result.stdout else "Done."
         else:

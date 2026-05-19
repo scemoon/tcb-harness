@@ -35,12 +35,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent  # cloud-harness root
-WORKSPACE = Path(os.environ.get("CLOUD_HARNESS_WORKSPACE", SKILL_DIR.parent.parent))
-PROJECTS_DIR = WORKSPACE / "projects"
-HARNESS_DIR = WORKSPACE / ".harness"
-CURRENT_FILE = HARNESS_DIR / "current"  # stores current project name
+CDH_DIR = Path(os.environ.get("CLOUD_DEV_HARNESS_DIR", Path.home() / ".cloud-dev-harness"))
+PROJECTS_DIR = CDH_DIR / "projects"
+CURRENT_FILE = CDH_DIR / ".current_project"  # stores current project name
 GITHUB_API = "https://api.github.com"
-TOKEN_FILE = WORKSPACE / ".cloud-harness-tokens.json"
+TOKEN_FILE = CDH_DIR / ".cloud-harness-tokens.json"
 
 
 def load_stored_token() -> str:
@@ -108,7 +107,7 @@ def set_current_project(name: str) -> bool:
         print(f"[ERROR] Not a harness project: {name}")
         return False
     try:
-        HARNESS_DIR.mkdir(parents=True, exist_ok=True)
+        CDH_DIR.mkdir(parents=True, exist_ok=True)
         CURRENT_FILE.write_text(name, encoding="utf-8")
         return True
     except Exception as e:
@@ -634,6 +633,8 @@ def main():
                             help="Platform type: mp, web, hybrid")
     p_scaffold.add_argument("--appid", default="", help="WeChat Mini Program AppID")
     p_scaffold.add_argument("--envId", default="", help="CloudBase Environment ID")
+    p_scaffold.add_argument("--projects-dir", default="",
+                            help=f"Projects directory (default: {PROJECTS_DIR})")
 
     # Import mode
     p_import = sub.add_parser("import", help="Import an existing project from GitHub")
@@ -645,6 +646,8 @@ def main():
                           help="GitHub token (reads from env GITHUB_TOKEN or stored token if omitted)")
     p_import.add_argument("--save-token", action="store_true",
                           help="Save the GitHub token to local file after import")
+    p_import.add_argument("--projects-dir", default="",
+                          help=f"Projects directory (default: {PROJECTS_DIR})")
 
     # Auth mode: save / show / clear GitHub token
     p_auth = sub.add_parser("auth", help="Manage stored credentials")
@@ -708,6 +711,11 @@ def main():
         return
 
     # Determine mode
+    global PROJECTS_DIR
+    projects_dir_arg = getattr(args, "projects_dir", "")
+    if projects_dir_arg:
+        PROJECTS_DIR = Path(projects_dir_arg).expanduser().resolve()
+
     if args.mode in ("import", "github"):
         save_flag = getattr(args, "save_token", False)
         name = args.name.strip().lower().replace(" ", "-")

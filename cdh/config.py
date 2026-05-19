@@ -85,6 +85,7 @@ class GlobalConfig:
     shell: ShellConfig = field(default_factory=ShellConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     model_auto: ModelAutoConfig = field(default_factory=ModelAutoConfig)
+    current_project: str = ""
     log_level: str = "info"
     session_auto_save: bool = True
 
@@ -214,6 +215,7 @@ def _write_default_config():
             "medium_tasks": "minimax-2.7",
             "complex_tasks": "minimax-2.7"
         },
+        "current_project": "",
         "log_level": "info",
         "session_auto_save": True,
     }

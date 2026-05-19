@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Optional
 import yaml
 
-
-WORKSPACE = Path(__file__).parent.parent.parent
-HARNESS_DIR = WORKSPACE / "cloud-harness"
+from cdh.config import CLOUD_DEV_HARNESS_DIR
+PROJECTS_DIR = CLOUD_DEV_HARNESS_DIR / "projects"
+HARNESS_DIR = Path(__file__).parent.parent.parent / "cloud-harness"
 
 
 class PipelinePhase:
@@ -73,7 +73,7 @@ class PipelineManager:
             self._state = {}
             return
 
-        project_dir = WORKSPACE / "projects" / self.project_name
+        project_dir = PROJECTS_DIR / self.project_name
         if not project_dir.exists():
             self._config = {}
             self._state = {}

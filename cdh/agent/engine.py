@@ -15,6 +15,7 @@ from cdh.agent.agents.types import (
     get_system_prompt, TOOL_DESCRIPTIONS, BUILT_IN_AGENTS, AgentPermission, PLAN_INSTRUCTIONS
 )
 
+from cdh.config import CLOUD_DEV_HARNESS_DIR
 from cdh.agent.session import AgentSession
 from cdh.agent.hooks import HookManager, HookContext, HookResult
 from cdh.agent.permissions import PermissionChecker, PermissionSet, create_safe_permission_set
@@ -105,12 +106,8 @@ class AgentEngine:
         self._harness_mode = False
 
     def _detect_harness_mode(self) -> bool:
-        """Detect if current workspace is a harness project."""
-        ws = Path(self.app.config.default_workspace).expanduser() if self.app.config.default_workspace else Path.cwd()
-        harness_dir = ws / ".harness"
-        if harness_dir.exists() and (harness_dir / "config.json").exists():
-            return True
-        projects_dir = ws / "projects"
+        """Detect if any harness projects exist."""
+        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
         if projects_dir.exists():
             for d in projects_dir.iterdir():
                 if d.is_dir() and (d / ".harness").exists():
@@ -119,15 +116,15 @@ class AgentEngine:
 
     def _load_project_config(self, project_name: str) -> dict:
         """Load project config into memory."""
-        ws = Path(self.app.config.default_workspace).expanduser() if self.app.config.default_workspace else Path.cwd()
-        config_path = ws / "projects" / project_name / ".harness" / "config.json"
+        base = CLOUD_DEV_HARNESS_DIR / "projects" / project_name / ".harness"
+        config_path = base / "config.json"
         if config_path.exists():
             try:
                 self._project_config = json.loads(config_path.read_text(encoding="utf-8"))
                 return self._project_config
             except Exception:
                 pass
-        state_path = ws / "projects" / project_name / ".harness" / "state.json"
+        state_path = base / "state.json"
         if state_path.exists():
             try:
                 return json.loads(state_path.read_text(encoding="utf-8"))
@@ -141,6 +138,11 @@ class AgentEngine:
             self._harness_mode = True
             return ""
         ws = Path(self.app.config.default_workspace).expanduser() if self.app.config.default_workspace else Path.cwd()
+        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        if projects_dir.exists() and any(projects_dir.iterdir()):
+            self._harness_mode = True
+            # Projects exist but none is set as current — user should switch
+            return "Projects exist. Use `/harness switch <name>` to select one."
         has_code = any(ws.glob("*.json")) or any(ws.glob("*.py")) or any(ws.glob("*.js"))
         if has_code:
             self._harness_mode = True
