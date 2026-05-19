@@ -156,8 +156,8 @@ class CloudDevHarnessApp(App):
     * { background: $background; }
     Screen { background: $background; padding: 0; margin: 0; }
     #app-container { height: 100%; width: 100%; overflow: hidden; padding: 0; margin: 0; }
-    #main-content { height: 1fr; layout: horizontal; }
-    #chat-area { width: 1fr; padding: 0; margin: 0; }
+    #main-content { height: 1fr; layout: horizontal;  }
+    #chat-area { width: 1fr; padding: 1; margin: 0; }
     #right-sidebar { width: 25%; min-width: 20; background: transparent;  margin: 0; }
     #right-sidebar.-hidden { display: none; }
     #cmd-suggestions { display: none; height: auto; max-height: 10; padding: 0 2; background: $panel; scrollbar-size: 0 0; scrollbar-gutter: auto; }
@@ -172,11 +172,8 @@ class CloudDevHarnessApp(App):
     FooterBar Static { width: 100%; }
     HeaderBar { height: 2; border-bottom: solid $primary; padding: 0; }
     HeaderBar Static { width: 100%; }
-    ChatPanel { height: 1fr; overflow-y: auto; scrollbar-size: 0 0; scrollbar-gutter: auto; padding: 0 0 0 0; border-right: solid $primary;  }
-    ChatPanel > #welcome { height: 100%; width: 100%; content-align: center middle; }
-    ChatPanel > #chat-log { height: 1fr; padding: 0; scrollbar-size: 0 0; border: none; background: $background; }
-    ChatPanel > #stream-output { height: auto; display: none; padding: 0; background: $background; }
-    RightPanel { background: transparent; padding: 0; color: $text_bright; height: 100%; }
+    ChatPanel { height: 1fr; border-right: solid $primary; }
+    RightPanel { background: transparent; padding: 0; color: $text_bright; height: 100%;  }
     RightPanel .section-title { text-style: bold; padding: 0; }
     RightPanel .section-rule { color: $text_dim; }
     RightPanel ListView { height: 1fr; border: none; background: transparent; }
@@ -294,13 +291,63 @@ class CloudDevHarnessApp(App):
         self._focus_input()
 
     def _init_session(self) -> None:
-        sessions = self.session_store.list_all()
+        from cdh.tui.commands.harness_cmds import get_current_project
+        if not self.current_project:
+            self.current_project = get_current_project() or None
+        self._load_session_for_project(self.current_project or "")
+
+    def _load_session_for_project(self, project: str) -> None:
+        if project:
+            sessions = self.session_store.list_by_project(project)
+        else:
+            sessions = self.session_store.list_by_project("")
         if sessions:
             self._session = sessions[0]
             self.current_mode = self._session.mode or self.current_mode
+            self._attach_agent_session()
+            self._display_session_messages()
         else:
-            record = self.session_store.create(name="Default", mode=self.current_mode)
+            record = self.session_store.create(name="Default", mode=self.current_mode, project=project)
             self._session = record
+            self._attach_agent_session()
+
+    def _attach_agent_session(self) -> None:
+        if not self._session:
+            return
+        from cdh.agent.session import AgentSession
+        agent_s = AgentSession(self._session.id)
+        if not agent_s.load():
+            agent_s.save()
+        self.agent.attach_session(agent_s)
+
+    def _display_session_messages(self) -> None:
+        if not self._session:
+            return
+        messages = self._session.messages or []
+        if not messages:
+            from cdh.agent.session import AgentSession
+            agent_s = AgentSession(self._session.id)
+            if agent_s.load():
+                messages = agent_s.messages
+        if not messages:
+            return
+        chat = self.query_one_optional("ChatPanel")
+        if chat:
+            chat.load_messages(messages)
+
+    def _persist_session(self) -> None:
+        if not self._session:
+            return
+        from cdh.agent.session import AgentSession
+        agent_s = AgentSession(self._session.id)
+        agent_s.load()
+        agent_s._data.messages = self.agent.context.to_session_format()
+        agent_s.save()
+        self._session.messages = agent_s.messages
+        self.session_store.update(self._session)
+
+    def on_unmount(self) -> None:
+        self._persist_session()
 
     # ── model select ──
 
@@ -738,17 +785,27 @@ class CloudDevHarnessApp(App):
         try:
             async for chunk in self.agent.chat_stream(text):
                 chat.add_stream_chunk(chunk)
-                chat.flush_stream()
 
             chat.finish_stream()
             self.turn_count += 1
             self.token_count = self.agent.total_tokens
+            self._persist_session()
+            self._refresh_right_panel()
 
         except Exception as e:
             chat.finish_stream()
             chat.add_message("error", f"Error: {e}")
         finally:
             footer.stop_loading()
+
+    def _refresh_right_panel(self) -> None:
+        from cdh.tui.widgets.right_panel import RightPanel
+        rp = self.query_one_optional("#right-sidebar", RightPanel)
+        if rp is None:
+            return
+        tm = self.agent._task_manager
+        rp._refresh_tasks(tm.list_tasks())
+        rp._refresh_todos(tm.list_todos())
 
     def _get_selected_slash_command(self) -> str | None:
         """Return the currently highlighted slash command, or None."""

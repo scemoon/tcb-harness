@@ -77,6 +77,7 @@ class BuildAgent(AgentConfig):
             permission_read=AgentPermission.ALLOW,
             permission_webfetch=AgentPermission.ALLOW,
             permission_websearch=AgentPermission.ALLOW,
+            max_turns=10,
             tools=[],
         )
 
@@ -92,6 +93,7 @@ class PlanAgent(AgentConfig):
             permission_read=AgentPermission.ALLOW,
             permission_webfetch=AgentPermission.ALLOW,
             permission_websearch=AgentPermission.ALLOW,
+            max_turns=5,
             temperature=0.1,
             tools=[],
         )
@@ -193,8 +195,24 @@ TOOL_DESCRIPTIONS = """
 - **Task**: task(agent_type, prompt) - Spawn subagent to handle subtask.
 - **Skill**: skill(name) - Load skill by name.
 
-### Tasks
-- **TaskCreate**: task_create(title, description) - Create a task.
-- **TaskList**: task_list() - List all tasks.
-- **TaskUpdate**: task_update(id, status) - Update task status.
+### Tasks & Planning
+- **TaskCreate**: task_create(title, description) - Create a task. Returns task id.
+- **TaskList**: task_list() - List all tasks with status.
+- **TaskUpdate**: task_update(id, status) - Update task status (todo/doing/done).
+- **TodoCreate**: todo_create(text) - Create a todo item. Returns todo id.
+- **TodoList**: todo_list() - List all todos.
+- **TodoComplete**: todo_complete(id) - Mark a todo as done.
+"""
+
+PLAN_INSTRUCTIONS = """
+## Planning & Task Management
+
+When given a goal or task, ALWAYS follow this workflow:
+1. **Analyze** the request and break it into steps
+2. **Create tasks** using task_create() for each major step
+3. **Create todos** using todo_create() for small items
+4. **Execute** tasks one by one, updating status with task_update()
+5. **Complete** todos as you finish them with todo_complete()
+
+For plan/solo mode, always start by creating a plan with tasks before taking action.
 """
