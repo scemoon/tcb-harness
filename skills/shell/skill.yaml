@@ -1,0 +1,8 @@
+name: shell
+description: >-
+  Shell skill for executing system commands, managing processes,
+  and performing file operations. Integrates with the agent's
+  exec_shell tool and provides command templates.
+version: 1.0.0
+enabled: true
+entry: SKILL.md

@@ -1,0 +1,10 @@
+tests/
+testing/
+cloud-harness/
+skills/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+.env
+.git

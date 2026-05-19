@@ -1,0 +1,7 @@
+name: git
+description: >-
+  Git skill for version control operations, GitHub integration,
+  and code repository management.
+version: 1.0.0
+enabled: true
+entry: SKILL.md
