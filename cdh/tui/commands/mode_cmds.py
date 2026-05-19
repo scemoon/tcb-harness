@@ -18,5 +18,9 @@ def cmd_mode(app, *args):
     if mode not in ("plan", "agent", "solo"):
         return "Mode must be plan, agent, or solo."
     app.current_mode = mode
+    if mode == "plan":
+        app.agent.set_agent("plan")
+    else:
+        app.agent.set_agent("build")
     app.query_one("HeaderBar").sync(app)
     return f"Switched to {mode} mode."

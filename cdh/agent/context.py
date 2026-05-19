@@ -96,10 +96,13 @@ class ContextManager:
             content_parts.append(f"{prefix}: {m.content[:500]}")
         return "\n".join(content_parts[-10:])
 
+    def add_tool_result(self, tool_call_id: str, content: str, is_error: bool = False) -> None:
+        self.add_message("tool", content, name=tool_call_id)
+
     def get_context(self) -> list:
         from cdh.models.provider import Message as ProviderMessage
         return [
-            ProviderMessage(role=m.role, content=m.content)
+            ProviderMessage(role=m.role, content=m.content, name=m.name)
             for m in self.messages
         ]
 
@@ -112,7 +115,7 @@ class ContextManager:
         self._update_token_count()
 
     def to_session_format(self) -> list[dict]:
-        return self.get_context()
+        return [m.to_dict() for m in self.messages]
 
     def info(self) -> str:
         return f"Messages: {len(self.messages)}, Tokens: ~{self._token_count}"

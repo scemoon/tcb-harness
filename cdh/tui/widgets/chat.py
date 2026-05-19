@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import json
 from typing import Any, Optional, Union
-from textual.widgets import RichLog, Static
+from textual.widgets import Static
 from textual.containers import Vertical
 from textual.app import ComposeResult
 from rich.text import Text
@@ -394,7 +394,7 @@ class ChatPanel(Vertical):
         display: none;
     }
     ChatPanel > #chat-log {
-        height: 100%;
+        height: 1fr;
     }
     ChatPanel > #stream-output {
         display: none;
@@ -414,10 +414,11 @@ class ChatPanel(Vertical):
         self._stream_parser = StreamParser()
         self._welcome_shown = False
         self._emitted_ids: set[str] = set()
+        self._renderables: list[Any] = []
 
     def compose(self) -> ComposeResult:
         yield Static(id="welcome")
-        yield RichLog(id="chat-log", highlight=True, markup=True, max_lines=10000)
+        yield Static(id="chat-log")
         yield Static(id="stream-output")
 
     def on_mount(self) -> None:
@@ -501,14 +502,14 @@ class ChatPanel(Vertical):
     def add_stream_chunk(self, content: str) -> None:
         if not self._streaming:
             return
-        log = self.query_one_optional("#chat-log", RichLog)
+        log = self.query_one_optional("#chat-log", Static)
         so = self.query_one_optional("#stream-output", Static)
         if log is None:
             return
 
         blocks = self._stream_parser.feed(content)
         for block in blocks:
-            self._render_block(log, "assistant", block)
+            self._render_block(block)
 
         if so is not None:
             self._update_pending(so)
@@ -578,11 +579,9 @@ class ChatPanel(Vertical):
     def finish_stream(self) -> None:
         self._streaming = False
         self._emitted_ids.clear()
-        log = self.query_one_optional("#chat-log", RichLog)
-        remaining = self._stream_parser.flush() if log else []
-        if log and remaining:
-            for block in remaining:
-                self._render_block(log, "assistant", block)
+        remaining = self._stream_parser.flush()
+        for block in remaining:
+            self._render_block(block)
         so = self.query_one_optional("#stream-output", Static)
         if so is not None:
             so.display = False
@@ -590,7 +589,12 @@ class ChatPanel(Vertical):
 
     # ── Block rendering ──
 
-    def _render_block(self, log: RichLog, role: str, block: dict) -> None:
+    def _refresh_chat(self) -> None:
+        log = self.query_one_optional("#chat-log", Static)
+        if log is not None:
+            log.update(Group(*self._renderables) if self._renderables else "")
+
+    def _render_block(self, block: dict) -> None:
         btype = block.get("type", "text")
         if btype == "thinking":
             content = block.get("thinking", "")
@@ -599,29 +603,28 @@ class ChatPanel(Vertical):
                 return
             self._emitted_ids.add(key)
             if content:
-                self._render_thinking_rich(log, content)
+                self._render_thinking_rich(content)
         elif btype == "tool_use_start":
             tool_use = block.get("tool_use", {})
-            self._render_tool_use_start_rich(log, tool_use.get("name", "tool"), tool_use.get("id", ""))
+            self._render_tool_use_start_rich(tool_use.get("name", "tool"), tool_use.get("id", ""))
         elif btype == "tool_use":
-            self._render_tool_use_rich(log, block.get("tool_use", {}))
+            self._render_tool_use_rich(block.get("tool_use", {}))
         elif btype == "tool_result":
-            self._render_tool_result_rich(log, block.get("tool_result", {}))
+            self._render_tool_result_rich(block.get("tool_result", {}))
         elif btype == "code_execution":
-            self._render_code_execution_rich(log, block.get("code_execution", {}))
+            self._render_code_execution_rich(block.get("code_execution", {}))
         elif btype == "search_result":
-            self._render_search_result_rich(log, block.get("search_result", {}))
+            self._render_search_result_rich(block.get("search_result", {}))
         elif btype == "text":
             text = block.get("text", "")
             if text:
-                self._render_text_rich(log, role, text)
+                self._render_text_rich("assistant", text)
         else:
             text = block.get("text", "") or str(block)
             if text:
-                self._render_text_rich(log, role, text)
+                self._render_text_rich("assistant", text)
 
-    def _render_thinking_rich(self, log: RichLog, thinking: str) -> None:
-        log.write(Text(""))
+    def _render_thinking_rich(self, thinking: str) -> None:
         t = getattr(self.app, 'tui_theme', None)
         border = t.variables.get('border', '#3b4261') if t else '#3b4261'
         panel = Panel(
@@ -632,15 +635,18 @@ class ChatPanel(Vertical):
             padding=(1, 2),
             width=None,
         )
-        log.write(panel)
-        log.write(Text(""))
+        self._renderables.append(Text(""))
+        self._renderables.append(panel)
+        self._renderables.append(Text(""))
+        self._refresh_chat()
 
-    def _render_tool_use_start_rich(self, log: RichLog, tool_name: str, tool_id: str) -> None:
-        log.write(Text(""))
+    def _render_tool_use_start_rich(self, tool_name: str, tool_id: str) -> None:
         t = getattr(self.app, 'tui_theme', None)
-        log.write(Text(f"Tool: {tool_name}  ID: {tool_id}  Status: Working...", style=t.secondary if t else "cyan"))
+        self._renderables.append(Text(""))
+        self._renderables.append(Text(f"Tool: {tool_name}  ID: {tool_id}  Status: Working...", style=t.secondary if t else "cyan"))
+        self._refresh_chat()
 
-    def _render_tool_use_rich(self, log: RichLog, tool_use: dict) -> None:
+    def _render_tool_use_rich(self, tool_use: dict) -> None:
         tool_name = tool_use.get("name", "tool")
         tool_id = tool_use.get("id", "")
         tool_input = tool_use.get("input", {})
@@ -675,65 +681,61 @@ class ChatPanel(Vertical):
                 padding=(0, 1),
             )
 
-        log.write(Text(""))
-        log.write(panel)
+        self._renderables.append(Text(""))
+        self._renderables.append(panel)
+        self._refresh_chat()
 
-    def _render_text_rich(self, log: RichLog, role: str, text: str) -> None:
+    def _render_text_rich(self, role: str, text: str) -> None:
         t = getattr(self.app, 'tui_theme', None)
         if role == "user":
             lines = text.split("\n")
             for i, line in enumerate(lines):
                 prefix = "> " if i == 0 else "  "
-                log.write(Text(prefix + line, style=f"bold {t.secondary}" if t else "bold cyan"))
+                self._renderables.append(Text(prefix + line, style=f"bold {t.secondary}" if t else "bold cyan"))
+            self._refresh_chat()
             return
         rendered = _render_markdown_rich(text)
         if not rendered:
             return
         for item in rendered:
-            log.write(item)
+            self._renderables.append(item)
+        self._refresh_chat()
 
     # ── Non-streaming messages ──
 
     def add_message(self, role: str, content: str) -> None:
         if self._welcome_shown:
             self._hide_welcome()
-        log = self.query_one_optional("#chat-log", RichLog)
-        if log is None:
-            return
         t = getattr(self.app, 'tui_theme', None)
         if role == "user":
             lines = content.split("\n")
             for i, line in enumerate(lines):
                 prefix = "> " if i == 0 else "  "
-                log.write(Text(prefix + line, style=f"bold {t.secondary}" if t else "bold cyan"))
+                self._renderables.append(Text(prefix + line, style=f"bold {t.secondary}" if t else "bold cyan"))
         elif role == "assistant":
             rendered = _render_markdown_rich(content)
             if rendered:
                 for item in rendered:
-                    log.write(item)
+                    self._renderables.append(item)
             else:
-                log.write(Text("(empty)", style="dim"))
+                self._renderables.append(Text("(empty)", style="dim"))
         elif role == "system":
             for line in content.split("\n"):
-                log.write(Text(f"  {line}", style="dim"))
+                self._renderables.append(Text(f"  {line}", style="dim"))
         elif role == "error":
             for line in content.split("\n"):
-                log.write(Text(f"  \u2716 {line}", style=f"bold {t.error}" if t else "bold red"))
+                self._renderables.append(Text(f"  \u2716 {line}", style=f"bold {t.error}" if t else "bold red"))
         else:
             for line in content.split("\n"):
-                log.write(Text(f"  {line}", style=t.foreground if t else "white"))
+                self._renderables.append(Text(f"  {line}", style=t.foreground if t else "white"))
+        self._refresh_chat()
 
     def add_message_blocks(self, role: str, blocks: list[dict]) -> None:
-        log = self.query_one_optional("#chat-log", RichLog)
-        if log is None:
-            return
         for block in blocks:
-            self._render_block(log, role, block)
+            self._render_block(block)
 
     def clear_chat(self) -> None:
-        log = self.query_one_optional("#chat-log", RichLog)
-        if log:
-            log.clear()
+        self._renderables = []
         so = self.query_one_optional("#stream-output", Static)
         if so is not None:
             so.display = False
@@ -741,6 +743,7 @@ class ChatPanel(Vertical):
         self._streaming = False
         self._stream_parser = StreamParser()
         self._welcome_shown = False
+        self._refresh_chat()
 
     def load_messages(self, messages: list[dict]) -> None:
         self._hide_welcome()
@@ -751,7 +754,7 @@ class ChatPanel(Vertical):
             if content:
                 self.add_message(role, content)
 
-    def _render_tool_result_rich(self, log: RichLog, tool_result: dict) -> None:
+    def _render_tool_result_rich(self, tool_result: dict) -> None:
         tool_use_id = tool_result.get("tool_use_id", "")
         content = tool_result.get("content", "")
         is_error = tool_result.get("is_error", False)
@@ -806,12 +809,13 @@ class ChatPanel(Vertical):
                     padding=(0, 1),
                 )
 
-        log.write(Text(""))
-        log.write(panel)
+        self._renderables.append(Text(""))
+        self._renderables.append(panel)
         if truncated:
-            log.write(Text(f"  ... ({len(content_str)} chars total, showing first {max_preview})", style="dim"))
+            self._renderables.append(Text(f"  ... ({len(content_str)} chars total, showing first {max_preview})", style="dim"))
+        self._refresh_chat()
 
-    def _render_code_execution_rich(self, log: RichLog, code_result: dict) -> None:
+    def _render_code_execution_rich(self, code_result: dict) -> None:
         tool_use_id = code_result.get("tool_use_id", "")
         content = code_result.get("content", {})
         t = getattr(self.app, 'tui_theme', None)
@@ -826,10 +830,11 @@ class ChatPanel(Vertical):
             border_style=f"dim {t.success}" if t else "dim green",
             padding=(0, 0),
         )
-        log.write(Text(""))
-        log.write(panel)
+        self._renderables.append(Text(""))
+        self._renderables.append(panel)
+        self._refresh_chat()
 
-    def _render_search_result_rich(self, log: RichLog, search_result: dict) -> None:
+    def _render_search_result_rich(self, search_result: dict) -> None:
         tool_use_id = search_result.get("tool_use_id", "")
         content = search_result.get("content", {})
         t = getattr(self.app, 'tui_theme', None)
@@ -844,5 +849,6 @@ class ChatPanel(Vertical):
             border_style=f"dim {t.warning}" if t else "dim yellow",
             padding=(0, 0),
         )
-        log.write(Text(""))
-        log.write(panel)
+        self._renderables.append(Text(""))
+        self._renderables.append(panel)
+        self._refresh_chat()

@@ -25,13 +25,18 @@ HandlerFunc = Callable[..., str]
 CommandEntry = tuple[HandlerFunc, str, str]  # (handler, help_text, usage)
 
 
+_loaded = False
+
 def _ensure_loaded():
-    if not CommandRegistry._handlers:
-        for mod_name in _COMMAND_MODULES:
-            try:
-                importlib.import_module(mod_name)
-            except ImportError:
-                pass
+    global _loaded
+    if _loaded:
+        return
+    _loaded = True
+    for mod_name in _COMMAND_MODULES:
+        try:
+            importlib.import_module(mod_name)
+        except ImportError:
+            pass
 
 
 def command(name: str, help_text: str = "", usage: str = ""):

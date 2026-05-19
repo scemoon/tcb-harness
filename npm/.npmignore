@@ -8,3 +8,5 @@ __pycache__/
 *.log
 .env
 .git
+install.sh
+start.sh

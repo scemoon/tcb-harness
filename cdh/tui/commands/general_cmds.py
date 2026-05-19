@@ -47,9 +47,10 @@ def cmd_help(app, *args):
 @command("clear", "Clear the screen")
 def cmd_clear(app, *args):
     from cdh.tui.widgets.chat import ChatPanel
-    from textual.widgets import RichLog
+    from textual.widgets import Static
+
     chat = app.query_one(ChatPanel)
-    log = chat.query_one("#chat-log", RichLog)
+    log = chat.query_one("#chat-log", Static)
     log.clear()
     app.show_config_info("Clear", "Screen cleared.")
     return ""

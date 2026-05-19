@@ -33,7 +33,12 @@ function installCdh(python) {
     execSync(`${python} -m pip install -e "${PKG_DIR}"`, { stdio: 'inherit' });
     return true;
   } catch {
-    return false;
+    try {
+      execSync(`${python} -m pip install git+https://github.com/scemoon/cloud-dev-harness.git`, { stdio: 'inherit' });
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

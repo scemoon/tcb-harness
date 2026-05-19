@@ -122,6 +122,7 @@ def ensure_dirs():
         CLOUD_DEV_HARNESS_DIR / "traces",
         CLOUD_DEV_HARNESS_DIR / "logs",
         CLOUD_DEV_HARNESS_DIR / "models",
+        CLOUD_DEV_HARNESS_DIR / "workspace",
     ]
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)

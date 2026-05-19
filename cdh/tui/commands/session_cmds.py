@@ -20,8 +20,14 @@ def cmd_session_list(app, *args):
 @command("session new", "Create a new session", "[name...]")
 def cmd_session_new(app, *args):
     name = " ".join(args) if args else f"Session {len(app.session_store.list_all()) + 1}"
-    record = app.session_store.create(name=name, mode=app.current_mode)
+    record = app.session_store.create(name=name, mode=app.current_mode, project=app.current_project or "")
     app._session = record
+    from cdh.agent.session import AgentSession
+    agent_s = AgentSession(record.id)
+    agent_s.save()
+    app.agent.attach_session(agent_s)
+    chat = app.query_one("ChatPanel")
+    chat.clear_chat()
     return f"Created session: {record.id[:8]}... ({name})"
 
 
@@ -35,5 +41,11 @@ def cmd_session_load(app, *args):
         if s.id.startswith(query) or query in s.name:
             app._session = s
             app.current_mode = s.mode or app.current_mode
+            from cdh.agent.session import AgentSession
+            agent_s = AgentSession(s.id)
+            if not agent_s.load():
+                agent_s.save()
+            app.agent.attach_session(agent_s)
+            app._display_session_messages()
             return f"Loaded session: {s.name} ({s.id[:8]}...)"
     return f"Session not found: {query}"

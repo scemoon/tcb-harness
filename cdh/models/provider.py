@@ -66,13 +66,21 @@ class ContentBlock:
 
 @dataclass
 class Message:
-    role: str  # user | assistant | system
+    role: str  # user | assistant | system | tool
     content: list[ContentBlock] = field(default_factory=list)
+    name: Optional[str] = None
 
-    def __init__(self, role: str, content: str | list[ContentBlock] = ""):
+    def __init__(self, role: str, content: str | list[ContentBlock] = "", name: Optional[str] = None):
         self.role = role
+        self.name = name
         if isinstance(content, str):
-            self.content = [ContentBlock(type=ContentBlockType.TEXT, text=content)] if content else []
+            if role == "tool" and name:
+                self.content = [ContentBlock(
+                    type=ContentBlockType.TOOL_RESULT,
+                    tool_result=ToolResult(tool_use_id=name, content=content),
+                )]
+            else:
+                self.content = [ContentBlock(type=ContentBlockType.TEXT, text=content)] if content else []
         else:
             self.content = content
 
@@ -89,12 +97,43 @@ class Message:
         self.content.append(ContentBlock(type=ContentBlockType.TOOL_RESULT, tool_result=tool_result))
 
     def to_api_content(self) -> str:
-        """Serialize content for OpenAI-style API calls (expects string content)."""
+        """Serialize text/thinking content for OpenAI-style API calls."""
         return "\n".join(
             cb.text or cb.thinking or ""
             for cb in self.content
             if cb.type in (ContentBlockType.TEXT, ContentBlockType.THINKING)
         )
+
+    def to_api_dict(self) -> dict:
+        """Serialize to OpenAI-compatible message dict, including tool_calls and tool role."""
+        text = self.to_api_content()
+        msg: dict = {"role": self.role}
+        if text:
+            msg["content"] = text
+        else:
+            msg["content"] = None
+
+        tool_calls = []
+        for cb in self.content:
+            if cb.type == ContentBlockType.TOOL_USE and cb.tool_use:
+                tc = {
+                    "id": cb.tool_use.id,
+                    "type": "function",
+                    "function": {
+                        "name": cb.tool_use.name,
+                        "arguments": cb.tool_use.input if isinstance(cb.tool_use.input, str) else __import__("json").dumps(cb.tool_use.input),
+                    }
+                }
+                tool_calls.append(tc)
+            if cb.type == ContentBlockType.TOOL_RESULT and cb.tool_result:
+                msg["role"] = "tool"
+                msg["tool_call_id"] = cb.tool_result.tool_use_id
+                msg["content"] = cb.tool_result.content
+
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
+
+        return msg
 
 
 @dataclass
@@ -206,7 +245,7 @@ class Provider(ABC):
         return key or ""
 
     def prepare_messages(self, messages: list["Message"]) -> list[dict]:
-        """Prepare messages for API call. Combines multiple system messages into one."""
+        """Prepare messages for API call. Handles tool, tool_use, tool_result blocks properly."""
         system_parts = []
         non_system = []
 
@@ -214,7 +253,7 @@ class Provider(ABC):
             if m.role == "system":
                 system_parts.append(m.to_api_content())
             else:
-                non_system.append({"role": m.role, "content": m.to_api_content()})
+                non_system.append(m.to_api_dict())
 
         if len(system_parts) > 1:
             combined_system = "\n\n".join(system_parts)
@@ -227,6 +266,25 @@ class Provider(ABC):
             non_system.insert(0, {"role": "system", "content": combined_system})
 
         return non_system
+
+    def parse_response_tool_calls(self, response_data: dict) -> list[dict]:
+        """Extract tool calls from a non-streaming API response."""
+        choice = response_data.get("choices", [{}])[0]
+        msg = choice.get("message", {})
+        tool_calls = msg.get("tool_calls", [])
+        result = []
+        for tc in tool_calls:
+            func = tc.get("function", {})
+            try:
+                args = __import__("json").loads(func.get("arguments", "{}"))
+            except Exception:
+                args = {"raw": func.get("arguments", "")}
+            result.append({
+                "id": tc.get("id", ""),
+                "name": func.get("name", ""),
+                "input": args,
+            })
+        return result
 
 
 class ProviderRegistry:

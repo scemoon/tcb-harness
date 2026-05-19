@@ -9,14 +9,13 @@
     "url": "git+https://github.com/scemoon/cloud-dev-harness.git"
   },
   "bin": {
-    "cdh": "bin/cdh.js"
+    "cdh": "cli.js",
+    "cloud-dev-harness": "cli.js"
   },
   "engines": {
     "node": ">=16.0.0"
   },
   "files": [
-    "bin/",
-    "cdh/",
-    "pyproject.toml"
+    "cli.js"
   ]
 }

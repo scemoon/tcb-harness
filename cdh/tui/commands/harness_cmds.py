@@ -160,6 +160,7 @@ def cmd_harness_switch(app, *args):
         HARNESS_DIR.mkdir(parents=True, exist_ok=True)
         CURRENT_FILE.write_text(name, encoding="utf-8")
         app.current_project = name
+        app._load_session_for_project(name)
         return f"Switched to project: {name}"
     except Exception as e:
         return f"Failed to switch: {e}"

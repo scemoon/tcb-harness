@@ -797,6 +797,7 @@ class CloudDevHarnessApp(App):
             chat.add_message("error", f"Error: {e}")
         finally:
             footer.stop_loading()
+            self._refresh_right_panel()
 
     def _refresh_right_panel(self) -> None:
         from cdh.tui.widgets.right_panel import RightPanel
@@ -804,6 +805,7 @@ class CloudDevHarnessApp(App):
         if rp is None:
             return
         tm = self.agent._task_manager
+        rp._refresh_plan()
         rp._refresh_tasks(tm.list_tasks())
         rp._refresh_todos(tm.list_todos())
 

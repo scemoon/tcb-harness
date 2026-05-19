@@ -26,9 +26,11 @@ def setup_logging(log_level: str = "INFO"):
     logging.getLogger("cdh").setLevel(logging.WARNING)
 
 
-@click.group()
-def cli():
-    pass
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx):
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(tui)
 
 
 @cli.command()

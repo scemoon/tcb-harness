@@ -49,9 +49,9 @@ class SessionStore:
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 
-    def create(self, name: str = "Untitled", mode: str = "agent") -> SessionRecord:
+    def create(self, name: str = "Untitled", mode: str = "agent", project: str = "") -> SessionRecord:
         with self.Session() as session:
-            record = SessionRecord(name=name, mode=mode)
+            record = SessionRecord(name=name, mode=mode, project=project)
             session.add(record)
             session.commit()
             session.refresh(record)
@@ -60,6 +60,15 @@ class SessionStore:
     def list_all(self) -> list[SessionRecord]:
         with self.Session() as session:
             return session.query(SessionRecord).order_by(SessionRecord.updated_at.desc()).all()
+
+    def list_by_project(self, project: str) -> list[SessionRecord]:
+        with self.Session() as session:
+            return (
+                session.query(SessionRecord)
+                .filter_by(project=project)
+                .order_by(SessionRecord.updated_at.desc())
+                .all()
+            )
 
     def load(self, session_id: str) -> Optional[SessionRecord]:
         with self.Session() as session:

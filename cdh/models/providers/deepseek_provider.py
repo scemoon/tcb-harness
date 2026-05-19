@@ -13,6 +13,10 @@ class DeepSeekProvider(Provider):
     def __init__(self, api_key: str = "", endpoint: str = "", **kwargs):
         self.api_key = api_key
         self._endpoint = endpoint or "https://api.deepseek.com/v1"
+        self._stream_tool_calls: dict[int, dict] = {}
+
+    def get_stream_tool_calls(self) -> list[dict]:
+        return list(self._stream_tool_calls.values())
 
     async def chat(
         self, messages: list[Message], model: str = "deepseek-chat", **kwargs
@@ -23,6 +27,15 @@ class DeepSeekProvider(Provider):
                 content="API key not configured. Set DEEPSEEK_API_KEY.",
                 model=model,
             )
+        body = {
+            "model": model,
+            "messages": self.prepare_messages(messages),
+        }
+        tools = kwargs.get("tools")
+        if tools:
+            body["tools"] = tools
+        body.update({k: v for k, v in kwargs.items() if k != "tools"})
+
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 f"{self._endpoint}/chat/completions",
@@ -30,16 +43,33 @@ class DeepSeekProvider(Provider):
                     "Authorization": f"Bearer {key}",
                     "content-type": "application/json",
                 },
-                json={
-                    "model": model,
-                    "messages": self.prepare_messages(messages),
-                    **kwargs,
-                },
+                json=body,
             )
             data = resp.json()
             choice = data.get("choices", [{}])[0]
+            msg = choice.get("message", {})
+
+            content_blocks = []
+            text = msg.get("content", "") or ""
+            if text:
+                content_blocks.append({"type": "text", "text": text})
+
+            tool_calls = msg.get("tool_calls", [])
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                try:
+                    args = __import__("json").loads(func.get("arguments", "{}"))
+                except Exception:
+                    args = {"raw": func.get("arguments", "")}
+                content_blocks.append({
+                    "type": "tool_use",
+                    "id": tc.get("id", ""),
+                    "name": func.get("name", ""),
+                    "input": args,
+                })
+
             return ModelResponse(
-                content=[{"type": "text", "text": choice.get("message", {}).get("content", "")}],
+                content=content_blocks,
                 model=model,
                 usage=data.get("usage", {}),
                 raw=data,
@@ -52,6 +82,17 @@ class DeepSeekProvider(Provider):
         if not key:
             yield "API key not configured."
             return
+        self._stream_tool_calls = {}
+        body = {
+            "model": model,
+            "messages": self.prepare_messages(messages),
+            "stream": True,
+        }
+        tools = kwargs.get("tools")
+        if tools:
+            body["tools"] = tools
+        body.update({k: v for k, v in kwargs.items() if k not in ("tools", "stream")})
+
         async with httpx.AsyncClient(timeout=300) as client:
             async with client.stream(
                 "POST",
@@ -60,12 +101,7 @@ class DeepSeekProvider(Provider):
                     "Authorization": f"Bearer {key}",
                     "content-type": "application/json",
                 },
-                json={
-                    "model": model,
-                    "messages": [{"role": m.role, "content": m.to_api_content()} for m in messages],
-                    "stream": True,
-                    **{k: v for k, v in kwargs.items() if k != "stream"},
-                },
+                json=body,
             ) as resp:
                 async for line in resp.aiter_lines():
                     if line.startswith("data: ") and line[6:] != "[DONE]":
@@ -73,6 +109,21 @@ class DeepSeekProvider(Provider):
                         chunk = json.loads(line[6:])
                         delta = chunk.get("choices", [{}])[0].get("delta", {})
                         yield delta.get("content", "")
+                        tc_deltas = delta.get("tool_calls", [])
+                        for tcd in tc_deltas:
+                            idx = tcd.get("index", 0)
+                            if idx not in self._stream_tool_calls:
+                                self._stream_tool_calls[idx] = {
+                                    "id": tcd.get("id", ""),
+                                    "name": tcd.get("function", {}).get("name", ""),
+                                    "arguments": "",
+                                }
+                            args_delta = tcd.get("function", {}).get("arguments", "")
+                            self._stream_tool_calls[idx]["arguments"] += args_delta
+                            if tcd.get("id"):
+                                self._stream_tool_calls[idx]["id"] = tcd["id"]
+                            if tcd.get("function", {}).get("name"):
+                                self._stream_tool_calls[idx]["name"] = tcd["function"]["name"]
 
 
 ProviderRegistry.register("deepseek", DeepSeekProvider)

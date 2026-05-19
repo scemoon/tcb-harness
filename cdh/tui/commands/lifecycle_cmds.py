@@ -17,6 +17,7 @@ def cmd_spec_accept(app, *args):
     if app.lifecycle.current != LifecycleStage.SPEC:
         return "No active spec phase."
     app.lifecycle.complete(LifecycleStage.SPEC)
+    app.agent.advance_pipeline()
     return "Spec accepted. Moving to Design phase."
 
 
@@ -33,12 +34,14 @@ def cmd_design_accept(app, *args):
     if app.lifecycle.current != LifecycleStage.DESIGN:
         return "No active design phase."
     app.lifecycle.complete(LifecycleStage.DESIGN)
+    app.agent.advance_pipeline()
     return "Design accepted. Moving to Testing phase."
 
 
 @command("test run", "Run tests")
 def cmd_test_run(app, *args):
     app.lifecycle.start(LifecycleStage.TESTING)
+    app.agent.advance_pipeline()
     return "Test execution started. Use /test accept when ready."
 
 
@@ -47,6 +50,7 @@ def cmd_test_accept(app, *args):
     if app.lifecycle.current != LifecycleStage.TESTING:
         return "No active testing phase."
     app.lifecycle.complete(LifecycleStage.TESTING)
+    app.agent.advance_pipeline()
     return "Tests accepted. Moving to Deploy phase."
 
 
@@ -56,4 +60,5 @@ def cmd_deploy(app, *args):
     app.lifecycle.start(LifecycleStage.DEPLOY)
     app.lifecycle.deploy_version = "v1.0.0"
     app.lifecycle.complete(LifecycleStage.DEPLOY)
+    app.agent.advance_pipeline()
     return f"Deployed to {cloud} (v1.0.0). Use /deploy status to check."

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 import yaml
@@ -159,6 +161,25 @@ class PipelineManager:
             lines.append("")
 
         return "\n".join(lines)
+
+    def advance_phase(self) -> Optional[str]:
+        if not self.project_name:
+            return None
+        next_phase = self.get_next_phase()
+        if not next_phase:
+            return None
+        now = datetime.now().isoformat()
+        history = self._state.setdefault("phaseHistory", [])
+        history.append({"phase": self.current_phase, "completedAt": now})
+        self._state["phase"] = next_phase
+        self._state["status"] = "in_progress"
+        self._state.setdefault("tasks", {})["completed"] = self._state["tasks"].get("completed", 0) + 1
+        self._state["lastActivity"] = {"action": "advance_phase", "task": f"phase:{next_phase}", "timestamp": now}
+        project_dir = Path(__file__).parent.parent.parent / "projects" / self.project_name
+        state_file = project_dir / ".harness" / "state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(json.dumps(self._state, indent=2, ensure_ascii=False), encoding="utf-8")
+        return next_phase
 
     def get_harness_skill_content(self) -> str:
         skill_md = HARNESS_DIR / "SKILL.md"
