@@ -4,7 +4,7 @@ import re
 import json
 from typing import Any, Optional, Union
 from textual.widgets import RichLog, Static
-from textual.containers import ScrollableContainer
+from textual.containers import Vertical
 from textual.app import ComposeResult
 from rich.text import Text
 from rich.syntax import Syntax
@@ -68,6 +68,8 @@ class StreamParser:
     TOOL_CALL_PAT = re.compile(r'<tool_call\s+name=["\']([^"\']+)["\']\s+id=["\']([^"\']+)["\']>(.*?)</tool_call>', re.DOTALL)
     TOOL_CALL_START_PAT = re.compile(r'<tool_call\s+name=["\']([^"\']+)["\']\s+id=["\']([^"\']+)["\']>')
     TOOL_USE_PAT = re.compile(r"```tool_use\b.*?\n(.*?)```", re.DOTALL | re.IGNORECASE)
+    TOOL_RESULT_PAT = re.compile(r'<tool_result\s+tool_use_id=["\']([^"\']+)["\'](?:\s+is_error=["\']([^"\']*)["\'])?>(.*?)</tool_result>', re.DOTALL)
+    TOOL_RESULT_START_PAT = re.compile(r'<tool_result\s+tool_use_id=["\']([^"\']+)["\'](?:\s+is_error=["\']([^"\']*)["\'])?>')
 
     def __init__(self):
         self._buffer = ""
@@ -78,6 +80,10 @@ class StreamParser:
         self._tool_call_id = ""
         self._tool_call_input = ""
         self._tool_call_complete = False
+        self._in_tool_result = False
+        self._tool_result_id = ""
+        self._tool_result_content = ""
+        self._tool_result_is_error = False
 
     def feed(self, text: str) -> list[dict]:
         self._buffer += text
@@ -124,9 +130,32 @@ class StreamParser:
                     self._tool_call_name = ""
                     self._tool_call_id = ""
                 else:
-                    self._tool_call_input += self._buffer
-                    self._buffer = ""
-                    break
+                    combined = self._tool_call_input + self._buffer
+                    end_idx = combined.find("</tool_call>")
+                    if end_idx != -1:
+                        self._tool_call_input = combined[:end_idx]
+                        self._buffer = combined[end_idx + len("</tool_call>"):]
+                        self._in_tool_call = False
+                        self._tool_call_complete = True
+                        try:
+                            tool_input = json.loads(self._tool_call_input) if self._tool_call_input else {}
+                        except json.JSONDecodeError:
+                            tool_input = {"raw": self._tool_call_input}
+                        blocks.append({
+                            "type": "tool_use",
+                            "tool_use": {
+                                "name": self._tool_call_name,
+                                "id": self._tool_call_id,
+                                "input": tool_input
+                            }
+                        })
+                        self._tool_call_input = ""
+                        self._tool_call_name = ""
+                        self._tool_call_id = ""
+                    else:
+                        self._tool_call_input += self._buffer
+                        self._buffer = ""
+                        break
                 continue
 
             if self._buffer.startswith("<think") and ">" not in self._buffer:
@@ -152,6 +181,42 @@ class StreamParser:
                 except json.JSONDecodeError:
                     blocks.append({"type": "text", "text": tool_match.group(0)})
                 self._buffer = self._buffer[tool_match.end():]
+                continue
+
+            if self._in_tool_result:
+                end_idx = self._buffer.find("</tool_result>")
+                if end_idx != -1:
+                    content_before_end = self._buffer[:end_idx]
+                    self._tool_result_content += content_before_end
+                    self._buffer = self._buffer[end_idx + len("</tool_result>"):]
+                    self._in_tool_result = False
+                    blocks.append({
+                        "type": "tool_result",
+                        "tool_result": {
+                            "tool_use_id": self._tool_result_id,
+                            "content": self._tool_result_content.strip(),
+                            "is_error": self._tool_result_is_error,
+                        }
+                    })
+                    self._tool_result_id = ""
+                    self._tool_result_content = ""
+                    self._tool_result_is_error = False
+                else:
+                    self._tool_result_content += self._buffer
+                    self._buffer = ""
+                    break
+                continue
+
+            if self._buffer.startswith("<tool_result") and ">" not in self._buffer:
+                break
+
+            tool_result_start = self.TOOL_RESULT_START_PAT.match(self._buffer)
+            if tool_result_start:
+                self._tool_result_id = tool_result_start.group(1)
+                self._tool_result_is_error = tool_result_start.group(2) and tool_result_start.group(2).lower() == "true"
+                self._tool_result_content = ""
+                self._in_tool_result = True
+                self._buffer = self._buffer[tool_result_start.end():]
                 continue
 
             tool_call_start = self.TOOL_CALL_START_PAT.match(self._buffer)
@@ -187,13 +252,13 @@ class StreamParser:
                     blocks.append({"type": "text", "text": self._buffer[:earliest]})
                     self._buffer = self._buffer[earliest:]
                 else:
-                    if len(self._buffer) > 10000:
+                    if len(self._buffer) > 200:
                         blocks.append({"type": "text", "text": self._buffer})
                         self._buffer = ""
                     else:
                         break
             else:
-                if len(self._buffer) > 10000:
+                if len(self._buffer) > 200:
                     blocks.append({"type": "text", "text": self._buffer})
                     self._buffer = ""
                 else:
@@ -203,7 +268,7 @@ class StreamParser:
 
     def get_pending_text(self) -> str:
         """Return unparsed buffer text (no tag in progress)."""
-        if not self._in_thinking and not self._in_tool_call and self._buffer:
+        if not self._in_thinking and not self._in_tool_call and not self._in_tool_result and self._buffer:
             return self._buffer
         return ""
 
@@ -224,6 +289,16 @@ class StreamParser:
             }
         return None
 
+    def get_pending_tool_result(self) -> dict:
+        """Return the current in-progress tool_result block."""
+        if self._in_tool_result:
+            return {
+                "tool_use_id": self._tool_result_id,
+                "content": self._tool_result_content,
+                "is_error": self._tool_result_is_error,
+            }
+        return None
+
     def flush(self) -> list[dict]:
         blocks = []
         if self._in_thinking and self._thinking_content.strip():
@@ -241,6 +316,15 @@ class StreamParser:
                     "input": tool_input
                 }
             })
+        if self._in_tool_result and self._tool_result_content.strip():
+            blocks.append({
+                "type": "tool_result",
+                "tool_result": {
+                    "tool_use_id": self._tool_result_id,
+                    "content": self._tool_result_content.strip(),
+                    "is_error": self._tool_result_is_error,
+                }
+            })
         if self._buffer.strip():
             blocks.append({"type": "text", "text": self._buffer})
         self._buffer = ""
@@ -251,6 +335,10 @@ class StreamParser:
         self._tool_call_id = ""
         self._tool_call_input = ""
         self._tool_call_complete = False
+        self._in_tool_result = False
+        self._tool_result_id = ""
+        self._tool_result_content = ""
+        self._tool_result_is_error = False
         return blocks
 
 # ── Markdown parsing with Rich ───────────────────────────────────────────────
@@ -295,59 +383,63 @@ def _render_markdown_rich(text: str) -> list[Any]:
     return output
 
 
-class ChatPanel(ScrollableContainer):
+class ChatPanel(Vertical):
     """Main chat area — shows user/assistant/system messages with live streaming."""
 
     DEFAULT_CSS = """
     ChatPanel {
         height: 100%;
-        overflow-y: auto;
-        scrollbar-size: 0 0;
-        scrollbar-gutter: auto;
-        padding: 0 0 0 0;
     }
     ChatPanel > #welcome {
-        height: 100%;
-        width: 100%;
-        content-align: center middle;
+        display: none;
     }
     ChatPanel > #chat-log {
-        height: 1fr;
-        padding: 0;
-        scrollbar-size: 0 0;
-        border: none;
+        height: 100%;
     }
     ChatPanel > #stream-output {
-        height: auto;
         display: none;
-        padding: 0;
-        margin: 0;
+        height: auto;
+    }
+    ChatPanel.-streaming > #chat-log {
+        height: auto;
+    }
+    ChatPanel.-streaming > #stream-output {
+        display: block !important;
     }
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._streaming = False
-        self._stream_buffer: list[str] = []
-        self._char_buffer: list[str] = []
         self._stream_parser = StreamParser()
-        self._stream_timer = None
         self._welcome_shown = False
+        self._emitted_ids: set[str] = set()
 
     def compose(self) -> ComposeResult:
         yield Static(id="welcome")
-        yield Static(id="stream-output")
         yield RichLog(id="chat-log", highlight=True, markup=True, max_lines=10000)
+        yield Static(id="stream-output")
 
     def on_mount(self) -> None:
-        self._show_welcome()
+        app = self.app
+        session = getattr(app, "_session", None)
+        if session:
+            messages = session.messages or []
+            if not messages:
+                from cdh.agent.session import AgentSession
+                agent_s = AgentSession(session.id)
+                if agent_s.load():
+                    messages = agent_s.messages
+            if not messages:
+                self._show_welcome()
+        else:
+            self._show_welcome()
 
     def _hide_welcome(self) -> None:
-        if self._welcome_shown:
-            self._welcome_shown = False
-            w = self.query_one_optional("#welcome", Static)
-            if w is not None:
-                w.display = False
+        self._welcome_shown = False
+        w = self.query_one_optional("#welcome", Static)
+        if w is not None:
+            w.display = False
 
     def _show_welcome(self) -> None:
         import os
@@ -394,147 +486,120 @@ class ChatPanel(ScrollableContainer):
     # ── Streaming ──
 
     def start_stream(self) -> None:
-        self._hide_welcome()
+        self._emitted_ids.clear()
+        w = self.query_one_optional("#welcome", Static)
+        if w is not None:
+            w.display = False
+        self._welcome_shown = False
         self._streaming = True
-        self._stream_buffer = []
-        self._char_buffer = []
         self._stream_parser = StreamParser()
-        self._stream_timer = self.set_interval(0.03, self._tick_stream)
-        w = self.query_one("#stream-output", Static)
-        w.display = False
-        w.update("")
+        so = self.query_one_optional("#stream-output", Static)
+        if so is not None:
+            so.update("")
+            so.display = True
 
     def add_stream_chunk(self, content: str) -> None:
-        self._char_buffer.append(content)
-
-    def _tick_stream(self) -> None:
-        if not self._char_buffer:
+        if not self._streaming:
             return
-        text = "".join(self._char_buffer)
-        word, remainder = self._extract_word(text)
-        if word:
-            self._stream_buffer.append(word)
-            self._char_buffer = [remainder] if remainder else []
-            self.flush_stream()
-
-    @staticmethod
-    def _extract_word(text: str) -> tuple[str, str]:
-        if not text:
-            return ("", "")
-        for tag in ("<think>", "</think>", "</tool_call>"):
-            if text.startswith(tag):
-                return (tag, text[len(tag):])
-        for prefix in ("<think", "<tool_call"):
-            if text.startswith(prefix):
-                end = text.find(">", len(prefix))
-                if end != -1:
-                    return (text[:end+1], text[end+1:])
-        if text.startswith("```"):
-            end = text.find("```", 3)
-            if end != -1:
-                return (text[:end+3], text[end+3:])
-            return (text, "")
-        if text[0] == '\n':
-            return ('\n', text[1:])
-        ws_end = 0
-        while ws_end < len(text) and text[ws_end] in (' ', '\t'):
-            ws_end += 1
-        ws = text[:ws_end]
-        text = text[ws_end:]
-        if not text:
-            return (ws, "")
-        idx = len(text)
-        for sep in (' ', '\n', '\t'):
-            pos = text.find(sep)
-            if pos != -1 and pos < idx:
-                idx = pos
-        return (ws + text[:idx], text[idx:])
-
-    def flush_stream(self) -> None:
         log = self.query_one_optional("#chat-log", RichLog)
-        stream = self.query_one_optional("#stream-output", Static)
-        if log is None or stream is None:
+        so = self.query_one_optional("#stream-output", Static)
+        if log is None:
             return
 
-        t = getattr(self.app, 'tui_theme', None)
+        blocks = self._stream_parser.feed(content)
+        for block in blocks:
+            self._render_block(log, "assistant", block)
 
-        # Process buffered chunks
-        if self._stream_buffer:
-            text = "".join(self._stream_buffer)
-            self._stream_buffer = []
-            blocks = self._stream_parser.feed(text)
-            for block in blocks:
-                self._render_block(log, "assistant", block)
+        if so is not None:
+            self._update_pending(so)
+            pending_tool = self._stream_parser.get_pending_tool_call()
+            pending_thinking = self._stream_parser.get_pending_thinking()
+            pending_text = self._stream_parser.get_pending_text()
+            pending_tool_result = self._stream_parser.get_pending_tool_result()
+            has_pending = bool(
+                (pending_tool and not pending_tool.get("complete"))
+                or pending_thinking
+                or pending_text
+                or pending_tool_result
+            )
+            if has_pending:
+                w = self.query_one_optional("#welcome", Static)
+                if w is not None:
+                    w.display = False
 
-        # Build streaming content from all pending sources
+    def _update_pending(self, so: Static) -> None:
         pending_tool = self._stream_parser.get_pending_tool_call()
         pending_thinking = self._stream_parser.get_pending_thinking()
         pending_text = self._stream_parser.get_pending_text()
+        pending_tool_result = self._stream_parser.get_pending_tool_result()
 
-        has_pending = bool(
-            (pending_tool and not pending_tool.get("complete"))
-            or pending_thinking
-            or pending_text
-        )
-
-        if not has_pending:
-            stream.display = False
-            return
-
-        stream.display = True
-        self.scroll_end(animate=False)
+        t = getattr(self.app, 'tui_theme', None)
         items = []
 
         if pending_tool and not pending_tool.get("complete"):
             name = pending_tool.get("name", "tool")
             tid = pending_tool.get("id", "")
+            items.append(Text(f"Tool: {name}  ID: {tid}", style=t.secondary if t else "#7dcfff"))
             inp = pending_tool.get("input", "")
-            secondary = t.secondary if t else "#7dcfff"
-            success = t.success if t else "#9ece6a"
-            items.append(Text(f"Tool: {name}  ID: {tid}", style=secondary))
-            if inp:
-                items.append(Text(inp, style=f"dim {secondary}"))
+            if inp and isinstance(inp, (str, dict)):
+                if isinstance(inp, dict):
+                    inp = json.dumps(inp, indent=2)
+                items.append(Text(str(inp), style=f"dim {t.secondary}" if t else "dim #7dcfff"))
             items.append(Text(""))
 
-        if pending_thinking:
-            items.append(Text("\u23f3 Thinking", style=f"dim {success}"))
-            items.append(Text(pending_thinking, style=success))
+        if pending_thinking and isinstance(pending_thinking, str):
+            items.append(Text("\u23f3 Thinking", style=f"dim {t.success}" if t else "dim #9ece6a"))
+            items.append(Text(pending_thinking, style=t.success if t else "#9ece6a"))
             items.append(Text(""))
 
-        if pending_text:
-            items.append(RichMarkdown(pending_text, inline_code_lexer="ansi", code_theme="monokai"))
+        if pending_tool_result:
+            tid = pending_tool_result.get("tool_use_id", "")
+            content = pending_tool_result.get("content", "")
+            is_error = pending_tool_result.get("is_error", False)
+            err_color = t.error if t else "red"
+            label = f"Result ID: {tid}"
+            label += f" [{err_color}]ERROR[/{err_color}]" if is_error else ""
+            items.append(Text(label, style=t.accent if t else "magenta"))
+            if content:
+                items.append(Text(str(content), style=t.secondary if t else "#7dcfff"))
+            items.append(Text(""))
 
-        stream.update(Group(*items) if items else "")
+        if pending_text and isinstance(pending_text, str) and pending_text.strip():
+            try:
+                items.append(RichMarkdown(pending_text, inline_code_lexer="ansi", code_theme="monokai"))
+            except Exception:
+                items.append(Text(pending_text))
+
+        if items:
+            so.update(Group(*items))
+        else:
+            so.update("")
 
     def finish_stream(self) -> None:
-        if self._stream_timer is not None:
-            self._stream_timer.stop()
-            self._stream_timer = None
-        if self._char_buffer:
-            self._stream_buffer.append("".join(self._char_buffer))
-            self._char_buffer = []
-            self.flush_stream()
+        self._streaming = False
+        self._emitted_ids.clear()
         log = self.query_one_optional("#chat-log", RichLog)
         remaining = self._stream_parser.flush() if log else []
         if log and remaining:
             for block in remaining:
                 self._render_block(log, "assistant", block)
-
-        stream = self.query_one_optional("#stream-output", Static)
-        if stream is not None:
-            stream.display = False
-            stream.update("")
-        self._streaming = False
-        self._stream_buffer = []
+        so = self.query_one_optional("#stream-output", Static)
+        if so is not None:
+            so.display = False
+            so.update("")
 
     # ── Block rendering ──
 
     def _render_block(self, log: RichLog, role: str, block: dict) -> None:
         btype = block.get("type", "text")
         if btype == "thinking":
-            thinking = block.get("thinking", "")
-            if thinking:
-                self._render_thinking_rich(log, thinking)
+            content = block.get("thinking", "")
+            key = f"think:{content[:50]}:{len(content)}"
+            if key in self._emitted_ids:
+                return
+            self._emitted_ids.add(key)
+            if content:
+                self._render_thinking_rich(log, content)
         elif btype == "tool_use_start":
             tool_use = block.get("tool_use", {})
             self._render_tool_use_start_rich(log, tool_use.get("name", "tool"), tool_use.get("id", ""))
@@ -637,6 +702,27 @@ class ChatPanel(ScrollableContainer):
             return
         for block in blocks:
             self._render_block(log, role, block)
+
+    def clear_chat(self) -> None:
+        log = self.query_one_optional("#chat-log", RichLog)
+        if log:
+            log.clear()
+        so = self.query_one_optional("#stream-output", Static)
+        if so is not None:
+            so.display = False
+            so.update("")
+        self._streaming = False
+        self._stream_parser = StreamParser()
+        self._welcome_shown = False
+
+    def load_messages(self, messages: list[dict]) -> None:
+        self._hide_welcome()
+        self.clear_chat()
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if content:
+                self.add_message(role, content)
 
     def _render_tool_result_rich(self, log: RichLog, tool_result: dict) -> None:
         tool_use_id = tool_result.get("tool_use_id", "")
