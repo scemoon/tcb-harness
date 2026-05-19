@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 from textual.app import ComposeResult
 from textual.containers import Container
 from textual.widgets import Static
 from textual.timer import Timer
 from rich.text import Text
 
-
-_WAVE_BARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-_LOADING_TEXT = " Generating"
 
 _WAVE_PATTERNS = [
     "▁▂▃▄▅▆▇█▇▆▅▄▃▂",
@@ -21,6 +17,7 @@ _WAVE_PATTERNS = [
     "▇█▇▆▅▄▃▂▁▁▂▃▄▅",
     "█▇▆▅▄▃▂▁▁▂▃▄▅▆",
 ]
+_LOADING_TEXT = " Generating"
 
 
 class FooterBar(Container):
@@ -76,7 +73,7 @@ class FooterBar(Container):
             static.update(Text.assemble(
                 (left.plain, left.style),
                 ("\n", ""),
-                (" " * 4, ""),
+                ("    ", ""),
                 status_text,
             ))
         else:
@@ -95,7 +92,7 @@ class FooterBar(Container):
         self._loading = True
         self._anim_frame = 0
         self._update_footer(animated=True)
-        self._timer = self.set_interval(0.08, self._tick)
+        self._timer = self.set_interval(0.1, self._tick)
 
     def stop_loading(self) -> None:
         self._loading = False
@@ -107,7 +104,7 @@ class FooterBar(Container):
     def _tick(self) -> None:
         self._anim_frame += 1
         self._update_footer(animated=True)
-        self._timer = self.set_interval(0.12, self._tick)
+        self._timer = self.set_interval(0.1, self._tick)
 
     def stop_loading(self) -> None:
         self._loading = False

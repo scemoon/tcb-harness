@@ -644,12 +644,39 @@ class ChatPanel(Vertical):
         tool_name = tool_use.get("name", "tool")
         tool_id = tool_use.get("id", "")
         tool_input = tool_use.get("input", {})
-        log.write(Text(""))
         t = getattr(self.app, 'tui_theme', None)
-        log.write(Text(f"Tool: {tool_name}  ID: {tool_id}", style=t.secondary if t else "cyan"))
+        border = t.variables.get('border', '#3b4261') if t else '#3b4261'
+
+        input_str = ""
         if tool_input:
-            input_str = json.dumps(tool_input, indent=2) if isinstance(tool_input, dict) else str(tool_input)
-            log.write(Text(f"  {input_str}", style=f"dim {t.secondary}" if t else "dim cyan"))
+            if isinstance(tool_input, dict):
+                input_str = json.dumps(tool_input, indent=2)
+            else:
+                input_str = str(tool_input)
+
+        if input_str:
+            lang = "json"
+            if tool_name.lower() in ("bash", "exec", "shell"):
+                lang = "bash"
+            syntax = Syntax(input_str, lang, theme="monokai", word_wrap=True, padding=(0, 1))
+            panel = Panel(
+                syntax,
+                title=f" {tool_name} ",
+                title_align="left",
+                border_style=f"dim {border}",
+                padding=(0, 0),
+            )
+        else:
+            panel = Panel(
+                Text(f"ID: {tool_id}", style=f"dim {t.secondary}" if t else "dim cyan"),
+                title=f" {tool_name} ",
+                title_align="left",
+                border_style=f"dim {border}",
+                padding=(0, 1),
+            )
+
+        log.write(Text(""))
+        log.write(panel)
 
     def _render_text_rich(self, log: RichLog, role: str, text: str) -> None:
         t = getattr(self.app, 'tui_theme', None)
@@ -729,28 +756,93 @@ class ChatPanel(Vertical):
         content = tool_result.get("content", "")
         is_error = tool_result.get("is_error", False)
         t = getattr(self.app, 'tui_theme', None)
+        border = t.variables.get('border', '#3b4261') if t else '#3b4261'
         err_color = t.error if t else "red"
-        err_label = f" [{err_color}]ERROR[/{err_color}]" if is_error else ""
-        log.write(Text(""))
-        log.write(Text(f"Result  ID: {tool_use_id}{err_label}", style=t.accent if t else "magenta"))
+
         content_str = str(content)
-        if content_str:
-            log.write(Text(f"  {content_str}", style=t.secondary if t else "#7dcfff"))
+        max_preview = 500
+        truncated = len(content_str) > max_preview
+        preview = content_str[:max_preview] if truncated else content_str
+
+        if is_error:
+            panel = Panel(
+                Text(preview.strip(), style=err_color),
+                title=" Error ",
+                title_align="left",
+                border_style=err_color,
+                padding=(0, 1),
+            )
+        else:
+            syntax = None
+            if preview.strip().startswith("{") or preview.strip().startswith("["):
+                try:
+                    parsed = json.loads(preview)
+                    formatted = json.dumps(parsed, indent=2, ensure_ascii=False)
+                    syntax = Syntax(formatted, "json", theme="monokai", word_wrap=True, padding=(0, 1))
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+            if syntax is None:
+                lines = preview.strip().split("\n")
+                if len(lines) >= 2 and any(l.startswith("#") or l.startswith("import ") or l.startswith("from ") for l in lines[:5]):
+                    syntax = Syntax(preview.strip(), "python", theme="monokai", word_wrap=True, padding=(0, 1))
+                elif any(l.startswith("<") and l.endswith(">") for l in lines[:3]):
+                    syntax = Syntax(preview.strip(), "html", theme="monokai", word_wrap=True, padding=(0, 1))
+
+            if syntax:
+                panel = Panel(
+                    syntax,
+                    title=" Result ",
+                    title_align="left",
+                    border_style=f"dim {border}",
+                    padding=(0, 0),
+                )
+            else:
+                panel = Panel(
+                    Text(preview.strip() if preview.strip() else "(empty)", style=f"dim {t.secondary}" if t else "dim #7dcfff"),
+                    title=" Result ",
+                    title_align="left",
+                    border_style=f"dim {border}",
+                    padding=(0, 1),
+                )
+
+        log.write(Text(""))
+        log.write(panel)
+        if truncated:
+            log.write(Text(f"  ... ({len(content_str)} chars total, showing first {max_preview})", style="dim"))
 
     def _render_code_execution_rich(self, log: RichLog, code_result: dict) -> None:
         tool_use_id = code_result.get("tool_use_id", "")
         content = code_result.get("content", {})
         t = getattr(self.app, 'tui_theme', None)
+        border = t.variables.get('border', '#3b4261') if t else '#3b4261'
+
+        content_str = json.dumps(content, indent=2, ensure_ascii=False) if isinstance(content, dict) else str(content)
+        syntax = Syntax(content_str, "json", theme="monokai", word_wrap=True, padding=(0, 1))
+        panel = Panel(
+            syntax,
+            title=" Code Execution ",
+            title_align="left",
+            border_style=f"dim {t.success}" if t else "dim green",
+            padding=(0, 0),
+        )
         log.write(Text(""))
-        log.write(Text(f"Code Execution  ID: {tool_use_id}", style=t.success if t else "green"))
-        content_str = json.dumps(content, indent=2) if isinstance(content, dict) else str(content)
-        log.write(Text(f"  {content_str}", style=t.success if t else "#9ece6a"))
+        log.write(panel)
 
     def _render_search_result_rich(self, log: RichLog, search_result: dict) -> None:
         tool_use_id = search_result.get("tool_use_id", "")
         content = search_result.get("content", {})
         t = getattr(self.app, 'tui_theme', None)
+        border = t.variables.get('border', '#3b4261') if t else '#3b4261'
+
+        content_str = json.dumps(content, indent=2, ensure_ascii=False) if isinstance(content, dict) else str(content)
+        syntax = Syntax(content_str, "json", theme="monokai", word_wrap=True, padding=(0, 1))
+        panel = Panel(
+            syntax,
+            title=" Search Result ",
+            title_align="left",
+            border_style=f"dim {t.warning}" if t else "dim yellow",
+            padding=(0, 0),
+        )
         log.write(Text(""))
-        log.write(Text(f"Search Result  ID: {tool_use_id}", style=t.warning if t else "yellow"))
-        content_str = json.dumps(content, indent=2) if isinstance(content, dict) else str(content)
-        log.write(Text(f"  {content_str}", style=t.warning if t else "#e0af68"))
+        log.write(panel)
