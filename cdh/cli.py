@@ -36,9 +36,13 @@ def cli(ctx):
 @cli.command()
 @click.option("--mode", default=None, help="Startup mode (plan|agent|solo)")
 @click.option("--project", default=None, help="Project to open on startup")
-def tui(mode, project):
+@click.option("--workspace", default=None, help="Development workspace directory (default: ~/.cloud-dev-harness/workspace)")
+def tui(mode, project, workspace):
     ensure_dirs()
     cfg = load_config()
+    if workspace:
+        cfg.default_workspace = str(Path(workspace).expanduser().resolve())
+        save_config(cfg)
     setup_logging(cfg.log_level)
     logging.info(f"Starting Cloud Dev Harness with provider={cfg.default_provider}, model={cfg.default_model}")
     app = CloudDevHarnessApp()

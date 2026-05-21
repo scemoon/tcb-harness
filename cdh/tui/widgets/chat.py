@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import json
+from pathlib import Path
 from typing import Any
 from textual.widgets import Static
 from textual.containers import ScrollableContainer
@@ -450,13 +451,12 @@ class ChatPanel(ScrollableContainer):
             w.display = False
 
     def _show_welcome(self) -> None:
-        import os
         w = self.query_one_optional("#welcome", Static)
         if w is None:
             return
         app = self.app
         t = getattr(app, 'tui_theme', None)
-        cwd = os.getcwd()
+        ws = str(getattr(app, 'workspace', Path.cwd()))
         model = getattr(app, "current_model", "unknown") if hasattr(app, "current_model") else "unknown"
         provider = getattr(app, "current_provider", "unknown") if hasattr(app, "current_provider") else "unknown"
 
@@ -471,9 +471,9 @@ class ChatPanel(ScrollableContainer):
                 ("\n", ""),
                 ("\u2601  Cloud Dev Harness", f"bold {primary}"),
                 ("\n\n", ""),
-                ("Working Directory", dim),
+                ("Workspace", dim),
                 ("\n", ""),
-                (f"{cwd}", secondary),
+                (f"{ws}", secondary),
                 ("\n\n", ""),
                 ("Provider", dim),
                 ("         Model", dim),

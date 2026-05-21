@@ -3,7 +3,7 @@
 Project Status — Query and display project status/progress
 
 Usage:
-    project_status.py --name <project-name> [--json]
+    project_status.py --name <project-name> [--json] [--workspace <dir>]
 
 Reads .harness/state.json and provides a summary of project phase,
 task progress, and blockers.
@@ -11,51 +11,63 @@ task progress, and blockers.
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-WORKSPACE = Path(__file__).resolve().parent.parent.parent.parent  # workspace root
-PROJECTS_DIR = WORKSPACE / "projects"
-HARNESS_DIR = WORKSPACE / ".harness"
-CURRENT_FILE = HARNESS_DIR / "current"  # stores current project name
+import sys
+_project_root = Path(__file__).resolve().parent.parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
+CDH_DIR = Path.home() / ".cloud-dev-harness"
+DEFAULT_WORKSPACE = CDH_DIR / "workspace"
 
 
-def get_current_project() -> str:
-    """Return the name of the currently active project, or empty string if none."""
-    if not CURRENT_FILE.exists():
+def _workspace_dir(ws_arg: str = "") -> Path:
+    if ws_arg:
+        return Path(ws_arg).expanduser().resolve()
+    env_ws = os.environ.get("CDH_WORKSPACE", "")
+    if env_ws:
+        return Path(env_ws).expanduser().resolve()
+    return DEFAULT_WORKSPACE
+
+
+def get_current_project(workspace: Path) -> str:
+    cf = workspace / ".current_project"
+    if not cf.exists():
         return ""
     try:
-        return CURRENT_FILE.read_text(encoding="utf-8").strip()
+        return cf.read_text(encoding="utf-8").strip()
     except Exception:
         return ""
 
 
-def resolve_project(name: str) -> str:
-    """Resolve project name: use --name arg if given, otherwise read from CURRENT_FILE."""
+def resolve_project(name: str, workspace: Path) -> str:
     if name:
         return name
-    current = get_current_project()
+    current = get_current_project(workspace)
     if current:
         return current
     print("[ERROR] No project specified and no current project is set.")
     print("   Run: python3 scripts/init_project.py switch <project-name>")
     raise SystemExit(1)
 
+
 PHASE_ORDER = ["init", "spec", "design", "coding", "testing", "deploy", "deployed"]
 PHASE_ICONS = {
-    "init": "🔧",
-    "spec": "📝",
-    "design": "🎨",
-    "coding": "💻",
-    "testing": "🧪",
-    "deploy": "🚀",
-    "deployed": "✅",
+    "init": "\U0001f527",
+    "spec": "\U0001f4dd",
+    "design": "\U0001f3a8",
+    "coding": "\U0001f4bb",
+    "testing": "\U0001f9ea",
+    "deploy": "\U0001f680",
+    "deployed": "\u2705",
 }
 
 
 def format_timestamp(ts: str) -> str:
-    """Format ISO timestamp for display."""
     try:
         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         return dt.strftime("%Y-%m-%d %H:%M")
@@ -63,9 +75,8 @@ def format_timestamp(ts: str) -> str:
         return ts
 
 
-def get_project_status(name: str) -> dict:
-    """Read project status from .harness files."""
-    project_dir = PROJECTS_DIR / name
+def get_project_status(name: str, workspace: Path) -> dict:
+    project_dir = workspace / "projects" / name
     if not project_dir.exists():
         print(f"[ERROR] Project not found: {name}")
         print(f"   Expected: {project_dir}")
@@ -87,7 +98,6 @@ def get_project_status(name: str) -> dict:
     else:
         print(f"[WARN] No state.json found for project '{name}'")
 
-    # Count artifacts
     artifacts = {
         "specs": len(list((project_dir / "specs").glob("**/*.md"))) if (project_dir / "specs").exists() else 0,
         "design": len(list((project_dir / "design").glob("**/*.md"))) if (project_dir / "design").exists() else 0,
@@ -105,9 +115,8 @@ def get_project_status(name: str) -> dict:
     }
 
 
-def display_status(name: str, as_json: bool = False):
-    """Display project status."""
-    data = get_project_status(name)
+def display_status(name: str, as_json: bool = False, workspace: Path = DEFAULT_WORKSPACE):
+    data = get_project_status(name, workspace)
     if not data:
         return
 
@@ -121,22 +130,21 @@ def display_status(name: str, as_json: bool = False):
 
     phase = state.get("phase", "unknown")
     status = state.get("status", "unknown")
-    icon = PHASE_ICONS.get(phase, "❓")
+    icon = PHASE_ICONS.get(phase, "\u2753")
 
     platform = config.get("platform", "unknown")
-    platform_label = {"mp": "小程序", "web": "Web", "hybrid": "混合项目"}.get(platform, platform)
-    platform_icon = {"mp": "📱", "web": "🌐", "hybrid": "🔗"}.get(platform, "?")
+    platform_label = {"mp": "\u5c0f\u7a0b\u5e8f", "web": "Web", "hybrid": "\u6df7\u5408\u9879\u76ee"}.get(platform, platform)
+    platform_icon = {"mp": "\U0001f4f1", "web": "\U0001f310", "hybrid": "\U0001f517"}.get(platform, "?")
 
-    print(f"\n📋 项目: {config.get('name', name)}")
-    print(f"🔧 平台: {platform_icon} {platform_label} ({platform})")
-    print(f"📌 阶段: {icon} {phase} ({status})")
+    print(f"\n\u001b[4m\u9879\u76ee\u001b[0m: {config.get('name', name)}")
+    print(f"\u001b[4m\u5e73\u53f0\u001b[0m: {platform_icon} {platform_label} ({platform})")
+    print(f"\u001b[4m\u9636\u6bb5\u001b[0m: {icon} {phase} ({status})")
 
     if config.get("cloudbase", {}).get("envId"):
-        print(f"☁️  CloudBase: {config['cloudbase']['envId']}")
+        print(f"\u001b[4mCloudBase\u001b[0m: {config['cloudbase']['envId']}")
     if config.get("wechat", {}).get("appid"):
-        print(f"📱 AppID: {config['wechat']['appid']}")
+        print(f"\u001b[4mAppID\u001b[0m: {config['wechat']['appid']}")
 
-    # Task progress
     tasks = state.get("tasks", {})
     if tasks.get("total", 0) > 0:
         total = tasks["total"]
@@ -144,73 +152,68 @@ def display_status(name: str, as_json: bool = False):
         progress_pct = (completed / total) * 100
         bar_len = 20
         filled = int(bar_len * completed / total)
-        bar = "█" * filled + "░" * (bar_len - filled)
-        print(f"✅ 任务进度: {completed}/{total} ({progress_pct:.0f}%) [{bar}]")
+        bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+        print(f"\u001b[4m\u4efb\u52a1\u8fdb\u5ea6\u001b[0m: {completed}/{total} ({progress_pct:.0f}%) [{bar}]")
 
         in_progress = tasks.get("inProgress", 0)
         if in_progress:
-            print(f"🔄 进行中: {in_progress} 个任务")
+            print(f"\u001b[4m\u8fdb\u884c\u4e2d\u001b[0m: {in_progress} \u4e2a\u4efb\u52a1")
 
-    # Current spec
     if state.get("currentSpec"):
-        print(f"📄 当前 Spec: {state['currentSpec']}")
+        print(f"\u001b[4m\u5f53\u524d Spec\u001b[0m: {state['currentSpec']}")
 
-    # Blockers
     blockers = state.get("blockers", [])
     if blockers:
-        print(f"⚠️  阻塞项: {len(blockers)}")
+        print(f"\u26a0\ufe0f  \u963b\u585e\u9879: {len(blockers)}")
         for b in blockers:
             print(f"   - {b}")
     else:
-        print(f"⚠️  阻塞: 无")
+        print(f"\u26a0\ufe0f  \u963b\u585e: \u65e0")
 
-    # Phase timeline
     phase_history = state.get("phaseHistory", [])
     if phase_history:
-        print("📅 里程碑:", end=" ")
         completed_phases = {h["phase"] for h in phase_history}
+        timeline = []
         for p in PHASE_ORDER:
             if p in completed_phases:
-                print(f"{p} ✓", end=" → ")
+                timeline.append(f"{p} \u2713")
             elif p == phase:
-                print(f"{p} ◉", end=" → ")
+                timeline.append(f"{p} \u25c9")
             else:
-                print(f"{p} ○", end=" → ")
-        print()
+                timeline.append(f"{p} \u25cb")
+        print(" \u2192 ".join(timeline))
 
-    # Artifacts
-    print(f"\n📊 产出统计:")
-    print(f"   需求文档: {artifacts['specs']} 个")
-    print(f"   设计文档: {artifacts['design']} 个")
-    print(f"   源码文件: {artifacts['src_files']} 个")
-    print(f"   云函数: {artifacts['cloud_functions']} 个")
-    print(f"   测试文件: {artifacts['tests']} 个")
-    print(f"   测试用例: {artifacts['test_cases']} 个")
-    print(f"   测试报告: {artifacts['test_reports']} 个")
+    print(f"\n\u001b[4m\u4ea7\u51fa\u7edf\u8ba1\u001b[0m:")
+    print(f"   \u9700\u6c42\u6587\u6863: {artifacts['specs']} \u4e2a")
+    print(f"   \u8bbe\u8ba1\u6587\u6863: {artifacts['design']} \u4e2a")
+    print(f"   \u6e90\u7801\u6587\u4ef6: {artifacts['src_files']} \u4e2a")
+    print(f"   \u4e91\u51fd\u6570: {artifacts['cloud_functions']} \u4e2a")
+    print(f"   \u6d4b\u8bd5\u6587\u4ef6: {artifacts['tests']} \u4e2a")
+    print(f"   \u6d4b\u8bd5\u7528\u4f8b: {artifacts['test_cases']} \u4e2a")
+    print(f"   \u6d4b\u8bd5\u62a5\u544a: {artifacts['test_reports']} \u4e2a")
 
-    # Last activity
     last = state.get("lastActivity", {})
     if last:
-        print(f"\n🕐 最近活动: {last.get('action', '')} — {last.get('task', '')}")
+        print(f"\n\U0001f550 \u6700\u8fd1\u6d3b\u52a8: {last.get('action', '')} \u2014 {last.get('task', '')}")
         if last.get("timestamp"):
-            print(f"   时间: {format_timestamp(last['timestamp'])}")
+            print(f"   \u65f6\u95f4: {format_timestamp(last['timestamp'])}")
 
 
-def list_projects():
-    """List all projects."""
-    if not PROJECTS_DIR.exists():
+def list_projects(workspace: Path):
+    projects_dir = workspace / "projects"
+    if not projects_dir.exists():
         print("No projects directory found")
         return
 
-    projects = sorted([d.name for d in PROJECTS_DIR.iterdir() if d.is_dir() and (d / ".harness").exists()])
+    projects = sorted([d.name for d in projects_dir.iterdir() if d.is_dir() and (d / ".harness").exists()])
 
     if not projects:
         print("No harness projects found")
         return
 
-    print(f"\n📁 项目列表 ({len(projects)} 个):")
+    print(f"\n\u001b[4m\u9879\u76ee\u5217\u8868\u001b[0m ({len(projects)} \u4e2a):")
     for name in projects:
-        state_file = PROJECTS_DIR / name / ".harness" / "state.json"
+        state_file = projects_dir / name / ".harness" / "state.json"
         if state_file.exists():
             state = json.loads(state_file.read_text(encoding="utf-8"))
             phase = state.get("phase", "?")
@@ -219,23 +222,28 @@ def list_projects():
             total = tasks.get("total", 0)
             completed = tasks.get("completed", 0)
             task_str = f" ({completed}/{total})" if total > 0 else ""
-            print(f"   {icon} {name} — {phase}{task_str}")
+            print(f"   {icon} {name} \u2014 {phase}{task_str}")
         else:
-            print(f"   ? {name} — unknown state")
+            print(f"   ? {name} \u2014 unknown state")
 
 
 def main():
+    import os
     parser = argparse.ArgumentParser(description="Query project status")
     parser.add_argument("--name", help="Project name")
     parser.add_argument("--list", action="store_true", help="List all projects")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--workspace", default="",
+                        help=f"Workspace directory (default: {DEFAULT_WORKSPACE})")
     args = parser.parse_args()
 
+    ws = _workspace_dir(args.workspace)
+
     if args.list:
-        list_projects()
+        list_projects(ws)
     else:
-        name = resolve_project(args.name)
-        display_status(name, as_json=args.json)
+        name = resolve_project(args.name, ws)
+        display_status(name, as_json=args.json, workspace=ws)
 
 
 if __name__ == "__main__":

@@ -9,8 +9,6 @@ from cdh.models.provider import Message
 
 
 HARNESS_SKILL_DIR = Path(__file__).parent.parent.parent.parent / "cloud-harness"
-WORKSPACE = HARNESS_SKILL_DIR.parent
-PROJECTS_DIR = WORKSPACE / "projects"
 
 
 class HarnessSkill:
@@ -27,36 +25,34 @@ class HarnessSkill:
         context.insert(0, system_msg)
 
     @staticmethod
-    def is_harness_project(project_name: str) -> bool:
+    def is_harness_project(project_name: str, workspace: Path) -> bool:
         if not project_name:
             return False
-        project_dir = PROJECTS_DIR / project_name
-        harness_dir = project_dir / ".harness"
-        return harness_dir.exists()
+        return (workspace / "projects" / project_name / ".harness").exists()
 
     @staticmethod
-    def get_project_info(project_name: str) -> dict:
-        if not HarnessSkill.is_harness_project(project_name):
+    def get_project_info(project_name: str, workspace: Path) -> dict:
+        if not HarnessSkill.is_harness_project(project_name, workspace):
             return {}
-        
-        project_dir = PROJECTS_DIR / project_name
+
+        project_dir = workspace / "projects" / project_name
         config_file = project_dir / ".harness" / "config.json"
         state_file = project_dir / ".harness" / "state.json"
-        
+
         info = {"name": project_name}
-        
+
         if config_file.exists():
             try:
                 info["config"] = json.loads(config_file.read_text(encoding="utf-8"))
             except Exception:
                 pass
-        
+
         if state_file.exists():
             try:
                 info["state"] = json.loads(state_file.read_text(encoding="utf-8"))
             except Exception:
                 pass
-        
+
         return info
 
     @staticmethod
@@ -77,21 +73,21 @@ class HarnessSkill:
         return f"Reference not found: {ref_name}"
 
     @staticmethod
-    def run_harness_script(script_name: str, project_name: str, extra_args: list[str] = None) -> dict:
+    def run_harness_script(script_name: str, project_name: str, workspace: Path, extra_args: list[str] = None) -> dict:
         script_path = HARNESS_SKILL_DIR / "scripts" / script_name
         if not script_path.exists():
             return {"success": False, "error": f"Script not found: {script_name}"}
-        
-        cmd = ["python3", str(script_path), "--project", project_name]
+
+        cmd = ["python3", str(script_path), "--project", project_name, "--workspace", str(workspace)]
         if extra_args:
             cmd.extend(extra_args)
-        
+
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                cwd=str(WORKSPACE),
+                cwd=str(workspace),
                 timeout=120
             )
             return {
@@ -106,17 +102,17 @@ class HarnessSkill:
             return {"success": False, "error": str(e)}
 
 
-def load_skill_for_project(context: list[Message], project_name: str) -> bool:
-    if not HarnessSkill.is_harness_project(project_name):
+def load_skill_for_project(context: list[Message], project_name: str, workspace: Path) -> bool:
+    if not HarnessSkill.is_harness_project(project_name, workspace):
         return False
-    
-    info = HarnessSkill.get_project_info(project_name)
+
+    info = HarnessSkill.get_project_info(project_name, workspace)
     if not info:
         return False
-    
+
     skill_content = HarnessSkill.get_skill_content()
     if not skill_content:
         return False
-    
+
     HarnessSkill.load_skill_into_context(context, skill_content)
     return True

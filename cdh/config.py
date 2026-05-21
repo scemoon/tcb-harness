@@ -10,6 +10,13 @@ CLOUD_DEV_HARNESS_DIR = Path.home() / ".cloud-dev-harness"
 GLOBAL_CONFIG_PATH = CLOUD_DEV_HARNESS_DIR / "cdh.config.yaml"
 
 
+def get_workspace_dir(cfg=None) -> Path:
+    """Resolve workspace directory from config; default to ~/.cloud-dev-harness/workspace."""
+    if cfg is None:
+        cfg = load_config()
+    return Path(cfg.default_workspace).expanduser().resolve()
+
+
 @dataclass
 class ProviderConfig:
     api_key: Optional[str] = None
@@ -117,7 +124,6 @@ def ensure_dirs():
     dirs = [
         CLOUD_DEV_HARNESS_DIR,
         CLOUD_DEV_HARNESS_DIR / "sessions",
-        CLOUD_DEV_HARNESS_DIR / "projects",
         CLOUD_DEV_HARNESS_DIR / "skills",
         CLOUD_DEV_HARNESS_DIR / "mcps",
         CLOUD_DEV_HARNESS_DIR / "traces",
@@ -127,6 +133,7 @@ def ensure_dirs():
     ]
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
+    (CLOUD_DEV_HARNESS_DIR / "workspace" / "projects").mkdir(parents=True, exist_ok=True)
 
 
 def load_config() -> GlobalConfig:

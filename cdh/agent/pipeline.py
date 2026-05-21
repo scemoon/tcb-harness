@@ -4,11 +4,11 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-import yaml
 
 from cdh.config import CLOUD_DEV_HARNESS_DIR
-PROJECTS_DIR = CLOUD_DEV_HARNESS_DIR / "projects"
+
 HARNESS_DIR = Path(__file__).parent.parent.parent / "cloud-harness"
+DEFAULT_WORKSPACE = CLOUD_DEV_HARNESS_DIR / "workspace"
 
 
 class PipelinePhase:
@@ -34,8 +34,8 @@ PHASE_DESCRIPTIONS = {
     PipelinePhase.INIT: "Initialize project scaffold, configure cloud environment",
     PipelinePhase.SPEC: "Write requirements using EARS syntax, validate with spec guide",
     PipelinePhase.DESIGN: "Design UI components, API contracts, data models",
-    PipelinePhase.CODING: "TDD implementation: RED → GREEN → REFACTOR",
-    PipelinePhase.TESTING: "Generate and run test cases, verify coverage ≥80%",
+    PipelinePhase.CODING: "TDD implementation: RED \u2192 GREEN \u2192 REFACTOR",
+    PipelinePhase.TESTING: "Generate and run test cases, verify coverage \u226580%",
     PipelinePhase.DEPLOY: "Deploy to cloud, verify all components work together",
 }
 
@@ -61,11 +61,17 @@ PHASE_GATES = {
 
 
 class PipelineManager:
-    def __init__(self, project_name: Optional[str] = None):
+    def __init__(self, project_name: Optional[str] = None, workspace: Optional[Path] = None):
         self.project_name = project_name
+        if workspace is None:
+            workspace = DEFAULT_WORKSPACE
+        self._workspace = workspace
         self._config = None
         self._state = None
         self._load_project_data()
+
+    def _projects_dir(self) -> Path:
+        return self._workspace / "projects"
 
     def _load_project_data(self) -> None:
         if not self.project_name:
@@ -73,7 +79,7 @@ class PipelineManager:
             self._state = {}
             return
 
-        project_dir = PROJECTS_DIR / self.project_name
+        project_dir = self._projects_dir() / self.project_name
         if not project_dir.exists():
             self._config = {}
             self._state = {}
@@ -84,7 +90,7 @@ class PipelineManager:
 
         if config_file.exists():
             try:
-                self._config = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+                self._config = json.loads(config_file.read_text(encoding="utf-8"))
             except Exception:
                 self._config = {}
         else:
@@ -92,7 +98,7 @@ class PipelineManager:
 
         if state_file.exists():
             try:
-                self._state = yaml.safe_load(state_file.read_text(encoding="utf-8")) or {}
+                self._state = json.loads(state_file.read_text(encoding="utf-8"))
             except Exception:
                 self._state = {}
         else:
@@ -148,11 +154,11 @@ class PipelineManager:
         }
 
     def get_pipeline_summary(self) -> str:
-        lines = ["## Pipeline: Init → Spec → Design → Coding → Testing → Deploy", ""]
+        lines = ["## Pipeline: Init \u2192 Spec \u2192 Design \u2192 Coding \u2192 Testing \u2192 Deploy", ""]
 
         for phase in PIPELINE_ORDER:
             info = self.get_phase_info(phase)
-            current_marker = " ▶" if phase == self.current_phase else ""
+            current_marker = " \u25b6" if phase == self.current_phase else ""
             lines.append(f"**{phase.upper()}{current_marker}**")
             lines.append(f"  {info['description']}")
             if phase == self.current_phase:
@@ -175,8 +181,7 @@ class PipelineManager:
         self._state["status"] = "in_progress"
         self._state.setdefault("tasks", {})["completed"] = self._state["tasks"].get("completed", 0) + 1
         self._state["lastActivity"] = {"action": "advance_phase", "task": f"phase:{next_phase}", "timestamp": now}
-        project_dir = Path(__file__).parent.parent.parent / "projects" / self.project_name
-        state_file = project_dir / ".harness" / "state.json"
+        state_file = self._projects_dir() / self.project_name / ".harness" / "state.json"
         state_file.parent.mkdir(parents=True, exist_ok=True)
         state_file.write_text(json.dumps(self._state, indent=2, ensure_ascii=False), encoding="utf-8")
         return next_phase
@@ -188,6 +193,6 @@ class PipelineManager:
         return ""
 
 
-def get_pipeline_for_agent(project_name: Optional[str] = None) -> str:
-    pm = PipelineManager(project_name)
+def get_pipeline_for_agent(project_name: Optional[str] = None, workspace: Optional[Path] = None) -> str:
+    pm = PipelineManager(project_name, workspace=workspace)
     return pm.get_pipeline_summary()

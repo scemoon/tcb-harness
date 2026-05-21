@@ -15,7 +15,7 @@ from cdh.agent.agents.types import (
     get_system_prompt, TOOL_DESCRIPTIONS, BUILT_IN_AGENTS, AgentPermission, PLAN_INSTRUCTIONS
 )
 
-from cdh.config import CLOUD_DEV_HARNESS_DIR
+from cdh.config import CLOUD_DEV_HARNESS_DIR, get_workspace_dir
 from cdh.agent.session import AgentSession
 from cdh.agent.hooks import HookManager, HookContext, HookResult
 from cdh.agent.permissions import PermissionChecker, PermissionSet, create_safe_permission_set
@@ -104,10 +104,16 @@ class AgentEngine:
         self._task_manager = TaskManager()
         self._project_config: dict = {}
         self._harness_mode = False
+        self._project_context_loaded = False
+
+    @property
+    def _workspace(self) -> Path:
+        cfg = getattr(self.app, 'config', None)
+        return get_workspace_dir(cfg)
 
     def _detect_harness_mode(self) -> bool:
-        """Detect if any harness projects exist."""
-        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        """Detect if any harness projects exist in workspace."""
+        projects_dir = self._workspace / "projects"
         if projects_dir.exists():
             for d in projects_dir.iterdir():
                 if d.is_dir() and (d / ".harness").exists():
@@ -116,7 +122,7 @@ class AgentEngine:
 
     def _load_project_config(self, project_name: str) -> dict:
         """Load project config into memory."""
-        base = CLOUD_DEV_HARNESS_DIR / "projects" / project_name / ".harness"
+        base = self._workspace / "projects" / project_name / ".harness"
         config_path = base / "config.json"
         if config_path.exists():
             try:
@@ -137,8 +143,8 @@ class AgentEngine:
         if self._detect_harness_mode():
             self._harness_mode = True
             return ""
-        ws = Path(self.app.config.default_workspace).expanduser() if self.app.config.default_workspace else Path.cwd()
-        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        ws = self._workspace
+        projects_dir = ws / "projects"
         if projects_dir.exists() and any(projects_dir.iterdir()):
             self._harness_mode = True
             # Projects exist but none is set as current — user should switch
@@ -200,9 +206,12 @@ class AgentEngine:
         if not project_name:
             self._auto_init_harness()
             return
+        if self._project_context_loaded:
+            return
 
+        self._project_context_loaded = True
         self._harness_mode = True
-        self._pipeline = PipelineManager(project_name)
+        self._pipeline = PipelineManager(project_name, workspace=self._workspace)
         self._project_config = self._load_project_config(project_name)
 
         pipeline_info = self._pipeline.get_pipeline_summary()
@@ -499,6 +508,7 @@ class AgentEngine:
         self.iterations = 0
         self.total_tokens = 0
         self._skills_loaded = False
+        self._project_context_loaded = False
 
     def status(self) -> str:
         return (

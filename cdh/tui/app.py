@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from rich.style import Style
@@ -13,7 +14,7 @@ from textual.reactive import reactive
 from textual.css.styles import Styles
 
 from cdh.agent.engine import AgentEngine
-from cdh.config import load_config
+from cdh.config import load_config, get_workspace_dir
 from cdh.lifecycle.manager import LifecycleManager
 from cdh.models.providers import *  # noqa: F401, F403
 from cdh.models.registry import ModelRegistry
@@ -174,12 +175,7 @@ class CloudDevHarnessApp(App):
     HeaderBar { height: 2; border-bottom: solid $primary; padding: 0; }
     HeaderBar Static { width: 100%; }
     ChatPanel { height: 1fr; border-right: solid $primary; }
-    RightPanel { background: transparent; padding: 0; color: $text_bright; height: 100%;  }
-    RightPanel .section-title { text-style: bold; padding: 0; }
-    RightPanel .section-rule { color: $text_dim; }
-    RightPanel ListView { height: 1fr; border: none; background: transparent; }
-    RightPanel ListView > ListItem { padding: 0; }
-    RightPanel .hidden { display: none; }
+
     ConfigScreen { align: center middle; background: $overlay; }
     ConfigScreen > #config-dialog { width: 66; max-height: 30; background: $surface; border: solid $primary; padding: 1 2; }
     #config-header { width: 100%; text-align: center; text-style: bold; color: $primary; padding: 1 0; }
@@ -203,6 +199,18 @@ class CloudDevHarnessApp(App):
     current_project: reactive[Optional[str]]  = reactive(None)
     turn_count:      reactive[int]            = reactive(0)
     token_count:     reactive[int]            = reactive(0)
+
+    def watch_current_project(self, old_val: str, new_val: str) -> None:
+        self.query_one(HeaderBar).sync(self)
+        self._refresh_right_panel()
+
+    @property
+    def workspace(self) -> Path:
+        return Path(self.config.default_workspace).expanduser().resolve()
+
+    @property
+    def projects_dir(self) -> Path:
+        return self.workspace / "projects"
 
     def __init__(self) -> None:
         from cdh.tui.theme import THEMES
@@ -295,8 +303,11 @@ class CloudDevHarnessApp(App):
     def _init_session(self) -> None:
         from cdh.tui.commands.harness_cmds import get_current_project
         if not self.current_project:
-            self.current_project = get_current_project() or None
+            self.current_project = get_current_project(self.workspace) or None
+        if self.current_project:
+            self.agent._inject_project_context(self.current_project)
         self._load_session_for_project(self.current_project or "")
+        self._refresh_right_panel()
 
     def _load_session_for_project(self, project: str) -> None:
         if project:

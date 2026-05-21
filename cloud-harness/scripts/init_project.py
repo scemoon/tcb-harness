@@ -36,10 +36,9 @@ from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent  # cloud-harness root
 CDH_DIR = Path(os.environ.get("CLOUD_DEV_HARNESS_DIR", Path.home() / ".cloud-dev-harness"))
-PROJECTS_DIR = CDH_DIR / "projects"
-CURRENT_FILE = CDH_DIR / ".current_project"  # stores current project name
-GITHUB_API = "https://api.github.com"
+DEFAULT_WORKSPACE = CDH_DIR / "workspace"
 TOKEN_FILE = CDH_DIR / ".cloud-harness-tokens.json"
+GITHUB_API = "https://api.github.com"
 
 
 def load_stored_token() -> str:
@@ -88,44 +87,65 @@ def get_token(token_arg: str) -> str:
         return env_token
     return load_stored_token()
 
-def get_current_project() -> str:
+def _workspace_dir(ws_arg: str = "") -> Path:
+    """Resolve workspace directory from arg, env, or default."""
+    if ws_arg:
+        return Path(ws_arg).expanduser().resolve()
+    env_ws = os.environ.get("CDH_WORKSPACE", "")
+    if env_ws:
+        return Path(env_ws).expanduser().resolve()
+    return DEFAULT_WORKSPACE
+
+
+def _projects_dir(workspace: Path) -> Path:
+    return workspace / "projects"
+
+
+def _current_file(workspace: Path) -> Path:
+    return workspace / ".current_project"
+
+
+def get_current_project(workspace: Path) -> str:
     """Return the name of the currently active project, or empty string if none."""
-    if not CURRENT_FILE.exists():
+    cf = _current_file(workspace)
+    if not cf.exists():
         return ""
     try:
-        return CURRENT_FILE.read_text(encoding="utf-8").strip()
+        return cf.read_text(encoding="utf-8").strip()
     except Exception:
         return ""
 
 
-def set_current_project(name: str) -> bool:
+def set_current_project(name: str, workspace: Path) -> bool:
     """Set the currently active project. Returns True on success."""
     if not name:
         return False
-    project_dir = PROJECTS_DIR / name
+    project_dir = _projects_dir(workspace) / name
     if not project_dir.exists() or not (project_dir / ".harness").exists():
         print(f"[ERROR] Not a harness project: {name}")
         return False
     try:
-        CDH_DIR.mkdir(parents=True, exist_ok=True)
-        CURRENT_FILE.write_text(name, encoding="utf-8")
+        cf = _current_file(workspace)
+        cf.parent.mkdir(parents=True, exist_ok=True)
+        cf.write_text(name, encoding="utf-8")
         return True
     except Exception as e:
         print(f"[ERROR] Failed to write current project: {e}")
         return False
 
 
-def clear_current_project() -> None:
+def clear_current_project(workspace: Path) -> None:
     """Clear the currently active project."""
-    if CURRENT_FILE.exists():
-        CURRENT_FILE.unlink()
+    cf = _current_file(workspace)
+    if cf.exists():
+        cf.unlink()
 
 
-def resolve_project(name: str) -> str:
+def resolve_project(name: str, workspace: Path) -> str:
     """Resolve project name: use --name arg if given, otherwise read from CURRENT_FILE."""
     if name:
         return name
-    current = get_current_project()
+    current = get_current_project(workspace)
     if current:
         return current
     print("[ERROR] No project specified and no current project is set.")
@@ -133,7 +153,7 @@ def resolve_project(name: str) -> str:
     raise SystemExit(1)
 
 
-SUPPORTED_PLATFORMS = ["mp", "web", "oa", "hybrid"]
+# Will be defined with canonical value in the scaffold section below
 
 
 # ─── GitHub Import ────────────────────────────────────────────────────────────
@@ -204,7 +224,8 @@ def detect_platform_from_repo(contents_url: str, token: str) -> str:
 
 
 def import_from_github(name: str, repo_value: str, branch: str = "main",
-                     token: str = "", save_token_flag: bool = False) -> Path:
+                     token: str = "", save_token_flag: bool = False,
+                     workspace: Path = DEFAULT_WORKSPACE) -> Path:
     """Clone and import a project from GitHub."""
     owner, repo_name = parse_github_repo(repo_value)
     repo_path = f"/repos/{owner}/{repo_name}"
@@ -219,7 +240,7 @@ def import_from_github(name: str, repo_value: str, branch: str = "main",
         except RuntimeError:
             # Token might be invalid/expired — try without it
             token = ""
-    project_dir = PROJECTS_DIR / name
+    project_dir = _projects_dir(workspace) / name
 
     if project_dir.exists():
         print(f"[ERROR] Project directory already exists: {project_dir}")
@@ -364,6 +385,9 @@ def import_from_github(name: str, repo_value: str, branch: str = "main",
 
 # ─── Scaffold from scratch ───────────────────────────────────────────────────
 
+SUPPORTED_PLATFORMS = ["mp", "web", "oa", "hybrid"]
+
+
 def create_base_dirs(project_dir: Path, platform: str):
     dirs = [
         ".harness", "specs", "design/ui/wireframes", "design/shared",
@@ -421,7 +445,6 @@ def write_harness_config(project_dir: Path, name: str, platform: str, appid: str
     with open(path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
         f.write("\n")
-    print("[OK] Created .harness/config.json")
 
 
 def write_harness_state(project_dir: Path):
@@ -435,7 +458,6 @@ def write_harness_state(project_dir: Path):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
         f.write("\n")
-    print("[OK] Created .harness/state.json")
 
 
 def write_deploy_config(project_dir: Path, platform: str):
@@ -465,7 +487,7 @@ def write_deploy_config(project_dir: Path, platform: str):
         }
     if platform in ("oa", "hybrid"):
         config["frontend"]["officialAccount"] = {
-            "appid": appid or "", "srcPath": "./src/official-account",
+            "appid": "", "srcPath": "./src/official-account",
             "buildCommand": "npm run build", "outputPath": "./dist",
             "buildVerified": False, "deployedAt": None,
             "staticHosting": {"enabled": True, "envId": "", "domain": None, "customDomain": None, "cdn": True},
@@ -473,7 +495,7 @@ def write_deploy_config(project_dir: Path, platform: str):
             "jssdk": {"enabled": True, "jsApiList": [], "debug": False},
         }
     if platform == "hybrid":
-        config["frontend"]["shared"] = {"note": "多端共用同一套后台 (cloud/)"}
+        config["frontend"]["shared"] = {"note": "\u591a\u7aef\u5171\u7528\u540c\u4e00\u5957\u540e\u53f0 (cloud/)"}
     if platform == "hybrid":
         config["deployOrder"] = ["backend", "frontend.miniprogram", "frontend.web"]
     elif platform == "mp":
@@ -487,7 +509,6 @@ def write_deploy_config(project_dir: Path, platform: str):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
         f.write("\n")
-    print("[OK] Created .harness/deploy-config.json")
 
 
 def copy_templates(project_dir: Path, platform: str):
@@ -503,58 +524,44 @@ def copy_templates(project_dir: Path, platform: str):
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(f, dst)
 
-    # Mini program
     mp_tpl = tpl / "project" / "miniprogram"
     if platform in ("mp", "hybrid") and mp_tpl.exists():
         copy_dir(mp_tpl, project_dir / "src" / "miniprogram")
-        print("[OK] Copied miniprogram templates")
 
-    # Web
     web_tpl = tpl / "project" / "web"
     if platform in ("web", "hybrid") and web_tpl.exists():
         copy_dir(web_tpl, project_dir / "src" / "web")
-        print("[OK] Copied web templates")
 
-    # Official Account
     oa_tpl = tpl / "project" / "official-account"
     if platform in ("oa", "hybrid") and oa_tpl.exists():
         copy_dir(oa_tpl, project_dir / "src" / "official-account")
-        print("[OK] Copied official-account templates")
 
-    # Backend
     backend_tpl = tpl / "project" / "backend"
     if platform in ("web", "oa", "hybrid") and backend_tpl.exists():
         copy_dir(backend_tpl, project_dir / "cloud")
-        print("[OK] Copied backend templates")
 
-    # Spec templates
     for f in (tpl / "spec").glob("*.tpl"):
         shutil.copy2(f, project_dir / "specs" / f.stem)
-    print("[OK] Copied spec templates")
-
-    # Test templates
     for f in (tpl / "testing").glob("*.tpl"):
         shutil.copy2(f, project_dir / "tests" / f.stem)
-    print("[OK] Copied test templates")
 
-    # Deploy template
     deploy_tpl = tpl / "deploy" / "deploy-config.json.tpl"
     if deploy_tpl.exists():
         shutil.copy2(deploy_tpl, project_dir / ".harness" / "deploy-config.json.tpl")
 
 
-def create_project(name: str, platform: str, appid: str = "", envId: str = "") -> Path:
-    project_dir = PROJECTS_DIR / name
+def create_project(name: str, platform: str, appid: str = "", envId: str = "",
+                   workspace: Path = DEFAULT_WORKSPACE) -> Path:
+    project_dir = _projects_dir(workspace) / name
+    print(f"\nCreating project: {name} (platform: {platform})")
+    print(f"Location: {project_dir}")
+
     if project_dir.exists():
         print(f"[ERROR] Project directory already exists: {project_dir}")
         raise SystemExit(1)
     if platform not in SUPPORTED_PLATFORMS:
-        print(f"[ERROR] Unknown platform: {platform}")
-        print(f"   Supported: {', '.join(SUPPORTED_PLATFORMS)}")
+        print(f"[ERROR] Unknown platform: {platform}. Supported: {', '.join(SUPPORTED_PLATFORMS)}")
         raise SystemExit(1)
-
-    print(f"\nCreating project: {name} (platform: {platform})")
-    print(f"Location: {project_dir}")
 
     project_dir.mkdir(parents=True, exist_ok=True)
     create_base_dirs(project_dir, platform)
@@ -563,6 +570,9 @@ def create_project(name: str, platform: str, appid: str = "", envId: str = "") -
     write_deploy_config(project_dir, platform)
     copy_templates(project_dir, platform)
 
+    print("[OK] Created .harness/config.json")
+    print("[OK] Created .harness/state.json")
+    print("[OK] Created .harness/deploy-config.json")
     print(f"\n[OK] Project '{name}' initialized successfully")
     print("\nNext steps:")
     print("1. Update .harness/config.json with CloudBase envId and WeChat AppID")
@@ -570,9 +580,9 @@ def create_project(name: str, platform: str, appid: str = "", envId: str = "") -
     print("3. Start the Spec phase: describe your requirements")
 
     notes = {
-        "mp": "Mini Program — design/frontend/miniprogram/ and cloud/ are active",
-        "web": "Web — design/frontend/web/ and cloud/ are active",
-        "hybrid": "Hybrid — both frontend platforms + shared backend",
+        "mp": "Mini Program \u2014 design/frontend/miniprogram/ and cloud/ are active",
+        "web": "Web \u2014 design/frontend/web/ and cloud/ are active",
+        "hybrid": "Hybrid \u2014 both frontend platforms + shared backend",
     }
     print(f"\nPlatform: {notes[platform]}")
     return project_dir
@@ -604,9 +614,13 @@ def main():
             elif arg in ("--save-token",):
                 kw["save_token"] = True
                 i += 1
+            elif arg in ("--workspace",):
+                kw["workspace"] = argv[i + 1]
+                i += 2
             else:
                 i += 1
 
+        ws = _workspace_dir(kw.get("workspace", ""))
         name = kw.get("name", "").strip().lower().replace(" ", "-") if kw.get("name") else ""
         if not name and kw.get("from_github"):
             try:
@@ -619,11 +633,14 @@ def main():
             kw["from_github"],
             branch=kw.get("branch", "main"),
             token=kw.get("token", ""),
-            save_token_flag=kw.get("save_token", False)
+            save_token_flag=kw.get("save_token", False),
+            workspace=ws,
         )
         return
 
     parser = argparse.ArgumentParser(description="Initialize or import a cloud-harness project")
+    parser.add_argument("--workspace", default="",
+                        help=f"Workspace directory (default: {DEFAULT_WORKSPACE})")
     sub = parser.add_subparsers(dest="mode", help="init or import")
 
     # Scaffold mode
@@ -633,8 +650,6 @@ def main():
                             help="Platform type: mp, web, hybrid")
     p_scaffold.add_argument("--appid", default="", help="WeChat Mini Program AppID")
     p_scaffold.add_argument("--envId", default="", help="CloudBase Environment ID")
-    p_scaffold.add_argument("--projects-dir", default="",
-                            help=f"Projects directory (default: {PROJECTS_DIR})")
 
     # Import mode
     p_import = sub.add_parser("import", help="Import an existing project from GitHub")
@@ -646,8 +661,6 @@ def main():
                           help="GitHub token (reads from env GITHUB_TOKEN or stored token if omitted)")
     p_import.add_argument("--save-token", action="store_true",
                           help="Save the GitHub token to local file after import")
-    p_import.add_argument("--projects-dir", default="",
-                          help=f"Projects directory (default: {PROJECTS_DIR})")
 
     # Auth mode: save / show / clear GitHub token
     p_auth = sub.add_parser("auth", help="Manage stored credentials")
@@ -665,6 +678,8 @@ def main():
     import_init = sub.add_parser("github", help=argparse.SUPPRESS)  # hidden alias
 
     args = parser.parse_args()
+
+    ws = _workspace_dir(getattr(args, "workspace", ""))
 
     # Auth mode
     if args.mode == "auth":
@@ -695,27 +710,22 @@ def main():
     # Switch active project
     if args.mode == "switch":
         if args.clear:
-            clear_current_project()
+            clear_current_project(ws)
             print("[OK] Active project cleared.")
             return
         if not args.project:
-            current = get_current_project()
+            current = get_current_project(ws)
             if current:
-                print(f"📌 Current project: {current}")
+                print(f"\U0001f4cc Current project: {current}")
             else:
                 print("[--] No active project.")
                 print("    Run: python3 scripts/init_project.py switch <project-name>")
             return
-        if set_current_project(args.project):
+        if set_current_project(args.project, ws):
             print(f"[OK] Switched to project: {args.project}")
         return
 
     # Determine mode
-    global PROJECTS_DIR
-    projects_dir_arg = getattr(args, "projects_dir", "")
-    if projects_dir_arg:
-        PROJECTS_DIR = Path(projects_dir_arg).expanduser().resolve()
-
     if args.mode in ("import", "github"):
         save_flag = getattr(args, "save_token", False)
         name = args.name.strip().lower().replace(" ", "-")
@@ -725,14 +735,14 @@ def main():
         import_from_github(
             name, args.from_github,
             branch=args.branch, token=args.token or "",
-            save_token_flag=save_flag
+            save_token_flag=save_flag, workspace=ws,
         )
     elif args.mode == "init":
         name = args.name.strip().lower().replace(" ", "-")
         if not name:
             print("[ERROR] Project name cannot be empty")
             raise SystemExit(1)
-        create_project(name, platform=args.platform, appid=args.appid, envId=args.envId)
+        create_project(name, platform=args.platform, appid=args.appid, envId=args.envId, workspace=ws)
     else:
         # Backward compat: treat positional as init with --from-github
         if hasattr(args, "from_github") and args.from_github:
@@ -744,7 +754,7 @@ def main():
                 name, args.from_github,
                 branch=getattr(args, "branch", "main"),
                 token=getattr(args, "token", ""),
-                save_token_flag=save_flag
+                save_token_flag=save_flag, workspace=ws,
             )
         else:
             parser.print_help()
