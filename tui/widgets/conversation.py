@@ -1345,11 +1345,11 @@ class Conversation(containers.Vertical):
                 "Tweet a testimonial regarding TUI",
                 "<what you think of tui>",
             ),
-            SlashCommand("/cdh:mode", "Set CDH mode", "<agent|plan|solo>"),
-            SlashCommand("/cdh:provider", "Set CDH provider", "<provider name>"),
-            SlashCommand("/cdh:model", "Set CDH model", "<model name>"),
-            SlashCommand("/cdh:harness", "Show CDH harness info"),
-            SlashCommand("/cdh:cloud", "Set CDH cloud", "<cloud name>"),
+            SlashCommand("/mode", "Set mode", "<agent|plan|solo>"),
+            SlashCommand("/provider", "Set provider", "<provider name>"),
+            SlashCommand("/model", "Set model", "<model name>"),
+            SlashCommand("/harness", "Show harness info"),
+            SlashCommand("/cloud", "Set cloud", "<cloud name>"),
         ]
 
         slash_commands.extend(self.agent_slash_commands)
@@ -1949,52 +1949,52 @@ class Conversation(containers.Vertical):
                 hashtags=["ai"],
             )
             return True
-        elif command == "cdh:mode":
+        elif command == "mode":
             from cdh.config import load_config, save_config
             mode = parameters.strip().lower()
             if mode not in ("agent", "plan", "solo"):
-                self.notify("Mode must be: agent, plan, or solo", title="/cdh:mode", severity="error")
+                self.notify("Mode must be: agent, plan, or solo", title="/mode", severity="error")
                 return True
             cfg = load_config()
             cfg.default_mode = mode
             save_config(cfg)
-            self.app.settings.set("cdh.mode", mode)
+            self.app.settings.set("mode", mode)
             self.flash(f"CDH mode set to [b]{mode}")
             return True
-        elif command == "cdh:provider":
+        elif command == "provider":
             from cdh.config import load_config, save_config
             provider = parameters.strip()
             if not provider:
-                self.notify("Provider name required", title="/cdh:provider", severity="error")
+                self.notify("Provider name required", title="/provider", severity="error")
                 return True
             cfg = load_config()
             cfg.default_provider = provider
             save_config(cfg)
-            self.app.settings.set("cdh.provider", provider)
+            self.app.settings.set("provider", provider)
             self.flash(f"CDH provider set to [b]{provider}")
             return True
-        elif command == "cdh:model":
+        elif command == "model":
             from cdh.config import load_config, save_config
             model = parameters.strip()
             if not model:
-                self.notify("Model name required", title="/cdh:model", severity="error")
+                self.notify("Model name required", title="/model", severity="error")
                 return True
             cfg = load_config()
             cfg.default_model = model
             save_config(cfg)
-            self.app.settings.set("cdh.model", model)
+            self.app.settings.set("model", model)
             self.flash(f"CDH model set to [b]{model}")
             return True
-        elif command == "cdh:cloud":
+        elif command == "cloud":
             from cdh.config import load_config, save_config
             cloud = parameters.strip()
             if not cloud:
-                self.notify("Cloud name required", title="/cdh:cloud", severity="error")
+                self.notify("Cloud name required", title="/cloud", severity="error")
                 return True
             cfg = load_config()
             cfg.default_cloud = cloud
             save_config(cfg)
-            self.app.settings.set("cdh.cloud", cloud)
+            self.app.settings.set("cloud", cloud)
             self.flash(f"CDH cloud set to [b]{cloud}")
             return True
         elif command == "cdh:harness":

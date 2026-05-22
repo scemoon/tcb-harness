@@ -14,8 +14,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "cdh"))
 
 from cdh.agent.engine import AgentEngine
 from cdh.config import load_config
+from cdh.models.provider import ProviderRegistry
 from cdh.models.registry import ModelRegistry
 from cdh.models.messages import StreamEventType
+
+from cdh.models.providers.minimaxi_provider import MiniMaxiProvider
+from cdh.models.providers.minimax_provider import MiniMaxProvider
+from cdh.models.providers.anthropic_provider import AnthropicProvider
+from cdh.models.providers.openai_provider import OpenAIProvider
+from cdh.models.providers.deepseek_provider import DeepSeekProvider
+from cdh.models.providers.glm_provider import GLMProvider
+from cdh.models.providers.ollama_provider import OllamaProvider
 
 
 class CDHACPAdapter:
@@ -57,16 +66,17 @@ class CDHACPAdapter:
         self.session_id = f"cdh-session-{os.getpid()}"
         cfg = load_config()
 
-        model_registry = ModelRegistry()
-        provider = model_registry.get_provider(cfg.default_provider)
-        if provider is None:
-            provider = model_registry.get_provider("minimaxi")
+        ModelRegistry.initialize()
+        provider_cls = ProviderRegistry.get(cfg.default_provider)
+        if provider_cls is None:
+            provider_cls = ProviderRegistry.get("minimaxi")
 
-        self.agent = AgentEngine(
-            provider=provider,
-            model=cfg.default_model,
-            system=None,
-        )
+        class MinimalApp:
+            config = cfg
+            current_provider = cfg.default_provider
+            current_model = cfg.default_model
+
+        self.agent = AgentEngine(MinimalApp())
 
         return {
             "sessionId": self.session_id,
@@ -193,7 +203,7 @@ class JSONRPCServer:
         )
 
 
-async def main():
+async def _main():
     adapter = CDHACPAdapter()
     server = JSONRPCServer(adapter)
 
@@ -223,5 +233,8 @@ async def main():
                         print(json.dumps(response), flush=True)
 
 
+def main():
+    asyncio.run(_main())
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

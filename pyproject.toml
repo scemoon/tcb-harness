@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 cdh = "cdh.cli:main"
+cdh-agent-acp = "cdh.agent.cdh_agent_acp:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
