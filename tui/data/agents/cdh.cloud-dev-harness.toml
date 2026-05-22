@@ -1,0 +1,16 @@
+# CDH (Cloud Dev Harness) - Agent for TUI2
+# https://github.com/cloud-dev-harness/cdh
+
+identity = "cdh.cloud-dev-harness"
+name = "CDH Agent"
+short_name = "cdh"
+url = "https://github.com/cloud-dev-harness/cdh"
+protocol = "acp"
+author_name = "CDH Team"
+author_url = "https://github.com/cloud-dev-harness"
+publisher_name = "CDH Team"
+publisher_url = "https://github.com/cloud-dev-harness"
+type = "coding"
+description = "Cloud Dev Harness - cloud-native development Agent framework with LLM provider integration"
+tags = []
+run_command."*" = "cdh-agent-acp"

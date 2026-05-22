@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from cdh.config import ensure_dirs, load_config, save_config
-from cdh.tui.app import CloudDevHarnessApp
+from tui.app import TUI2App
 
 LOG_DIR = Path.home() / ".cloud-dev-harness" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -45,11 +45,25 @@ def tui(mode, project, workspace):
         save_config(cfg)
     setup_logging(cfg.log_level)
     logging.info(f"Starting Cloud Dev Harness with provider={cfg.default_provider}, model={cfg.default_model}")
-    app = CloudDevHarnessApp()
-    if mode:
-        app.current_mode = mode
-    if project:
-        app.current_project = project
+
+    agent_data = {
+        "identity": "cdh.cloud-dev-harness",
+        "name": "CDH Agent",
+        "short_name": "cdh",
+        "url": "https://github.com/cloud-dev-harness/cdh",
+        "protocol": "acp",
+        "type": "coding",
+        "author_name": "CDH Team",
+        "author_url": "https://github.com/cloud-dev-harness",
+        "publisher_name": "CDH Team",
+        "publisher_url": "https://github.com/cloud-dev-harness",
+        "description": "Cloud Dev Harness Agent",
+        "tags": [],
+        "run_command": {"*": f"{sys.executable} -m cdh.agent.cdh_agent_acp"},
+        "actions": {},
+    }
+
+    app = TUI2App(project_dir=project, agent_data=agent_data)
     app.run()
 
 
