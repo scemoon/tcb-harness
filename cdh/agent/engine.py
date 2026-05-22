@@ -11,39 +11,11 @@ from typing import AsyncIterator, Optional
 from dataclasses import dataclass
 from typing import Callable
 
-from cdh.agent.context import ContextManager, ContextConfig
-from cdh.models.provider import ContentBlockType, Message as ProviderMessage, ProviderRegistry, ChatResponse
-from cdh.agent.tools.file_ops import FileOps, ShellTool, Permission, ToolFactory
-from cdh.agent.tools.registry import ToolRegistry, ToolSpec, ToolCall as RegistryToolCall
-from cdh.agent.tools.protocol import ToolResult as RegistryToolResult
-from cdh.agent.tools.permissions import ToolPermissionContext
-from cdh.agent.tools.file_tools import ReadTool, WriteTool, EditTool, InsertTool, UndoEditTool, GlobTool, GrepTool, ListTool
-from cdh.agent.tools.bash_tool import BashTool
-from cdh.agent.tools.web_tool_impl import WebFetchTool, WebSearchTool
-from cdh.agent.tools.communication_tools import SendMessageTool, AskUserTool, ToolSearchTool
-from cdh.agent.tools.task_tools import (TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool,
-    TaskOutputTool, TaskStopTool, TodoCreateTool, TodoListTool, TodoCompleteTool)
-from cdh.agent.tools.agent_tools import AgentTool, TaskTool
-from cdh.agent.pipeline import PipelineManager, get_pipeline_for_agent
-from cdh.agent.agents.types import (
-    AgentConfig, BuildAgent, PlanAgent, create_agent,
-    get_system_prompt, TOOL_DESCRIPTIONS, BUILT_IN_AGENTS, AgentPermission, PLAN_INSTRUCTIONS
-)
-
-from cdh.config import CLOUD_DEV_HARNESS_DIR, get_workspace_dir
+from cdh.agent.context import ContextManager
+from cdh.models.provider import ContentBlockType, ProviderRegistry
+from cdh.config import get_workspace_dir
 from cdh.agent.session import AgentSession
-from cdh.agent.hooks import HookManager, HookContext, HookResult
-from cdh.agent.permissions import PermissionChecker, PermissionSet, create_safe_permission_set
-from cdh.agent.tools.schemas import TOOLS_SCHEMA
-from cdh.agent.tools.skill_tools import SkillTool
-from cdh.agent.tools.mcp_tools import MCPTool as MCPToolTool, MCPResourcesTool
-from cdh.agent.tools.lsp_tools import LSPTool
-from cdh.agent.tools.cron_tools import CronCreateTool, CronListTool, CronRemoveTool, CronScheduler
-from cdh.agent.tools.git_tools import WorktreeTool
-from cdh.agent.tools.config_tool import ConfigReadTool, ConfigWriteTool
-from cdh.skills.loader import SkillLoader
-from cdh.mcp.manager import MCPManager
-from cdh.models.messages import StreamEvent, StreamEventType, ToolCategory as MsgToolCategory, get_tool_category as msg_get_tool_category
+from cdh.models.messages import StreamEvent
 
 logger = logging.getLogger("cdh.agent.engine")
 
@@ -241,6 +213,17 @@ class TaskManager:
 
 class AgentEngine:
     def __init__(self, app):
+        from cdh.agent.tools.file_ops import ToolFactory, Permission
+        from cdh.agent.agents.types import BuildAgent
+        from cdh.lifecycle.manager import LifecycleManager
+        from cdh.agent.hooks import HookManager
+        from cdh.agent.permissions import PermissionChecker, create_safe_permission_set
+        from cdh.skills.loader import SkillLoader
+        from cdh.mcp.manager import MCPManager
+        from cdh.agent.tools.cron_tools import CronScheduler
+        from cdh.agent.tools.lsp_tools import LSPTool
+        from cdh.agent.tools.config_tool import ConfigReadTool, ConfigWriteTool
+        from cdh.agent.tools.communication_tools import SendMessageTool
         self.app = app
         self.context = ContextManager()
         ws = Path(app.config.default_workspace).expanduser() if app.config.default_workspace else Path.cwd()
@@ -250,7 +233,7 @@ class AgentEngine:
         self.iterations = 0
         self.total_tokens = 0
         self._skills_loaded = False
-        self._pipeline = PipelineManager()
+        self._pipeline = LifecycleManager()
         self._session: Optional[AgentSession] = None
         self._hooks = HookManager()
         self._permissions = PermissionChecker(create_safe_permission_set())
@@ -284,6 +267,18 @@ class AgentEngine:
         self.on_text_chunk: Callable[[str], None] | None = None
 
     def _build_tool_registry(self) -> ToolRegistry:
+        from cdh.agent.tools.registry import ToolRegistry
+        from cdh.agent.tools.file_tools import ReadTool, WriteTool, EditTool, InsertTool, UndoEditTool, GlobTool, GrepTool, ListTool
+        from cdh.agent.tools.bash_tool import BashTool
+        from cdh.agent.tools.web_tools import WebFetchTool, WebSearchTool
+        from cdh.agent.tools.communication_tools import SendMessageTool, AskUserTool, ToolSearchTool
+        from cdh.agent.tools.task_tools import (TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool,
+            TaskOutputTool, TaskStopTool, TodoCreateTool, TodoListTool, TodoCompleteTool)
+        from cdh.agent.tools.agent_tools import AgentTool, TaskTool
+        from cdh.agent.tools.skill_tools import SkillTool
+        from cdh.agent.tools.mcp_tools import MCPTool as MCPToolTool, MCPResourcesTool
+        from cdh.agent.tools.cron_tools import CronCreateTool, CronListTool, CronRemoveTool
+        from cdh.agent.tools.git_tools import WorktreeTool
         registry = ToolRegistry()
         # File tools
         registry.register(ReadTool(self.file_ops))
@@ -303,7 +298,7 @@ class AgentEngine:
         self._send_message_tool = SendMessageTool()
         registry.register(self._send_message_tool)
         registry.register(AskUserTool())
-        registry.register(ToolSearchTool(TOOLS_SCHEMA))
+        registry.register(ToolSearchTool(registry))
         # Task management
         registry.register(TaskCreateTool(self._task_manager))
         registry.register(TaskGetTool(self._task_manager))
@@ -414,6 +409,7 @@ class AgentEngine:
         return ""
 
     def set_agent(self, agent_type: str) -> None:
+        from cdh.agent.agents.types import create_agent, PLAN_INSTRUCTIONS, TOOL_DESCRIPTIONS
         self.current_agent = create_agent(agent_type)
         system_parts = [self.current_agent.description]
 
@@ -448,6 +444,7 @@ class AgentEngine:
         self.context.add_system("\n".join(system_parts))
 
     def get_available_tools(self) -> str:
+        from cdh.agent.agents.types import TOOL_DESCRIPTIONS
         return TOOL_DESCRIPTIONS
 
     def _load_skills(self) -> None:
@@ -468,6 +465,7 @@ class AgentEngine:
             self.context.add_system(harness_content)
 
     def _inject_project_context(self, project_name: str) -> None:
+        from cdh.lifecycle.manager import LifecycleManager
         if not project_name:
             self._auto_init_harness()
             return
@@ -476,7 +474,7 @@ class AgentEngine:
 
         self._project_context_loaded = True
         self._harness_mode = True
-        self._pipeline = PipelineManager(project_name, workspace=self._workspace)
+        self._pipeline = LifecycleManager(project_name, workspace=self._workspace)
         self._project_config = self._load_project_config(project_name)
 
         pipeline_info = self._pipeline.get_pipeline_summary()
@@ -580,6 +578,9 @@ class AgentEngine:
         return get_tool_category(name).value
 
     async def _execute_tool(self, tool_call: dict) -> dict:
+        from cdh.agent.tools.registry import ToolCall as RegistryToolCall
+        from cdh.agent.tools.permissions import ToolPermissionContext
+        from cdh.agent.agents.types import AgentPermission
         name = tool_call["name"]
         tid = tool_call["id"]
         inp = tool_call["input"]
@@ -731,7 +732,7 @@ class AgentEngine:
                     model_response = await provider.chat(
                         context_messages,
                         model=model_name,
-                        tools=TOOLS_SCHEMA,
+                        tools=self._tool_registry.make_openai_schemas(),
                     )
                     response_text = model_response.get_text()
                     tool_uses = [
@@ -850,6 +851,7 @@ class AgentEngine:
                         command=tu["input"].get("command", "")[:200],
                     )
                 else:
+                    from cdh.models.messages import ToolCategory as MsgToolCategory
                     try:
                         result_cat = MsgToolCategory(category)
                     except ValueError:
@@ -1093,6 +1095,3 @@ class AgentEngine:
 
     def get_session(self) -> Optional[AgentSession]:
         return self._session
-
-
-from cdh.agent.agents.types import AgentPermission

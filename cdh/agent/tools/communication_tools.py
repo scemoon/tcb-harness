@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from cdh.agent.tools.protocol import ToolResult
-from cdh.agent.tools.registry import ToolSpec
+from cdh.agent.tools.registry import ToolRegistry, ToolSpec
 
 
 class SendMessageTool:
@@ -60,8 +60,8 @@ class AskUserTool:
 
 
 class ToolSearchTool:
-    def __init__(self, tools_schema: list[dict]):
-        self._tools_schema = tools_schema
+    def __init__(self, registry: ToolRegistry):
+        self._registry = registry
 
     def spec(self) -> ToolSpec:
         return ToolSpec(
@@ -79,13 +79,11 @@ class ToolSearchTool:
 
     def run(self, tool_input: dict[str, Any]) -> ToolResult:
         query = tool_input.get("query", "").lower()
+        specs = self._registry.list_specs()
         matches = []
-        for t in self._tools_schema:
-            func = t.get("function", {})
-            tname = func.get("name", "")
-            tdesc = func.get("description", "")
-            if query in tname.lower() or query in tdesc.lower():
-                matches.append({"name": tname, "description": tdesc})
+        for spec in specs:
+            if query in spec.name.lower() or query in spec.description.lower():
+                matches.append({"name": spec.name, "description": spec.description})
         if not matches:
-            matches = [{"name": t.get("function", {}).get("name", ""), "description": t.get("function", {}).get("description", "")[:80]} for t in self._tools_schema[:10]]
+            matches = [{"name": s.name, "description": s.description[:80]} for s in specs[:10]]
         return ToolResult(name="ToolSearch", output={"matches": matches[:20]})

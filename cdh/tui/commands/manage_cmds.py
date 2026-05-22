@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from cdh.skill.manager import SkillManager
+from cdh.skills.manager import SkillManager
 from cdh.mcp.manager import MCPManager
 from cdh.tui.commands.registry import command
 

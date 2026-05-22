@@ -5,16 +5,14 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from cdh.config import HARNESS_DIR
 from cdh.models.provider import Message
-
-
-HARNESS_SKILL_DIR = Path(__file__).parent.parent.parent.parent / "cloud-harness"
 
 
 class HarnessSkill:
     @staticmethod
     def get_skill_content() -> str:
-        skill_md = HARNESS_SKILL_DIR / "SKILL.md"
+        skill_md = HARNESS_DIR / "SKILL.md"
         if skill_md.exists():
             return skill_md.read_text(encoding="utf-8")
         return ""
@@ -57,10 +55,10 @@ class HarnessSkill:
 
     @staticmethod
     def get_reference_path(ref_name: str) -> Optional[Path]:
-        ref_file = HARNESS_SKILL_DIR / "references" / ref_name
+        ref_file = HARNESS_DIR / "references" / ref_name
         if ref_file.exists():
             return ref_file
-        spec_file = HARNESS_SKILL_DIR / "spec-workflow" / ref_name
+        spec_file = HARNESS_DIR / "spec-workflow" / ref_name
         if spec_file.exists():
             return spec_file
         return None
@@ -73,8 +71,18 @@ class HarnessSkill:
         return f"Reference not found: {ref_name}"
 
     @staticmethod
+    def load_skill_for_project(workspace: Path, project_name: str) -> str:
+        """Check if project is a harness project and return its skill content, or ''."""
+        if not HarnessSkill.is_harness_project(project_name, workspace):
+            return ""
+        info = HarnessSkill.get_project_info(project_name, workspace)
+        if not info:
+            return ""
+        return HarnessSkill.get_skill_content()
+
+    @staticmethod
     def run_harness_script(script_name: str, project_name: str, workspace: Path, extra_args: list[str] = None) -> dict:
-        script_path = HARNESS_SKILL_DIR / "scripts" / script_name
+        script_path = HARNESS_DIR / "scripts" / script_name
         if not script_path.exists():
             return {"success": False, "error": f"Script not found: {script_name}"}
 
@@ -100,19 +108,3 @@ class HarnessSkill:
             return {"success": False, "error": "Script timed out"}
         except Exception as e:
             return {"success": False, "error": str(e)}
-
-
-def load_skill_for_project(context: list[Message], project_name: str, workspace: Path) -> bool:
-    if not HarnessSkill.is_harness_project(project_name, workspace):
-        return False
-
-    info = HarnessSkill.get_project_info(project_name, workspace)
-    if not info:
-        return False
-
-    skill_content = HarnessSkill.get_skill_content()
-    if not skill_content:
-        return False
-
-    HarnessSkill.load_skill_into_context(context, skill_content)
-    return True

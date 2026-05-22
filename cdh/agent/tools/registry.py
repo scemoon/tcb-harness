@@ -77,6 +77,19 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._by_name.get(name.lower())
 
+    def make_openai_schemas(self) -> list[dict]:
+        schemas = []
+        for spec in self.list_specs():
+            schemas.append({
+                "type": "function",
+                "function": {
+                    "name": spec.name,
+                    "description": spec.description,
+                    "parameters": dict(spec.input_schema),
+                },
+            })
+        return schemas
+
     def dispatch(
         self,
         call: ToolCall,

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from rich.text import Text
 
+from cdh.models.messages import StreamEvent
 from cdh.tui.commands.registry import CommandRegistry, command
 
 
@@ -216,7 +217,7 @@ def cmd_design_feedback(app, *args):
 def cmd_skill_enable(app, *args):
     if not args:
         return "Usage: /skill enable <name>"
-    from cdh.skill.manager import SkillManager
+    from cdh.skills.manager import SkillManager
     SkillManager().enable(args[0], True)
     return f"Skill enabled: {args[0]}"
 
@@ -225,7 +226,7 @@ def cmd_skill_enable(app, *args):
 def cmd_skill_disable(app, *args):
     if not args:
         return "Usage: /skill disable <name>"
-    from cdh.skill.manager import SkillManager
+    from cdh.skills.manager import SkillManager
     SkillManager().enable(args[0], False)
     return f"Skill disabled: {args[0]}"
 
@@ -252,21 +253,16 @@ async def cmd_approve(app, *args):
         return "No pending approval to process."
     
     chat = app.query_one("ChatPanel")
-    # Yield the approved result as if it were a regular tool result
     cat = result.get("category", "unknown")
     is_err = result.get("is_error", False)
     tid = result.get("tool_use_id", "")
-    error_attr = ' is_error="true"' if is_err else ""
-    
-    # Inject the result into the chat stream parser
-    chunk = f'<tool_result tool_use_id="{tid}" category="{cat}"{error_attr}>\n'
-    if is_err:
-        chunk += f"Error: {result.get('content', '')}"
-    else:
-        chunk += str(result.get("content", ""))
-    chunk += "\n</tool_result>\n"
-    
-    chat.add_stream_chunk(chunk)
+    event = StreamEvent.tool_result(
+        call_id=tid,
+        content=result.get("content", ""),
+        category=cat,
+        is_error=is_err,
+    )
+    chat.add_stream_chunk(event)
     chat.finish_stream()
     app._refresh_right_panel()
     return "✓ Operation approved and executed."

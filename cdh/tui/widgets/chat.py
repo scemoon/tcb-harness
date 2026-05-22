@@ -29,8 +29,7 @@ from rich.console import Group
 from rich.padding import Padding
 
 from cdh.models.messages import (
-    ThinkBlock, ToolCall, ToolResult, SubAgentBlock, TextBlock,
-    ToolCategory, LifecycleStatus, BlockType, block_from_dict,
+    ToolCategory, LifecycleStatus,
     get_tool_category, StreamEvent,
 )
 
@@ -76,371 +75,6 @@ CATEGORY_LABELS = {
     ToolCategory.INTERACTION:   "AskUser",
     ToolCategory.UNKNOWN:       "Tool",
 }
-
-
-# ── StreamParser ──
-
-class StreamParser:
-    """Evolved stream parser that produces typed blocks.
-
-    Handles:
-    - <think>...</think> → ThinkBlock
-    - <tool_call name="X" id="Y">...</tool_call> → ToolCall
-    - <tool_result tool_use_id="X">...</tool_result> → ToolResult
-    - <ask_user tool_use_id="X" action="Y">...</ask_user> → AskUserBlock
-    - ```think ... ``` → ThinkBlock
-    - ```tool_use ... ``` → ToolCall
-    """
-
-    THINK_START_PAT = re.compile(r"<think[^>]*>", re.IGNORECASE)
-    THINK_CODE_PAT = re.compile(r"```think\b.*?\n(.*?)```", re.DOTALL | re.IGNORECASE)
-    TOOL_CALL_PAT = re.compile(r'<tool_call\s+name=["\']([^"\']+)["\']\s+id=["\']([^"\']+)["\']>(.*?)</tool_call>', re.DOTALL)
-    TOOL_CALL_START_PAT = re.compile(r'<tool_call\s+name=["\']([^"\']+)["\']\s+id=["\']([^"\']+)["\']>')
-    TOOL_USE_PAT = re.compile(r"```tool_use\b.*?\n(.*?)```", re.DOTALL | re.IGNORECASE)
-    TOOL_RESULT_PAT = re.compile(r'<tool_result\s+tool_use_id=["\']([^"\']+)["\'](?:\s+is_error=["\']([^"\']*)["\'])?(?:\s+category=["\']([^"\']*)["\'])?>(.*?)</tool_result>', re.DOTALL)
-    TOOL_RESULT_START_PAT = re.compile(r'<tool_result\s+tool_use_id=["\']([^"\']+)["\'](?:\s+is_error=["\']([^"\']*)["\'])?(?:\s+category=["\']([^"\']*)["\'])?>')
-    ASK_USER_PAT = re.compile(r'<ask_user\s+tool_use_id=["\']([^"\']+)["\']\s+action=["\']([^"\']*)["\'](?:\s+category=["\']([^"\']*)["\'])?>(.*?)</ask_user>', re.DOTALL)
-    ASK_USER_START_PAT = re.compile(r'<ask_user\s+tool_use_id=["\']([^"\']+)["\']\s+action=["\']([^"\']*)["\'](?:\s+category=["\']([^"\']*)["\'])?>')
-
-    def __init__(self):
-        self._buffer = ""
-        self._in_thinking = False
-        self._thinking_content = ""
-        self._in_tool_call = False
-        self._tool_call_name = ""
-        self._tool_call_id = ""
-        self._tool_call_input = ""
-        self._tool_call_complete = False
-        self._in_tool_result = False
-        self._tool_result_id = ""
-        self._tool_result_content = ""
-        self._tool_result_is_error = False
-        self._tool_result_category = "unknown"
-        self._in_ask_user = False
-        self._ask_user_id = ""
-        self._ask_user_action = ""
-        self._ask_user_category = "interaction"
-        self._ask_user_content = ""
-
-    def feed(self, text: str) -> list:
-        self._buffer += text
-        blocks = []
-
-        while self._buffer:
-            if self._in_thinking:
-                end_idx = self._buffer.find("</think>")
-                if end_idx != -1:
-                    content_before_end = self._buffer[:end_idx]
-                    self._thinking_content += content_before_end
-                    self._buffer = self._buffer[end_idx + len("</think>"):]
-                    self._in_thinking = False
-                    if self._thinking_content.strip():
-                        blocks.append(ThinkBlock(content=self._thinking_content.strip()).to_dict())
-                    self._thinking_content = ""
-                else:
-                    if self._buffer != ">":
-                        self._thinking_content += self._buffer
-                    self._buffer = ""
-                    break
-
-            if self._in_tool_call:
-                end_idx = self._buffer.find("</tool_call>")
-                if end_idx != -1:
-                    input_before_end = self._buffer[:end_idx]
-                    self._tool_call_input += input_before_end
-                    self._buffer = self._buffer[end_idx + len("</tool_call>"):]
-                    self._in_tool_call = False
-                    self._tool_call_complete = True
-                    try:
-                        tool_input = json.loads(self._tool_call_input) if self._tool_call_input else {}
-                    except json.JSONDecodeError:
-                        tool_input = {"raw": self._tool_call_input}
-                    blocks.append(ToolCall(
-                        id=self._tool_call_id,
-                        name=self._tool_call_name,
-                        arguments=tool_input,
-                        status=LifecycleStatus.COMPLETE,
-                        category=get_tool_category(self._tool_call_name),
-                    ).to_dict())
-                    self._tool_call_input = ""
-                    self._tool_call_name = ""
-                    self._tool_call_id = ""
-                else:
-                    combined = self._tool_call_input + self._buffer
-                    end_idx = combined.find("</tool_call>")
-                    if end_idx != -1:
-                        self._tool_call_input = combined[:end_idx]
-                        self._buffer = combined[end_idx + len("</tool_call>"):]
-                        self._in_tool_call = False
-                        self._tool_call_complete = True
-                        try:
-                            tool_input = json.loads(self._tool_call_input) if self._tool_call_input else {}
-                        except json.JSONDecodeError:
-                            tool_input = {"raw": self._tool_call_input}
-                        blocks.append(ToolCall(
-                            id=self._tool_call_id,
-                            name=self._tool_call_name,
-                            arguments=tool_input,
-                            status=LifecycleStatus.COMPLETE,
-                            category=get_tool_category(self._tool_call_name),
-                        ).to_dict())
-                        self._tool_call_input = ""
-                        self._tool_call_name = ""
-                        self._tool_call_id = ""
-                    else:
-                        self._tool_call_input += self._buffer
-                        self._buffer = ""
-                        break
-                continue
-
-            if self._buffer.startswith("<think") and ">" not in self._buffer:
-                break
-
-            if self._buffer.startswith("<think>"):
-                self._in_thinking = True
-                self._thinking_content = ""
-                self._buffer = self._buffer[len("<think>"):]
-                continue
-
-            think_code_match = self.THINK_CODE_PAT.match(self._buffer)
-            if think_code_match:
-                blocks.append(ThinkBlock(content=think_code_match.group(1).strip()).to_dict())
-                self._buffer = self._buffer[think_code_match.end():]
-                continue
-
-            tool_match = self.TOOL_USE_PAT.match(self._buffer)
-            if tool_match:
-                try:
-                    tool_data = json.loads(tool_match.group(1))
-                    blocks.append(ToolCall(
-                        name=tool_data.get("name", "tool"),
-                        arguments=tool_data.get("input", {}),
-                        status=LifecycleStatus.COMPLETE,
-                        category=get_tool_category(tool_data.get("name", "")),
-                    ).to_dict())
-                except json.JSONDecodeError:
-                    blocks.append(TextBlock(content=tool_match.group(0)).to_dict())
-                self._buffer = self._buffer[tool_match.end():]
-                continue
-
-            if self._in_tool_result:
-                end_idx = self._buffer.find("</tool_result>")
-                if end_idx != -1:
-                    content_before_end = self._buffer[:end_idx]
-                    self._tool_result_content += content_before_end
-                    self._buffer = self._buffer[end_idx + len("</tool_result>"):]
-                    self._in_tool_result = False
-                    try:
-                        cat = ToolCategory(self._tool_result_category)
-                    except ValueError:
-                        cat = ToolCategory.UNKNOWN
-                    blocks.append(ToolResult(
-                        tool_use_id=self._tool_result_id,
-                        content=self._tool_result_content.strip(),
-                        is_error=self._tool_result_is_error,
-                        category=cat,
-                    ).to_dict())
-                    self._tool_result_id = ""
-                    self._tool_result_content = ""
-                    self._tool_result_is_error = False
-                    self._tool_result_category = "unknown"
-                else:
-                    self._tool_result_content += self._buffer
-                    self._buffer = ""
-                    break
-                continue
-
-            if self._buffer.startswith("<tool_result") and ">" not in self._buffer:
-                break
-
-            # ── ask_user block handling (approval requests) ──
-            if self._in_ask_user:
-                end_idx = self._buffer.find("</ask_user>")
-                if end_idx != -1:
-                    self._ask_user_content += self._buffer[:end_idx]
-                    self._buffer = self._buffer[end_idx + len("</ask_user>"):]
-                    self._in_ask_user = False
-                    # Parse the JSON content
-                    try:
-                        ask_data = json.loads(self._ask_user_content.strip())
-                    except (json.JSONDecodeError, ValueError):
-                        ask_data = {"question": self._ask_user_content.strip()}
-                    blocks.append({
-                        "type": "ask_user",
-                        "ask_user": {
-                            "tool_use_id": self._ask_user_id,
-                            "action": self._ask_user_action,
-                            "category": self._ask_user_category,
-                            "question": ask_data.get("question", ""),
-                            "context": ask_data.get("context", ""),
-                            "action_type": ask_data.get("action_type", ""),
-                            "path": ask_data.get("path", ""),
-                            "command": ask_data.get("command", ""),
-                        }
-                    })
-                    self._ask_user_id = ""
-                    self._ask_user_action = ""
-                    self._ask_user_category = "interaction"
-                    self._ask_user_content = ""
-                else:
-                    self._ask_user_content += self._buffer
-                    self._buffer = ""
-                    break
-                continue
-
-            if self._buffer.startswith("<ask_user") and ">" not in self._buffer:
-                break
-
-            ask_user_start = self.ASK_USER_START_PAT.match(self._buffer)
-            if ask_user_start:
-                self._ask_user_id = ask_user_start.group(1)
-                self._ask_user_action = ask_user_start.group(2) or ""
-                self._ask_user_category = ask_user_start.group(3) or "interaction"
-                self._ask_user_content = ""
-                self._in_ask_user = True
-                self._buffer = self._buffer[ask_user_start.end():]
-                continue
-
-            tool_result_start = self.TOOL_RESULT_START_PAT.match(self._buffer)
-            if tool_result_start:
-                self._tool_result_id = tool_result_start.group(1)
-                self._tool_result_is_error = tool_result_start.group(2) and tool_result_start.group(2).lower() == "true"
-                self._tool_result_category = tool_result_start.group(3) or "unknown"
-                self._tool_result_content = ""
-                self._in_tool_result = True
-                self._buffer = self._buffer[tool_result_start.end():]
-                continue
-
-            # Guard against partial <tool_call tag without closing >
-            if self._buffer.startswith("<tool_call") and ">" not in self._buffer:
-                break
-
-            tool_call_start = self.TOOL_CALL_START_PAT.match(self._buffer)
-            if tool_call_start:
-                self._tool_call_name = tool_call_start.group(1)
-                self._tool_call_id = tool_call_start.group(2)
-                self._tool_call_input = ""
-                self._tool_call_complete = False
-                self._in_tool_call = True
-                self._buffer = self._buffer[tool_call_start.end():]
-                blocks.append({
-                    "type": "tool_use_start",
-                    "tool_use": {
-                        "name": self._tool_call_name,
-                        "id": self._tool_call_id,
-                        "category": get_tool_category(self._tool_call_name).value,
-                    }
-                })
-                continue
-
-            text_end = len(self._buffer)
-            next_think = self.THINK_START_PAT.search(self._buffer)
-            next_tool = self.TOOL_USE_PAT.search(self._buffer)
-            next_tool_call = self.TOOL_CALL_PAT.search(self._buffer)
-            next_tool_call_start = self.TOOL_CALL_START_PAT.search(self._buffer)
-            next_ask_user = self.ASK_USER_START_PAT.search(self._buffer)
-
-            earliest = text_end
-            for m in [next_think, next_tool, next_tool_call, next_tool_call_start, next_ask_user]:
-                if m and m.start() < earliest:
-                    earliest = m.start()
-
-            if earliest > 0:
-                if earliest < text_end:
-                    blocks.append({"type": "text", "text": self._buffer[:earliest]})
-                    self._buffer = self._buffer[earliest:]
-                else:
-                    # Quick flush: yield text promptly for smooth streaming (ai-sdk-python style)
-                    if len(self._buffer) > 10:
-                        blocks.append({"type": "text", "text": self._buffer})
-                        self._buffer = ""
-                    else:
-                        break
-            else:
-                if len(self._buffer) > 10:
-                    blocks.append({"type": "text", "text": self._buffer})
-                    self._buffer = ""
-                else:
-                    break
-
-        return blocks
-
-    def get_pending_text(self) -> str:
-        if not self._in_thinking and not self._in_tool_call and not self._in_tool_result and self._buffer:
-            return self._buffer
-        return ""
-
-    def get_pending_thinking(self) -> str:
-        if self._in_thinking:
-            return self._thinking_content
-        return ""
-
-    def get_pending_tool_call(self) -> dict | None:
-        if self._in_tool_call:
-            return {
-                "name": self._tool_call_name,
-                "id": self._tool_call_id,
-                "input": self._tool_call_input,
-                "complete": self._tool_call_complete,
-                "category": get_tool_category(self._tool_call_name).value,
-            }
-        return None
-
-    def get_pending_tool_result(self) -> dict | None:
-        if self._in_tool_result:
-            return {
-                "tool_use_id": self._tool_result_id,
-                "content": self._tool_result_content,
-                "is_error": self._tool_result_is_error,
-            }
-        return None
-
-    def flush(self) -> list:
-        blocks = []
-        if self._in_thinking and self._thinking_content.strip():
-            blocks.append(ThinkBlock(content=self._thinking_content.strip()).to_dict())
-        if self._in_tool_call:
-            try:
-                tool_input = json.loads(self._tool_call_input) if self._tool_call_input else {}
-            except json.JSONDecodeError:
-                tool_input = {"raw": self._tool_call_input}
-            blocks.append(ToolCall(
-                id=self._tool_call_id,
-                name=self._tool_call_name,
-                arguments=tool_input,
-                status=LifecycleStatus.COMPLETE,
-                category=get_tool_category(self._tool_call_name),
-            ).to_dict())
-        if self._in_tool_result and self._tool_result_content.strip():
-            try:
-                cat = ToolCategory(self._tool_result_category)
-            except ValueError:
-                cat = ToolCategory.UNKNOWN
-            blocks.append(ToolResult(
-                tool_use_id=self._tool_result_id,
-                content=self._tool_result_content.strip(),
-                is_error=self._tool_result_is_error,
-                category=cat,
-            ).to_dict())
-        if self._buffer.strip():
-            blocks.append({"type": "text", "text": self._buffer})
-        self._reset_state()
-        return blocks
-
-    def _reset_state(self) -> None:
-        self._buffer = ""
-        self._in_thinking = False
-        self._thinking_content = ""
-        self._in_tool_call = False
-        self._tool_call_name = ""
-        self._tool_call_id = ""
-        self._tool_call_input = ""
-        self._tool_call_complete = False
-        self._in_tool_result = False
-        self._tool_result_id = ""
-        self._tool_result_content = ""
-        self._tool_result_is_error = False
-
 
 # ── Utility functions moved from old chat.py ──
 
@@ -631,7 +265,6 @@ class ChatPanel(ScrollableContainer):
         super().__init__(*args, **kwargs)
         self._renderables: list[Any] = []
         self._streaming = False
-        self._stream_parser = StreamParser()
         self._welcome_shown = False
         self._emitted_ids: set[str] = set()
         # Track tool calls for result pairing: tool_id -> {name, arguments, category}
@@ -797,7 +430,6 @@ class ChatPanel(ScrollableContainer):
         self._emitted_ids.clear()
         self._hide_welcome()
         self._streaming = True
-        self._stream_parser = StreamParser()
         self._assistant_label_shown = False
         self._stream_raw_text = ""
         self._update_stream_widget()
@@ -806,10 +438,7 @@ class ChatPanel(ScrollableContainer):
         so = self.query_one_optional("#stream-output", Static)
         if so is None:
             return
-        pending_tool = self._stream_parser.get_pending_tool_call()
-        pending_thinking = self._stream_parser.get_pending_thinking()
-        pending_text = self._stream_parser.get_pending_text()
-        pending_tool_result = self._stream_parser.get_pending_tool_result()
+        pending_text = self._stream_raw_text
 
         items = []
 
@@ -820,48 +449,7 @@ class ChatPanel(ScrollableContainer):
         items.append(Text(" ◆ Assistant  ◐ streaming...", style=f"dim {sec_color}"))
         items.append(Text(""))
 
-        # Pending tool call — show skeleton
-        if pending_tool and not pending_tool.get("complete"):
-            name = pending_tool.get("name", "tool")
-            cat = pending_tool.get("category", "unknown")
-            try:
-                cat_icon = TOOL_ICONS[ToolCategory(cat)]
-            except (KeyError, ValueError):
-                cat_icon = "🔧"
-            items.append(Text(f"  {cat_icon} {name}  ◐ running...", style=f"dim {sec_color}"))
-            inp = pending_tool.get("input", "")
-            if inp:
-                inp_str = json.dumps(inp, indent=2) if isinstance(inp, dict) else str(inp)
-                items.append(Text(inp_str[:300], style=f"dim {sec_color}"))
-            items.append(Text(""))
-
-        # Pending thinking
-        if pending_thinking:
-            success = self._get_color('success', '#9ece6a')
-            items.append(Text("  💭 Thinking...", style=f"dim {success}"))
-            items.append(Text(pending_thinking[:500], style=success))
-            items.append(Text(""))
-
-        # Pending tool result
-        if pending_tool_result:
-            tid = pending_tool_result.get("tool_use_id", "")
-            content = pending_tool_result.get("content", "")
-            is_error = pending_tool_result.get("is_error", False)
-            err_color = self._get_color('error', '#f7768e')
-            label_style = f"dim {err_color}" if is_error else f"dim {border}"
-            status_icon = "✗" if is_error else "↓"
-            items.append(Text(f"  {status_icon} Result [{tid[:8]}]", style=label_style))
-            if content:
-                items.append(Text(str(content)[:500], style=dim))
-            items.append(Text(""))
-
-        # Pending text — read from StreamParser first (legacy), fall back to
-        # StreamEvent accumulator (native function-calling path).
-        pending_text = self._stream_parser.get_pending_text()
-        if not pending_text:
-            pending_text = self._stream_raw_text
-        # Use plain Text for live preview (ai-sdk-python style).
-        # RichMarkdown is slow to parse; full rendering happens at finish_stream().
+        # Pending text from StreamEvent accumulator
         if pending_text and pending_text.strip():
             items.append(Text(pending_text[:500]))
 
@@ -871,30 +459,17 @@ class ChatPanel(ScrollableContainer):
         else:
             so.update("")
 
-    def add_stream_chunk(self, content: "str | StreamEvent") -> None:
+    def add_stream_chunk(self, content: "StreamEvent") -> None:
         if not self._streaming:
             return
-        if isinstance(content, StreamEvent):
-            # Direct typed event — no StreamParser needed (ai-sdk-python style)
-            block = content.to_block_dict()
-            if block.get("text") or block.get("type") != "text":
-                self._append_block(block)
-            self._update_stream_widget()
-            self._scroll_to_bottom()
-            return
-
-        # Legacy string mode — feed through StreamParser
-        blocks = self._stream_parser.feed(content)
-        for block in blocks:
+        block = content.to_block_dict()
+        if block.get("text") or block.get("type") != "text":
             self._append_block(block)
         self._update_stream_widget()
         self._scroll_to_bottom()
 
     def finish_stream(self) -> None:
         self._streaming = False
-        remaining = self._stream_parser.flush()
-        for block in remaining:
-            self._append_block(block)
         # OpenCode-style: render accumulated raw text ONCE at stream end.
         # No per-chunk Markdown parsing or _renderables growth during streaming.
         if self._stream_raw_text:
@@ -1930,7 +1505,6 @@ class ChatPanel(ScrollableContainer):
     def clear_chat(self) -> None:
         self._renderables = []
         self._streaming = False
-        self._stream_parser = StreamParser()
         self._welcome_shown = False
         self._emitted_ids.clear()
         self._tool_call_data.clear()

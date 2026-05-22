@@ -8,6 +8,7 @@ import yaml
 
 CLOUD_DEV_HARNESS_DIR = Path.home() / ".cloud-dev-harness"
 GLOBAL_CONFIG_PATH = CLOUD_DEV_HARNESS_DIR / "cdh.config.yaml"
+HARNESS_DIR = Path(__file__).resolve().parent.parent / "cloud-harness"
 
 
 def get_workspace_dir(cfg=None) -> Path:

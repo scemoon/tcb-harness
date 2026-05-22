@@ -5,9 +5,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from cdh.config import HARNESS_DIR
 from cdh.tui.commands.registry import command
-
-HARNESS_SKILL_DIR = Path(__file__).resolve().parent.parent.parent.parent / "cloud-harness"
 
 
 def _projects_dir(app) -> Path:
@@ -83,7 +82,7 @@ def cmd_harness_init(app, *args):
             i += 1
 
     try:
-        init_script = HARNESS_SKILL_DIR / "scripts" / "init_project.py"
+        init_script = HARNESS_DIR / "scripts" / "init_project.py"
         cmd = [
             "python3", str(init_script), "init",
             "--name", name, "--platform", platform,
@@ -142,9 +141,9 @@ def cmd_harness_import(app, *args):
     if not from_github:
         return "--from-github required (format: owner/repo)"
 
-    init_script = HARNESS_SKILL_DIR / "scripts" / "init_project.py"
+    init_script = HARNESS_DIR / "scripts" / "init_project.py"
     if not init_script.exists():
-        return f"cloud-harness not found at {HARNESS_SKILL_DIR}"
+        return f"cloud-harness not found at {HARNESS_DIR}"
 
     cmd = [
         "python3", str(init_script), "import",
@@ -264,7 +263,7 @@ def cmd_harness_run(app, *args):
         return "Usage: /harness run <script-name> [args]\nAvailable scripts: " + ", ".join(scripts)
 
     script_name = args[0]
-    script_path = HARNESS_SKILL_DIR / "scripts" / script_name
+    script_path = HARNESS_DIR / "scripts" / script_name
     if not script_path.exists():
         return f"Script not found: {script_name}"
 
