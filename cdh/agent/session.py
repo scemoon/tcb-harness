@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger("cdh.session")
 
 
 @dataclass
@@ -118,7 +121,8 @@ class AgentSession:
             data = json.loads(file_path.read_text(encoding="utf-8"))
             self._data = SessionData.from_dict(data)
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to load session %s: %s", self._data.id, e)
             return False
 
     def delete(self) -> None:

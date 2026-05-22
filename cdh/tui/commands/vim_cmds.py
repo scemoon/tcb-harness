@@ -11,8 +11,11 @@ def cmd_vim(app, *args):
     if not args:
         return "Usage: /vim <filepath>  - Edit a file with vim"
     path = args[0]
-    user_dir = os.path.expanduser("~")
-    full_path = os.path.join(user_dir, path) if not os.path.isabs(path) else path
+    user_dir = os.path.realpath(os.path.expanduser("~"))
+    full_path = os.path.realpath(os.path.join(user_dir, path)) if not os.path.isabs(path) else os.path.realpath(path)
+
+    if not full_path.startswith(user_dir + os.sep) and full_path != user_dir:
+        return "Access denied: path outside home directory"
 
     if not os.path.exists(full_path):
         os.makedirs(os.path.dirname(full_path) or ".", exist_ok=True)

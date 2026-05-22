@@ -13,6 +13,9 @@ class OllamaProvider(Provider):
     def __init__(self, endpoint: str = "http://localhost:11434", **kwargs):
         self.endpoint = endpoint.rstrip("/")
 
+    def is_anthropic_style(self) -> bool:
+        return False
+
     async def chat(
         self, messages: list[Message], model: str = "llama2", **kwargs
     ) -> ModelResponse:

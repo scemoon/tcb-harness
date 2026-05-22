@@ -14,6 +14,9 @@ class GLMProvider(Provider):
         self.api_key = api_key
         self._endpoint = endpoint or "https://open.bigmodel.cn/api/paas/v4"
 
+    def is_anthropic_style(self) -> bool:
+        return False
+
     async def chat(
         self, messages: list[Message], model: str = "glm-4-plus", **kwargs
     ) -> ModelResponse:

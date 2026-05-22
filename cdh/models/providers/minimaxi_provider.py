@@ -44,6 +44,9 @@ class MiniMaxiProvider(Provider):
         self._endpoint = endpoint or "https://api.minimaxi.com/v1"
         self._request_count = 0
 
+    def is_anthropic_style(self) -> bool:
+        return False
+
     async def chat(
         self, messages: list[Message], model: str = "MiniMax-M2.7", **kwargs
     ) -> ModelResponse:

@@ -3,7 +3,19 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Callable, Optional
+
+
+@dataclass(frozen=True)
+class ChatResponse:
+    """Structured response from a streaming provider call (Clawd-Code style).
+
+    Unlike ModelResponse (which uses ContentBlock list), ChatResponse provides
+    a flat structure for the agent loop: content text + structured tool_uses + usage.
+    """
+    content: str = ""
+    tool_uses: list[dict[str, Any]] = field(default_factory=list)
+    usage: dict[str, int] = field(default_factory=dict)
 
 
 class ContentBlockType(str, Enum):
@@ -285,6 +297,36 @@ class Provider(ABC):
                 "input": args,
             })
         return result
+
+    # ── Clawd-Code style structured streaming ──
+
+    def is_anthropic_style(self) -> bool:
+        """Whether this provider uses Anthropic-style 'system' kwarg."""
+        return False
+
+    async def chat_stream_response(
+        self,
+        messages: list[Message],
+        model: str,
+        on_text_chunk: Optional[Callable[[str], None]] = None,
+        **kwargs,
+    ) -> ChatResponse:
+        """Stream with structured ChatResponse return (Clawd-Code style).
+
+        Default implementation: falls back to chat() for providers that
+        don't implement structured streaming.
+        """
+        response = await self.chat(messages, model=model, **kwargs)
+        return ChatResponse(
+            content=response.get_text(),
+            tool_uses=[
+                {"id": tu.id, "name": tu.name, "input": tu.input}
+                for cb in response.content
+                if cb.type == ContentBlockType.TOOL_USE and cb.tool_use
+                for tu in [cb.tool_use]
+            ],
+            usage=response.usage,
+        )
 
 
 class ProviderRegistry:

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+logger = logging.getLogger("cdh.tasks")
 
 from cdh.tasks.models import (
     TaskRecord,
@@ -94,8 +97,8 @@ class TaskManager:
                     self._running[task.id] = asyncio.create_task(self._run_task(task))
             except asyncio.CancelledError:
                 break
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("Task worker error: %s", e)
 
     async def _run_task(self, execution: ExecutionTask) -> None:
         task_record = self._tasks.get(execution.id)

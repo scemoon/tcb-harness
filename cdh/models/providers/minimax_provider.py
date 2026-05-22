@@ -14,6 +14,9 @@ class MiniMaxProvider(Provider):
         self.api_key = api_key
         self._endpoint = endpoint or "https://api.minimax.com/v1"
 
+    def is_anthropic_style(self) -> bool:
+        return False
+
     async def chat(
         self, messages: list[Message], model: str = "MiniMax-M2.7", **kwargs
     ) -> ModelResponse:

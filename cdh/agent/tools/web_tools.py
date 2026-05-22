@@ -22,7 +22,7 @@ class WebFetcher:
 
     def fetch(self, url: str, prompt: Optional[str] = None) -> str:
         try:
-            with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
 
@@ -74,7 +74,7 @@ class WebSearch:
         return self._search_fallback(query, num_results)
 
     def _search_duckduckgo(self, url: str, num_results: int) -> str:
-        with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
             resp = client.get(url)
             resp.raise_for_status()
 

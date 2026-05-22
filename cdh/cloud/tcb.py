@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import subprocess
+import asyncio
 from typing import Optional
 
 from cdh.cloud.base import CloudProvider
@@ -13,31 +13,29 @@ class TCBProvider(CloudProvider):
         self.region = region
         self.env_id = env_id
 
-    async def deploy(self, project_path: str, version: Optional[str] = None) -> str:
+    async def _run_tcb(self, args: list[str], timeout: int) -> str:
         try:
-            result = subprocess.run(
-                ["tcb", "deploy", "--env", self.env_id, "--path", project_path],
-                capture_output=True,
-                text=True,
-                timeout=300,
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            return result.stdout or result.stderr
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=timeout
+            )
+            return (stdout or stderr).decode()
         except FileNotFoundError:
             return "TCB CLI not found. Install with: npm install -g @cloudbase/cli"
-        except subprocess.TimeoutExpired:
-            return "Deploy timed out."
+        except asyncio.TimeoutError:
+            return f"TCB command timed out."
+
+    async def deploy(self, project_path: str, version: Optional[str] = None) -> str:
+        args = ["tcb", "deploy", "--env", self.env_id, "--path", project_path]
+        return await self._run_tcb(args, timeout=300)
 
     async def status(self) -> str:
         return f"TCB ({self.region}) - env: {self.env_id}"
 
     async def rollback(self, version: str) -> str:
-        try:
-            result = subprocess.run(
-                ["tcb", "rollback", "--env", self.env_id, "--version", version],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            return result.stdout or result.stderr
-        except FileNotFoundError:
-            return "TCB CLI not found."
+        args = ["tcb", "rollback", "--env", self.env_id, "--version", version]
+        return await self._run_tcb(args, timeout=120)

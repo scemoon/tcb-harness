@@ -3,12 +3,27 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
+import uuid
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
+from dataclasses import dataclass
+from typing import Callable
+
 from cdh.agent.context import ContextManager, ContextConfig
-from cdh.models.provider import Message as ProviderMessage, ProviderRegistry
+from cdh.models.provider import ContentBlockType, Message as ProviderMessage, ProviderRegistry, ChatResponse
 from cdh.agent.tools.file_ops import FileOps, ShellTool, Permission, ToolFactory
+from cdh.agent.tools.registry import ToolRegistry, ToolSpec, ToolCall as RegistryToolCall
+from cdh.agent.tools.protocol import ToolResult as RegistryToolResult
+from cdh.agent.tools.permissions import ToolPermissionContext
+from cdh.agent.tools.file_tools import ReadTool, WriteTool, EditTool, InsertTool, UndoEditTool, GlobTool, GrepTool, ListTool
+from cdh.agent.tools.bash_tool import BashTool
+from cdh.agent.tools.web_tool_impl import WebFetchTool, WebSearchTool
+from cdh.agent.tools.communication_tools import SendMessageTool, AskUserTool, ToolSearchTool
+from cdh.agent.tools.task_tools import (TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool,
+    TaskOutputTool, TaskStopTool, TodoCreateTool, TodoListTool, TodoCompleteTool)
+from cdh.agent.tools.agent_tools import AgentTool, TaskTool
 from cdh.agent.pipeline import PipelineManager, get_pipeline_for_agent
 from cdh.agent.agents.types import (
     AgentConfig, BuildAgent, PlanAgent, create_agent,
@@ -20,55 +35,193 @@ from cdh.agent.session import AgentSession
 from cdh.agent.hooks import HookManager, HookContext, HookResult
 from cdh.agent.permissions import PermissionChecker, PermissionSet, create_safe_permission_set
 from cdh.agent.tools.schemas import TOOLS_SCHEMA
+from cdh.agent.tools.skill_tools import SkillTool
+from cdh.agent.tools.mcp_tools import MCPTool as MCPToolTool, MCPResourcesTool
+from cdh.agent.tools.lsp_tools import LSPTool
+from cdh.agent.tools.cron_tools import CronCreateTool, CronListTool, CronRemoveTool, CronScheduler
+from cdh.agent.tools.git_tools import WorktreeTool
+from cdh.agent.tools.config_tool import ConfigReadTool, ConfigWriteTool
+from cdh.skills.loader import SkillLoader
+from cdh.mcp.manager import MCPManager
+from cdh.models.messages import StreamEvent, StreamEventType, ToolCategory as MsgToolCategory, get_tool_category as msg_get_tool_category
 
 logger = logging.getLogger("cdh.agent.engine")
+
+
+@dataclass(frozen=True)
+class ToolEvent:
+    """Event emitted during the agent loop lifecycle (Clawd-Code style)."""
+    kind: str  # "tool_use" | "tool_result" | "tool_error"
+    tool_name: str = ""
+    tool_input: dict | None = None
+    tool_output: Any = None
+    tool_use_id: str | None = None
+    is_error: bool = False
+    error: str | None = None
+
+
+ToolEventHandler = Callable[[ToolEvent], None]
 
 TOOL_CALL_RE = re.compile(
     r'<tool_call\s+name=["\']([^"\']+)["\']\s+id=["\']([^"\']+)["\']>(.*?)</tool_call>',
     re.DOTALL,
 )
 
+THINKING_RE = re.compile(
+    r'<thinking>(.*?)</thinking>',
+    re.DOTALL,
+)
+
+
+_TASK_STATUSES = {"pending", "in_progress", "completed"}
+
 
 class TaskManager:
+    """V2 task manager with dependency tracking (Clawd-Code style).
+
+    Tasks have: id, subject, description, status, owner, blocks, blockedBy, metadata, output.
+    Supports dependency tracking for multi-agent coordination.
+    """
+
     def __init__(self):
-        self._tasks: list[dict] = []
+        self._tasks: dict[str, dict] = {}  # id -> task dict
         self._todos: list[dict] = []
         self._plan: list[str] = []
-        self._next_id = 1
+        self._id_counter = 0
 
-    def add_task(self, name: str, status: str = "todo") -> int:
-        tid = self._next_id
-        self._next_id += 1
-        self._tasks.append({"name": name, "status": status, "id": tid})
-        return tid
+    def _next_id(self) -> str:
+        return uuid.uuid4().hex[:12]
 
-    def update_task(self, task_id: int, status: str) -> bool:
-        for t in self._tasks:
-            if t["id"] == task_id:
-                t["status"] = status
-                return True
-        return False
+    # ── V2 Task Management ──
+
+    def create_task(
+        self,
+        subject: str,
+        description: str = "",
+        active_form: str = "",
+        metadata: dict | None = None,
+    ) -> dict:
+        """Create a task with dependency tracking support."""
+        task_id = self._next_id()
+        task = {
+            "id": task_id,
+            "subject": subject,
+            "description": description,
+            "activeForm": active_form,
+            "status": "pending",
+            "owner": None,
+            "blocks": [],
+            "blockedBy": [],
+            "metadata": dict(metadata or {}),
+            "output": "",
+        }
+        self._tasks[task_id] = task
+        return task
+
+    def get_task(self, task_id: str) -> dict | None:
+        return self._tasks.get(task_id)
 
     def list_tasks(self) -> list[dict]:
-        return self._tasks
+        """List all tasks sorted by id."""
+        return sorted(self._tasks.values(), key=lambda t: t["id"])
+
+    def update_task(self, task_id: str, **fields) -> dict | None:
+        """Update task fields. Supports: subject, description, activeForm, status,
+        owner, metadata, addBlocks, addBlockedBy. Returns updated task or None."""
+        task = self._tasks.get(task_id)
+        if task is None:
+            return None
+
+        updated = []
+
+        # String fields
+        for field in ("subject", "description", "activeForm", "owner"):
+            if field in fields:
+                v = fields[field]
+                if isinstance(v, str) and v != task.get(field):
+                    task[field] = v
+                    updated.append(field)
+
+        # Status field
+        if "status" in fields:
+            status = fields["status"]
+            if status == "deleted":
+                self._tasks.pop(task_id, None)
+                return {"id": task_id, "deleted": True}
+            if status in _TASK_STATUSES and status != task.get("status"):
+                task["status"] = status
+                updated.append("status")
+
+        # Dependency fields
+        for rel_field, input_key in (("blocks", "addBlocks"), ("blockedBy", "addBlockedBy")):
+            if input_key in fields:
+                ids = fields[input_key]
+                if isinstance(ids, list):
+                    cur = list(task.get(rel_field) or [])
+                    for x in ids:
+                        if isinstance(x, str) and x not in cur:
+                            cur.append(x)
+                    if cur != task.get(rel_field):
+                        task[rel_field] = cur
+                        updated.append(rel_field)
+
+        # Metadata
+        if "metadata" in fields:
+            md = fields["metadata"]
+            if isinstance(md, dict):
+                existing = dict(task.get("metadata") or {})
+                for k, v in md.items():
+                    if v is None:
+                        existing.pop(k, None)
+                    else:
+                        existing[k] = v
+                task["metadata"] = existing
+                updated.append("metadata")
+
+        # Output
+        if "output" in fields:
+            v = fields["output"]
+            if isinstance(v, str):
+                task["output"] = v
+                updated.append("output")
+
+        return task
+
+    def get_task_output(self, task_id: str) -> dict:
+        """Get output for a task."""
+        task = self._tasks.get(task_id)
+        if task is None:
+            return {"retrieval_status": "not_found", "task": None}
+        output = str(task.get("output") or "")
+        return {
+            "retrieval_status": "success" if output else "not_ready",
+            "task": {
+                "task_id": task_id,
+                "task_type": "task_list",
+                "status": task.get("status"),
+                "description": task.get("description"),
+                "output": output,
+            },
+        }
 
     def clear_tasks(self) -> None:
-        self._tasks = []
+        self._tasks.clear()
 
-    def add_todo(self, text: str) -> int:
-        tid = self._next_id
-        self._next_id += 1
+    # ── Todo Management (unchanged API) ──
+
+    def add_todo(self, text: str) -> str:
+        tid = self._next_id()
         self._todos.append({"text": text, "done": False, "id": tid})
         return tid
 
-    def complete_todo(self, todo_id: int) -> bool:
+    def complete_todo(self, todo_id: str) -> bool:
         for t in self._todos:
             if t["id"] == todo_id:
                 t["done"] = True
                 return True
         return False
 
-    def remove_todo(self, todo_id: int) -> bool:
+    def remove_todo(self, todo_id: str) -> bool:
         before = len(self._todos)
         self._todos = [t for t in self._todos if t["id"] != todo_id]
         return len(self._todos) < before
@@ -105,6 +258,111 @@ class AgentEngine:
         self._project_config: dict = {}
         self._harness_mode = False
         self._project_context_loaded = False
+        self._pending_approval: dict | None = None  # {tool_call, result_key}
+        self._last_user_msg: str | None = None  # Last SendMessage visible to user
+
+        # Clawd-Code subsystems
+        self._skill_loader = SkillLoader(
+            workspace_skills_dir=Path(__file__).parent.parent.parent / "skills"
+        )
+        self._mcp = MCPManager()
+        self._cron_scheduler = CronScheduler()
+        self._lsp_tool = LSPTool()
+        app_config = getattr(app, 'config', None)
+        self._config_tool_read = ConfigReadTool(app_config) if app_config else None
+        self._config_tool_write = ConfigWriteTool(app_config) if app_config else None
+
+        # Tool registry (Clawd-Code pattern)
+        self._tool_registry = self._build_tool_registry()
+        self._send_message_tool = SendMessageTool()
+
+        # Per-turn usage tracking (Clawd-Code style)
+        self._turn_usages: list[dict[str, int]] = []
+
+        # Event callbacks
+        self.on_event: ToolEventHandler | None = None
+        self.on_text_chunk: Callable[[str], None] | None = None
+
+    def _build_tool_registry(self) -> ToolRegistry:
+        registry = ToolRegistry()
+        # File tools
+        registry.register(ReadTool(self.file_ops))
+        registry.register(WriteTool(self.file_ops))
+        registry.register(EditTool(self.file_ops))
+        registry.register(InsertTool(self.file_ops))
+        registry.register(UndoEditTool(self.file_ops))
+        registry.register(GlobTool(self.file_ops))
+        registry.register(GrepTool(self.file_ops))
+        registry.register(ListTool(self.file_ops))
+        # Shell
+        registry.register(BashTool(self.shell))
+        # Web
+        registry.register(WebFetchTool())
+        registry.register(WebSearchTool())
+        # Communication
+        self._send_message_tool = SendMessageTool()
+        registry.register(self._send_message_tool)
+        registry.register(AskUserTool())
+        registry.register(ToolSearchTool(TOOLS_SCHEMA))
+        # Task management
+        registry.register(TaskCreateTool(self._task_manager))
+        registry.register(TaskGetTool(self._task_manager))
+        registry.register(TaskListTool(self._task_manager))
+        registry.register(TaskUpdateTool(self._task_manager))
+        registry.register(TaskOutputTool(self._task_manager))
+        registry.register(TaskStopTool(self._task_manager))
+        registry.register(TodoCreateTool(self._task_manager))
+        registry.register(TodoListTool(self._task_manager))
+        registry.register(TodoCompleteTool(self._task_manager))
+        # Agent tools
+        registry.register(AgentTool(registry))
+        registry.register(TaskTool(self._spawn_subagent_async))
+
+        # Skill tool (Clawd-Code pattern)
+        registry.register(SkillTool(self._skill_loader))
+
+        # MCP tools (Clawd-Code pattern)
+        registry.register(MCPToolTool(self._mcp))
+        registry.register(MCPResourcesTool(self._mcp))
+
+        # LSP tool (Clawd-Code pattern)
+        registry.register(self._lsp_tool)
+
+        # Cron tools (Clawd-Code pattern)
+        registry.register(CronCreateTool(self._cron_scheduler))
+        registry.register(CronListTool(self._cron_scheduler))
+        registry.register(CronRemoveTool(self._cron_scheduler))
+
+        # Git worktree tool (Clawd-Code pattern)
+        registry.register(WorktreeTool())
+
+        # Config tools (Clawd-Code pattern)
+        if self._config_tool_read:
+            registry.register(self._config_tool_read)
+        if self._config_tool_write:
+            registry.register(self._config_tool_write)
+        return registry
+
+    def _notify_event(self, event: ToolEvent) -> None:
+        """Emit a ToolEvent to the registered callback (Clawd-Code pattern)."""
+        if self.on_event:
+            try:
+                self.on_event(event)
+            except Exception as e:
+                logger.warning("ToolEvent callback failed: %s", e)
+
+    def _emit_text_chunks(self, text: str, chunk_size: int = 12) -> None:
+        """Emit user-visible text in small chunks (Clawd-Code pattern)."""
+        if self.on_text_chunk is None or not text:
+            return
+        if chunk_size <= 0:
+            chunk_size = len(text)
+        for idx in range(0, len(text), chunk_size):
+            try:
+                self.on_text_chunk(text[idx:idx + chunk_size])
+            except Exception as e:
+                logger.warning("on_text_chunk failed: %s", e)
+                return
 
     @property
     def _workspace(self) -> Path:
@@ -197,10 +455,17 @@ class AgentEngine:
             return
         self._skills_loaded = True
 
-        from cdh.agent.skills import load_all_enabled_skills
+        for skill in self._skill_loader.get_enabled():
+            self.context.add_system(skill.content)
 
-        for name, content in load_all_enabled_skills():
-            self.context.add_system(content)
+        # Also load harness skill if applicable
+        from cdh.agent.harness_skill import HarnessSkill
+        harness_content = HarnessSkill.load_skill_for_project(
+            self._workspace,
+            getattr(self.app, "current_project", None) or "",
+        )
+        if harness_content:
+            self.context.add_system(harness_content)
 
     def _inject_project_context(self, project_name: str) -> None:
         if not project_name:
@@ -309,101 +574,100 @@ class AgentEngine:
         except Exception as e:
             return f"Warning: Could not verify file: {e}"
 
+    def _tool_category(self, name: str) -> str:
+        """Map tool name to category for structured display."""
+        from cdh.models.messages import get_tool_category
+        return get_tool_category(name).value
+
     async def _execute_tool(self, tool_call: dict) -> dict:
         name = tool_call["name"]
         tid = tool_call["id"]
         inp = tool_call["input"]
+        category = self._tool_category(name)
+        base = {"tool_use_id": tid, "is_error": False, "category": category}
         try:
+            # Apply agent-level permission checks for sensitive tools
             if name == "Read":
-                path = inp.get("path", "")
-                offset = inp.get("offset", 0)
-                limit = inp.get("limit", 0)
-                content = self.read_file(path, offset, limit)
-                return {"tool_use_id": tid, "content": str(content), "is_error": False}
-            elif name == "Write":
-                path = inp.get("path", "")
-                result = self.write_file(path, inp.get("content", ""))
-                warning = self._validate_edit(path)
-                output = json.dumps(result)
-                if warning:
-                    output += f"\n{warning}"
-                return {"tool_use_id": tid, "content": output, "is_error": not result.get("success", True)}
-            elif name == "Edit":
-                path = inp.get("path", "")
-                result = self.edit_file(path, inp.get("old_string", ""), inp.get("new_string", ""))
-                warning = self._validate_edit(path)
-                output = json.dumps(result)
-                if warning:
-                    output += f"\n{warning}"
-                return {"tool_use_id": tid, "content": output, "is_error": not result.get("success", True)}
-            elif name == "Glob":
-                result = self.glob_files(inp.get("pattern", ""))
-                return {"tool_use_id": tid, "content": str(result), "is_error": False}
-            elif name == "Grep":
-                result = self.grep_files(inp.get("pattern", ""), inp.get("include"))
-                return {"tool_use_id": tid, "content": str(result), "is_error": False}
-            elif name == "List":
-                result = self.list_dir(inp.get("path", "."))
-                return {"tool_use_id": tid, "content": str(result), "is_error": False}
+                if self.current_agent.permission_read == AgentPermission.DENY:
+                    return {**base, "content": "Read denied", "is_error": True}
+            elif name in ("Write", "Edit", "Insert", "UndoEdit"):
+                if self.current_agent.permission_edit == AgentPermission.DENY:
+                    return {**base, "content": json.dumps({"success": False, "error": "Edit denied"}), "is_error": True}
+                if self.current_agent.permission_edit == AgentPermission.ASK:
+                    return {**base, "content": json.dumps({"success": False, "error": "Edit requires approval", "requires_approval": True}), "is_error": True}
             elif name == "Bash":
-                result = self.exec_shell(inp.get("command", ""), inp.get("timeout", 60))
-                return {"tool_use_id": tid, "content": str(result), "is_error": False}
-            elif name == "WebFetch":
-                result = self.web_fetch(inp.get("url", ""), inp.get("prompt"))
-                return {"tool_use_id": tid, "content": str(result), "is_error": False}
-            elif name == "WebSearch":
-                result = self.web_search(inp.get("query", ""), inp.get("num_results", 5))
-                return {"tool_use_id": tid, "content": str(result), "is_error": False}
-            elif name == "Task":
-                result = await self._spawn_subagent_async(inp.get("agent_type", "general"), inp.get("prompt", ""))
-                return {"tool_use_id": tid, "content": str(result), "is_error": False}
-            elif name == "TaskCreate":
-                title = inp.get("title", "")
-                description = inp.get("description", "")
-                task_id = self._task_manager.add_task(title)
-                return {"tool_use_id": tid, "content": f"Task created: id={task_id}, title={title}", "is_error": False}
-            elif name == "TaskList":
-                tasks = self._task_manager.list_tasks()
-                if not tasks:
-                    return {"tool_use_id": tid, "content": "No tasks.", "is_error": False}
-                lines = [f"  {t['id']}. [{t['status']}] {t['name']}" for t in tasks]
-                return {"tool_use_id": tid, "content": "\n".join(lines), "is_error": False}
-            elif name == "TaskUpdate":
-                task_id = inp.get("id", 0)
-                status = inp.get("status", "todo")
-                ok = self._task_manager.update_task(task_id, status)
-                return {"tool_use_id": tid, "content": f"Task {task_id} updated to {status}" if ok else f"Task {task_id} not found", "is_error": not ok}
-            elif name == "TodoCreate":
-                text = inp.get("text", "")
-                todo_id = self._task_manager.add_todo(text)
-                return {"tool_use_id": tid, "content": f"Todo created: id={todo_id}, text={text}", "is_error": False}
-            elif name == "TodoList":
-                todos = self._task_manager.list_todos()
-                if not todos:
-                    return {"tool_use_id": tid, "content": "No todos.", "is_error": False}
-                lines = [f"  {t['id']}. [{'done' if t['done'] else 'todo'}] {t['text']}" for t in todos]
-                return {"tool_use_id": tid, "content": "\n".join(lines), "is_error": False}
-            elif name == "TodoComplete":
-                todo_id = inp.get("id", 0)
-                ok = self._task_manager.complete_todo(todo_id)
-                return {"tool_use_id": tid, "content": f"Todo {todo_id} completed" if ok else f"Todo {todo_id} not found", "is_error": not ok}
-            else:
-                return {"tool_use_id": tid, "content": f"Unknown tool: {name}", "is_error": True}
+                if self.current_agent.permission_bash == AgentPermission.DENY:
+                    return {**base, "content": json.dumps({"success": False, "error": "Bash denied"}), "is_error": True}
+                if self.current_agent.permission_bash == AgentPermission.ASK:
+                    return {**base, "content": json.dumps({"success": False, "error": "Bash requires approval", "requires_approval": True}), "is_error": True}
+            elif name in ("WebFetch",):
+                if self.current_agent.permission_webfetch == AgentPermission.DENY:
+                    return {**base, "content": "WebFetch denied", "is_error": True}
+            elif name in ("WebSearch",):
+                if self.current_agent.permission_websearch == AgentPermission.DENY:
+                    return {**base, "content": "WebSearch denied", "is_error": True}
+            elif name in ("Task", "Agent"):
+                if self.current_agent.permission_task == AgentPermission.DENY:
+                    return {**base, "content": json.dumps({"success": False, "error": "Task denied"}), "is_error": True}
+
+            # Dispatch via ToolRegistry with permission context (Clawd-Code pattern)
+            call = RegistryToolCall(name=name, input=inp, tool_use_id=tid)
+            perm_ctx = ToolPermissionContext.from_iterables(
+                workspace_root=str(self._workspace),
+            )
+            result = self._tool_registry.dispatch(call, permission_context=perm_ctx)
+
+            # Handle SendMessage tracking
+            if name == "SendMessage":
+                msg_output = result.output if isinstance(result.output, dict) else {}
+                self._last_user_msg = msg_output.get("message", "")
+                return {**base, "content": json.dumps(result.output), "is_error": result.is_error}
+
+            # Format output for backward compatibility
+            output = self._format_tool_output(result)
+            return {**base, "content": output, "is_error": result.is_error}
         except Exception as e:
             logger.exception(f"Tool execution error: {e}")
-            return {"tool_use_id": tid, "content": f"Error: {e}", "is_error": True}
+            return {**base, "content": f"Error: {e}", "is_error": True}
 
-    async def chat_stream(self, user_input: str) -> AsyncIterator[str]:
+    def _format_tool_output(self, result: RegistryToolResult) -> str:
+        import json
+        output = result.output
+        if isinstance(output, str):
+            return output
+        try:
+            return json.dumps(output)
+        except (TypeError, ValueError):
+            return str(output)
+
+    async def chat_stream(self, user_input: str) -> AsyncIterator[StreamEvent | str]:
         self._load_skills()
         logger.info(f"chat_stream() called with user_input='{user_input[:100]}...'")
 
         project_name = getattr(self.app, "current_project", None) or ""
         if project_name:
+            was_context_loaded = self._project_context_loaded
             self._inject_project_context(project_name)
+            if not was_context_loaded:
+                current_phase = self._pipeline.current_phase if self._pipeline else "init"
+                phase_info = {
+                    "init": "项目初始化 - 搭建项目骨架",
+                    "spec": "需求规格 - 编写 EARS 需求文档",
+                    "design": "设计阶段 - UI/API/数据模型设计",
+                    "coding": "编码阶段 - TDD 循环开发",
+                    "testing": "测试阶段 - 生成测试用例，覆盖率≥80%",
+                    "deploy": "部署阶段 - 部署到云端并验证",
+                    "done": "已完成",
+                }
+                yield StreamEvent.text_delta(
+                    f"\n📋 项目: {project_name}\n📍 当前阶段: {current_phase} "
+                    f"({phase_info.get(current_phase, current_phase)})\n继续开发中...\n\n"
+                )
         else:
             init_msg = self._auto_init_harness()
             if init_msg:
                 logger.info(f"Harness auto-init: {init_msg}")
+                yield StreamEvent.text_delta(f"\n{init_msg}\n\n")
 
         self.context.add_user(user_input)
 
@@ -418,14 +682,14 @@ class AgentEngine:
         if not provider_cls:
             error_msg = f"Provider '{provider_name}' not available."
             logger.error(error_msg)
-            yield error_msg
+            yield StreamEvent.error(error_msg)
             return
 
         config = self.app.config.providers.get(provider_name)
         if config is None:
             error_msg = f"Provider '{provider_name}' not configured."
             logger.error(error_msg)
-            yield error_msg
+            yield StreamEvent.error(error_msg)
             return
 
         logger.info(f"Creating provider instance: {provider_cls.__name__}")
@@ -434,81 +698,235 @@ class AgentEngine:
             endpoint=config.endpoint or None,
         )
 
+        # Reset per-turn usage tracking
+        self._turn_usages = []
+
+        # ── Agent loop (Clawd-Code style) ──
+        is_anthropic = provider.is_anthropic_style()
         max_turns = self.current_agent.max_turns or 10
         for turn in range(max_turns):
             if self.context.should_compact():
                 self.context.compact()
 
-            full_response = []
-            chunk_count = 0
+            turn_usage: dict[str, int] = {}
+            response_text = ""
+            tool_uses: list[dict] = []
+
             try:
                 context_messages = self.context.get_context()
-                async for chunk in provider.chat_stream(
+                logger.info(f"Calling provider.chat_stream_response (turn {turn+1})")
+                chat_response = await provider.chat_stream_response(
                     context_messages,
                     model=model_name,
-                    tools=TOOLS_SCHEMA,
-                ):
-                    chunk_count += 1
-                    full_response.append(chunk)
-                    yield chunk
+                    on_text_chunk=None,
+                )
+                response_text = chat_response.content
+                tool_uses = chat_response.tool_uses
+                if chat_response.usage:
+                    turn_usage = chat_response.usage
+            except NotImplementedError:
+                logger.info("chat_stream_response not supported, falling back to non-streaming chat()")
+                try:
+                    context_messages = self.context.get_context()
+                    model_response = await provider.chat(
+                        context_messages,
+                        model=model_name,
+                        tools=TOOLS_SCHEMA,
+                    )
+                    response_text = model_response.get_text()
+                    tool_uses = [
+                        {"id": tu.id, "name": tu.name, "input": tu.input}
+                        for cb in model_response.content
+                        if cb.type == ContentBlockType.TOOL_USE and cb.tool_use
+                        for tu in [cb.tool_use]
+                    ]
+                    if model_response.usage:
+                        turn_usage = model_response.usage
+                except Exception as e:
+                    logger.exception(f"Error during chat() fallback turn {turn+1}: {e}")
+                    yield StreamEvent.error(str(e))
+                    break
 
-                logger.info(f"Turn {turn+1}: {chunk_count} chunks, {len(''.join(full_response))} chars")
-            except Exception as e:
-                logger.exception(f"Error during chat_stream turn {turn+1}: {e}")
-                yield f"\n[Error: {e}]"
-                break
+            # Track usage
+            self._turn_usages.append(turn_usage)
+            if turn_usage:
+                self.total_tokens += turn_usage.get("total_tokens", 0)
 
-            response_text = "".join(full_response)
-            self.context.add_assistant(response_text)
+            # Extract thinking blocks from response
+            thinking_blocks = []
+            clean_text = response_text
+            for match in THINKING_RE.finditer(response_text):
+                thinking_blocks.append(match.group(1))
+            if thinking_blocks:
+                clean_text = THINKING_RE.sub('', response_text).strip()
+                for tb in thinking_blocks:
+                    yield StreamEvent.text_delta(f"\n```thinking\n{tb}\n```\n")
+
+            # Add assistant response to context with proper content blocks
+            if tool_uses:
+                assistant_blocks: list = [{"type": "text", "text": clean_text}] if clean_text else []
+                for tu in tool_uses:
+                    assistant_blocks.append({
+                        "type": "tool_use",
+                        "id": tu["id"],
+                        "name": tu["name"],
+                        "input": tu["input"],
+                    })
+                self.context.add_assistant(assistant_blocks)
+            else:
+                self.context.add_assistant(clean_text)
+
             self.iterations += 1
 
-            # Try native tool calls (from function calling API) first
-            get_tc = getattr(provider, 'get_stream_tool_calls', None)
-            native_tool_calls = get_tc() if get_tc else []
-            if native_tool_calls:
-                tool_calls = []
-                for nt in native_tool_calls:
-                    try:
-                        inp = json.loads(nt.get("arguments", "{}"))
-                    except (json.JSONDecodeError, TypeError):
-                        inp = {"raw": nt.get("arguments", "")}
-                    tool_calls.append({
-                        "name": nt.get("name", ""),
-                        "id": nt.get("id", ""),
-                        "input": inp,
-                    })
-            else:
-                # Fall back to XML parsing
-                tool_calls = self._parse_tool_calls(response_text)
-
-            if not tool_calls:
+            if not tool_uses:
+                if clean_text.strip():
+                    for i in range(0, len(clean_text), 12):
+                        yield StreamEvent.text_delta(clean_text[i:i + 12])
+                elif self._last_user_msg:
+                    yield StreamEvent.text_delta(self._last_user_msg)
                 break
 
-            yield "\n"
-            for tc in tool_calls:
-                logger.info(f"Executing tool: {tc['name']} (id={tc['id']})")
-                yield f'<tool_result tool_use_id="{tc["id"]}">\n'
-                result = await self._execute_tool(tc)
-                result_str = str(result.get("content", ""))
-                if result.get("is_error"):
-                    yield f"Error: {result_str}"
-                else:
-                    yield result_str
-                yield "\n</tool_result>\n"
-                self.context.add_tool_result(
-                    tc["id"],
-                    result_str,
-                    result.get("is_error", False),
-                )
+            # Emit ToolEvents (Clawd-Code pattern) and StreamEvents for TUI
+            for tu in tool_uses:
+                self._notify_event(ToolEvent(
+                    kind="tool_use",
+                    tool_name=tu["name"],
+                    tool_input=tu["input"],
+                    tool_use_id=tu["id"],
+                ))
+                yield StreamEvent.tool_call_start(tu["name"], tu["id"])
+            for tu in tool_uses:
+                yield StreamEvent.tool_call_complete(tu["id"], tu["name"], tu["input"])
 
-        logger.info(f"Chat stream complete after {self.iterations} turn(s)")
+            for tu in tool_uses:
+                logger.info(f"Executing tool: {tu['name']} (id={tu['id']})")
+                result = await self._execute_tool(tu)
+                result_str = str(result.get("content", ""))
+                is_error = result.get("is_error", False)
+                category = result.get("category", "unknown")
+
+                # Handle SendMessage — user-visible only, skip from LLM context
+                if tu["name"] == "SendMessage":
+                    try:
+                        parsed = json.loads(result_str) if result_str else {}
+                        msg = parsed.get("message", "")
+                        if msg:
+                            self._last_user_msg = msg
+                            yield StreamEvent.text_delta(f"\n💬 {msg}\n")
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                    self._notify_event(ToolEvent(
+                        kind="tool_result",
+                        tool_name="SendMessage",
+                        tool_use_id=tu["id"],
+                        tool_output={"message": self._last_user_msg},
+                    ))
+                    continue
+
+                # Detect ASK permission denial
+                requires_approval = False
+                try:
+                    parsed = json.loads(result_str) if result_str else {}
+                    requires_approval = parsed.get("requires_approval", False)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+                if requires_approval and tu["name"] in ("Write", "Edit", "Bash"):
+                    self._pending_approval = {"tool_call": tu, "category": category}
+                    self._notify_event(ToolEvent(
+                        kind="tool_result",
+                        tool_name=tu["name"],
+                        tool_use_id=tu["id"],
+                        is_error=True,
+                        error="Requires approval",
+                    ))
+                    yield StreamEvent.ask_user(
+                        call_id=tu["id"],
+                        action=tu["name"],
+                        question=f"Approve {tu['name']} operation?",
+                        context=result_str,
+                        action_type=tu["name"].lower(),
+                        path=tu["input"].get("path", ""),
+                        command=tu["input"].get("command", "")[:200],
+                    )
+                else:
+                    try:
+                        result_cat = MsgToolCategory(category)
+                    except ValueError:
+                        result_cat = MsgToolCategory.UNKNOWN
+                    self._notify_event(ToolEvent(
+                        kind="tool_result",
+                        tool_name=tu["name"],
+                        tool_output=result_str,
+                        tool_use_id=tu["id"],
+                        is_error=is_error,
+                    ))
+                    yield StreamEvent.tool_result(
+                        call_id=tu["id"],
+                        content=result_str,
+                        is_error=is_error,
+                        category=result_cat,
+                    )
+                    # Add structured tool_result to LLM context
+                    if is_anthropic:
+                        self.context.add_tool_result(tu["id"], result_str, is_error)
+                    else:
+                        self.context.add_message(
+                            "tool",
+                            [{"type": "tool_result", "tool_use_id": tu["id"], "content": result_str, "is_error": is_error}],
+                            name=tu["id"],
+                        )
+
+        usage_summary = ", ".join(
+            f"turn {i+1}: {u.get('total_tokens', '?')} tokens"
+            for i, u in enumerate(self._turn_usages) if u
+        )
+        logger.info(f"Chat stream complete after {self.iterations} turn(s). Usage: [{usage_summary}]")
+
+    def has_pending_approval(self) -> bool:
+        """Check if there's a pending approval request from ASK permission."""
+        return self._pending_approval is not None
+
+    async def resolve_approval(self, approved: bool) -> dict | None:
+        """Execute the pending action if approved, or return denial.
+
+        Returns the tool result dict, or None if no pending approval.
+        """
+        if not self._pending_approval:
+            return None
+        
+        tc = self._pending_approval["tool_call"]
+        self._pending_approval = None
+        
+        if not approved:
+            return {
+                "tool_use_id": tc["id"],
+                "content": json.dumps({"success": False, "error": "User denied the operation"}),
+                "is_error": True,
+                "category": tc.get("category", "unknown"),
+            }
+        
+        # Re-execute with bypassed permission (user approved)
+        saved_edit = self.current_agent.permission_edit
+        saved_bash = self.current_agent.permission_bash
+        try:
+            if tc["name"] in ("Write", "Edit"):
+                self.current_agent.permission_edit = AgentPermission.ALLOW
+            elif tc["name"] == "Bash":
+                self.current_agent.permission_bash = AgentPermission.ALLOW
+            return await self._execute_tool(tc)
+        finally:
+            self.current_agent.permission_edit = saved_edit
+            self.current_agent.permission_bash = saved_bash
 
     def reset(self):
         self.context.reset()
         self.iterations = 0
         self.total_tokens = 0
+        self._turn_usages = []
         self._skills_loaded = False
         self._project_context_loaded = False
+        self._skill_loader.invalidate_cache()
 
     def status(self) -> str:
         return (
@@ -566,25 +984,74 @@ class AgentEngine:
         return websearch(query, num_results)
 
     async def _spawn_subagent_async(self, agent_type: str, prompt: str) -> str:
+        """Spawn a sub-agent with streaming-like output.
+        
+        Uses chat_stream to get structured output that the ChatPanel 
+        can parse for professional rendering.
+        """
+        import asyncio
         sub_engine = AgentEngine(self.app)
         sub_engine.set_agent(agent_type)
         try:
-            result = await sub_engine.chat(prompt)
-            return str(result)
+            # Accumulate full result for parent context
+            parts = []
+            async for chunk in sub_engine.chat_stream(prompt):
+                if isinstance(chunk, StreamEvent):
+                    # Extract text from stream events for sub-agent result
+                    parts.append(chunk.text)
+                else:
+                    parts.append(chunk)
+            result = "".join(parts)
+            # Format as structured output (DeepSeek-TUI style contract)
+            formatted = self._format_subagent_output(agent_type, prompt, result)
+            return formatted
         except Exception as e:
             logger.exception(f"Subagent error: {e}")
-            return f"Error: {e}"
+            return f"SUMMARY:\nSub-agent failed with error: {e}\n\nCHANGES:\nNone.\n\nEVIDENCE:\nNone.\n\nRISKS:\nNone.\n\nBLOCKERS:\n{e}"
+    
+    def _format_subagent_output(self, agent_type: str, prompt: str, result: str) -> str:
+        """Format sub-agent output in DeepSeek-TUI structured contract format.
+        
+        Output contract:
+        SUMMARY: one paragraph; what you did and what happened
+        CHANGES: files modified, with one-line descriptions; "None." if read-only
+        EVIDENCE: path:line-range citations and key findings; one bullet each
+        RISKS: what could go wrong / what the parent should double-check
+        BLOCKERS: what stopped you; "None." if you finished cleanly
+        """
+        # Try to detect if the result already has structured sections
+        result_lower = result.lower()
+        has_sections = all(
+            tag.lower() in result_lower 
+            for tag in ["summary", "changes", "evidence", "risks", "blockers"]
+        )
+        
+        if has_sections:
+            # Already structured — just ensure proper formatting
+            return result
+        else:
+            # Add structured wrapper around raw result
+            return (
+                f"SUMMARY:\n{agent_type.capitalize()} agent completed task: {prompt[:200]}\n\n"
+                f"CHANGES:\nNone detected.\n\n"
+                f"EVIDENCE:\n- See detailed output below\n\n"
+                f"RISKS:\nNone identified.\n\n"
+                f"BLOCKERS:\nNone.\n\n"
+                f"--- Raw Output ---\n{result}"
+            )
 
     def spawn_subagent(self, agent_type: str, prompt: str) -> dict:
         if self.current_agent.permission_task == AgentPermission.DENY:
             return {"success": False, "error": "Subagent denied"}
         import asyncio
+        import concurrent.futures
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                result = loop.run_until_complete(
-                    self._spawn_subagent_async(agent_type, prompt)
+                future = asyncio.run_coroutine_threadsafe(
+                    self._spawn_subagent_async(agent_type, prompt), loop
                 )
+                result = future.result(timeout=300)
             else:
                 result = asyncio.run(self._spawn_subagent_async(agent_type, prompt))
         except Exception as e:

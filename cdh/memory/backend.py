@@ -145,8 +145,9 @@ class MemoryBackend:
             q = s.query(MemoryRecord)
             if layer:
                 q = q.filter_by(layer=layer)
-            pattern = f"%{query}%"
-            q = q.filter(MemoryRecord.content.like(pattern))
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            q = q.filter(MemoryRecord.content.like(pattern, escape="\\"))
             records = q.order_by(MemoryRecord.timestamp.desc()).limit(limit).all()
             for r in records:
                 s.refresh(r)

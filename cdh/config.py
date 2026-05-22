@@ -108,9 +108,13 @@ def _dict_to_dataclass(cls, data: dict):
             ftype = field_def.type
             origin = getattr(ftype, "__origin__", None)
             if origin is dict:
-                key_type, val_type = ftype.__args__
-                if hasattr(val_type, "__dataclass_fields__"):
-                    kwargs[name] = {k: _dict_to_dataclass(val_type, v) for k, v in val.items()}
+                args = getattr(ftype, "__args__", ())
+                if len(args) == 2:
+                    _, val_type = args
+                    if hasattr(val_type, "__dataclass_fields__"):
+                        kwargs[name] = {k: _dict_to_dataclass(val_type, v) for k, v in val.items()}
+                    else:
+                        kwargs[name] = val
                 else:
                     kwargs[name] = val
             elif hasattr(ftype, "__dataclass_fields__"):

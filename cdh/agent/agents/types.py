@@ -179,7 +179,9 @@ TOOL_DESCRIPTIONS = """
 ### File Operations
 - **Read**: read(path, offset=0, limit=0) - Read file contents. Returns content with line numbers.
 - **Write**: write(path, content) - Create or overwrite file with content.
-- **Edit**: edit(path, old_string, new_string) - Replace exact string in file. Must read file first.
+- **Edit**: edit(path, old_string, new_string) - Replace exact string in file. **CRITICAL**: old_string must be UNIQUE in the file — provide enough context (surrounding lines) to guarantee a single match. The edit WILL FAIL if old_string appears multiple times.
+- **Insert**: insert(path, line, text) - Insert text at a specific line. line=-1 for beginning, line=0 to insert after line 0, etc. Must read file first to verify target location.
+- **UndoEdit**: undo_edit(path) - Undo the most recent Edit/Insert on a file. Restores previous content.
 - **Glob**: glob(pattern) - Find files matching glob pattern (e.g., "**/*.py").
 - **Grep**: grep(pattern, include=None) - Search for regex pattern in files.
 - **List**: list(path=".") - List directory contents.
@@ -193,15 +195,52 @@ TOOL_DESCRIPTIONS = """
 
 ### Agent
 - **Task**: task(agent_type, prompt) - Spawn subagent to handle subtask.
+- **Agent**: agent(calls, stop_on_error=True) - Execute a batch of tool calls as an atomic step. Each call includes {name, input}. Halts on first error when stop_on_error is true.
+- **ToolSearch**: tool_search(query) - Search for available tools by keyword.
 - **Skill**: skill(name) - Load skill by name.
 
-### Tasks & Planning
-- **TaskCreate**: task_create(title, description) - Create a task. Returns task id.
-- **TaskList**: task_list() - List all tasks with status.
-- **TaskUpdate**: task_update(id, status) - Update task status (todo/doing/done).
+### Communication
+- **SendMessage**: send_message(message, attachments=[]) - Send a user-visible message during execution. Use to communicate status updates, findings, or results.
+
+### Human Interaction
+- **AskUser**: ask_user(question, context="") - Ask the user a question. Use when you need:
+  - Approval before modifying or creating files (when permission_edit is ASK)
+  - Clarification on ambiguous requirements
+  - Confirmation before destructive operations
+  - Any time you need human input to continue
+
+### Skills (Clawd-Code)
+- **Skill**: skill(name, arguments=[]) - Run a registered skill by name. Skills are markdown-based instruction sets with YAML frontmatter.
+
+### MCP (Clawd-Code)
+- **MCPTool**: mcp_tool(server, tool, arguments) - Call a tool on a connected MCP server.
+- **MCPResources**: mcp_resources(server, action, uri) - List or read resources on an MCP server.
+
+### LSP (Clawd-Code)
+- **LSP**: lsp(command, file_path, action) - Get code diagnostics from a Language Server server.
+
+### Cron (Clawd-Code)
+- **CronCreate**: cron_create(name, interval_seconds, command) - Create a scheduled cron job.
+- **CronList**: cron_list() - List all cron jobs.
+- **CronRemove**: cron_remove(name) - Remove a cron job.
+
+### Git (Clawd-Code)
+- **Worktree**: worktree(action, path, branch) - Manage git worktrees: create, list, prune.
+
+### Config (Clawd-Code)
+- **ConfigRead**: config_read(key) - Read configuration values.
+- **ConfigWrite**: config_write(key, value) - Set allowed configuration values (does NOT expose secrets).
+
+### Tasks & Planning (V2 with dependency tracking)
+- **TaskCreate**: task_create(subject, description, activeForm="", metadata={}) - Create a task. Returns task id.
+- **TaskGet**: task_get(taskId) - Retrieve a task by ID.
+- **TaskList**: task_list() - List all tasks with status, owner, and blockers.
+- **TaskUpdate**: task_update(taskId, subject, description, activeForm, status, owner, addBlocks, addBlockedBy, metadata, output) - Update task fields and dependencies.
+- **TaskOutput**: task_output(task_id) - Get output from a task.
+- **TaskStop**: task_stop(task_id) - Stop a running task.
 - **TodoCreate**: todo_create(text) - Create a todo item. Returns todo id.
 - **TodoList**: todo_list() - List all todos.
-- **TodoComplete**: todo_complete(id) - Mark a todo as done.
+- **TodoComplete**: todo_complete(todo_id) - Mark a todo as done.
 """
 
 PLAN_INSTRUCTIONS = """

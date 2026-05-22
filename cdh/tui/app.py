@@ -827,6 +827,7 @@ class CloudDevHarnessApp(App):
         rp._refresh_plan()
         rp._refresh_tasks(tm.list_tasks())
         rp._refresh_todos(tm.list_todos())
+        rp._refresh_subagents()
 
     def _get_selected_slash_command(self) -> str | None:
         """Return the currently highlighted slash command, or None."""
@@ -849,20 +850,24 @@ class CloudDevHarnessApp(App):
         if not path:
             return "Usage: @<filepath> - read a file"
 
-        user_dir = os.path.expanduser("~")
+        user_dir = os.path.realpath(os.path.expanduser("~"))
         if not os.path.isabs(path):
             path = os.path.join(user_dir, path)
+        resolved = os.path.realpath(path)
 
-        if not os.path.exists(path):
-            return f"File not found: {path}"
+        if not resolved.startswith(user_dir + os.sep) and resolved != user_dir:
+            return f"Access denied: path outside home directory"
+
+        if not os.path.exists(resolved):
+            return f"File not found: {resolved}"
 
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(resolved, "r", encoding="utf-8") as f:
                 content = f.read()
             lines = content.split("\n")
             if len(lines) > 100:
                 content = "\n".join(lines[:100]) + f"\n\n... [{len(lines) - 100} more lines]"
-            return f"File: {path}\n\n{content}"
+            return f"File: {resolved}\n\n{content}"
         except Exception as e:
             return f"Error reading file: {e}"
 

@@ -18,6 +18,7 @@ _COMMAND_MODULES = [
     "cdh.tui.commands.general_cmds",
     "cdh.tui.commands.harness_cmds",
     "cdh.tui.commands.vim_cmds",
+    "cdh.tui.commands.server_cmds",
 ]
 
 

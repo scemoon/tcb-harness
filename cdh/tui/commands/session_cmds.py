@@ -3,22 +3,6 @@ from __future__ import annotations
 from cdh.tui.commands.registry import command
 
 
-@command("activity list", "List recent project/session activities", "[project]")
-def cmd_activity_list(app, *args):
-    project = args[0] if args else ""
-    activities = app.activity_recorder.list_activities(project=project, limit=50)
-    if not activities:
-        return "No activities recorded."
-    lines = []
-    for a in activities:
-        ts = a.created_at.strftime("%Y-%m-%d %H:%M") if a.created_at else "N/A"
-        detail = ""
-        if a.details:
-            detail = " | " + ", ".join(f"{k}={v}" for k, v in a.details.items() if v)
-        lines.append(f"{ts}  [{a.event_type}]  project={a.project}  session={a.session[:8]}...{detail}")
-    return "\n".join(lines)
-
-
 @command("session list", "List all sessions", "")
 def cmd_session_list(app, *args):
     sessions = app.session_store.list_all()
