@@ -258,7 +258,7 @@ class MainScreen(Screen, can_focus=False):
         self.conversation.focus_prompt()
 
     async def action_go_home(self) -> None:
-        pass
+        self.app.push_screen("store")
 
     @on(SideBar.Dismiss)
     def on_side_bar_dismiss(self, message: SideBar.Dismiss):

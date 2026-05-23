@@ -228,13 +228,21 @@ def get_sessions_screen() -> SessionsScreen:
     return SessionsScreen()
 
 
+def get_store_screen():
+    from tui.screens.store import StoreScreen
+
+    return StoreScreen()
+
+
 class TUI2App(App, inherit_bindings=False):
     """The top level app."""
 
     CSS_PATH = "tui.tcss"
+
     SCREENS = {
         "settings": get_settings_screen,
         "sessions": get_sessions_screen,
+        "store": get_store_screen,
     }
     MODES = {}
     BINDING_GROUP_TITLE = "System"
@@ -249,6 +257,7 @@ class TUI2App(App, inherit_bindings=False):
         ),
         Binding("ctrl+c", "help_quit", show=False, system=True),
         Binding("ctrl+s", "sessions", "Sessions"),
+        
         Binding("f1", "toggle_help_panel", "Help", priority=True),
         Binding(
             "f2,ctrl+comma",
@@ -265,7 +274,7 @@ class TUI2App(App, inherit_bindings=False):
     scrollbar: reactive[str] = reactive("normal")
     last_ctrl_c_time = reactive(0.0)
     update_required: reactive[bool] = reactive(False)
-    terminal_title: var[str] = var("TUI2")
+    terminal_title: var[str] = var("TUI")
     terminal_title_icon: var[str] = var("")
     terminal_title_flash = var(0)
     terminal_title_blink = var(False)
@@ -282,7 +291,7 @@ class TUI2App(App, inherit_bindings=False):
         project_dir: str | None = None,
         mode: str | None = None,
     ) -> None:
-        """TUI2 app.
+        """TUI app.
 
         Args:
             agent_data: Agent data to run.
@@ -539,7 +548,7 @@ class TUI2App(App, inherit_bindings=False):
         notification = Notify()
         notification.message = message
         notification.title = title
-        notification.application_name = "TUI2" if tui.os == "macos" else "TUI2"
+        notification.application_name = "TUI" 
         if sound and self.settings.get("notifications.enable_sounds", bool):
             sound_path = str(files("tui.data").joinpath(f"sounds/{sound}.wav"))
             notification.audio = sound_path
@@ -705,7 +714,7 @@ class TUI2App(App, inherit_bindings=False):
         if mode := self._initial_mode:
             self.switch_mode(mode)
         else:
-            await self.new_session_screen(self.get_main_screen)
+            self.push_screen("store")
 
         self.update_terminal_title()
         self.set_timer(1, self.run_version_check)

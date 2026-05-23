@@ -1,8 +1,7 @@
-
-StoreScreen {    
+StoreScreen {
 
     #container {
-        hatch: right $primary 15%;   
+        hatch: right $primary 15%;
         overflow: hidden auto;
     }
 
@@ -13,17 +12,17 @@ StoreScreen {
 
     .heading {
         margin: 0 0 0 0;
-        padding: 1 1 0 2;                
+        padding: 1 1 0 2;
     }
-    .sponsor-me {        
+    .sponsor-me {
         padding: 0 1;
-        color: $text 70%;   
-        border: tall blank;     
+        color: $text 70%;
+        border: tall blank;
     }
-    Footer {    
-        .footer-key--key {            
-        background: transparent;            
-            padding: 0 1;        
+    Footer {
+        .footer-key--key {
+            background: transparent;
+            padding: 0 1;
         }
     }
 
@@ -31,36 +30,36 @@ StoreScreen {
         padding: 0 1 0 2;
         border-bottom: solid $foreground 10%;
 
-        
+
         CondensedPath {
-            pointer:pointer;
+            pointer: pointer;
             width: 100%;
             color: $text-warning;
             &:hover {
                 background: $foreground 4%;
-                text-style: underline;                
+                text-style: underline;
             }
         }
     }
 
     #title-container {
         align: center top;
-        dock: top;        
+        dock: top;
         #title-grid {
             margin: 0 1;
             border: block black 20%;
             background: black 20%;
-            grid-size: 2 1;            
+            grid-size: 2 1;
             height: auto;
             grid-columns: 24 1fr;
             grid-rows: auto;
             grid-gutter: 1 2;
-            min-width: 40;       
-            Mandelbrot {   
-                border: none;             
-                height: 100%;                                                                
+            min-width: 40;
+            Mandelbrot {
+                border: none;
+                height: 100%;
             }
-        }        
+        }
     }
 
     LoadingIndicator {
@@ -69,9 +68,9 @@ StoreScreen {
 
     GridSelect {
         grid-gutter: 0;
-        height: auto;        
-        padding: 0;        
-        margin: 0 0;    
+        height: auto;
+        padding: 0;
+        margin: 0 0;
 
         &.-highlight {
             background: $panel;
@@ -83,11 +82,11 @@ StoreScreen {
                 background: $panel;
                 border: tall $primary;
             }
-        }         
+        }
 
     }
 
-    GridSelect {        
+    GridSelect {
         margin: 0 1;
         border: round $secondary 50%;
         keyline: none
@@ -98,11 +97,11 @@ StoreScreen {
         margin: 0;
         border: none;
     }
-    
+
     AgentItem {
-        height: auto;             
+        height: auto;
         border: tall transparent;
-        padding: 0 1    ;        
+        padding: 0 1;
         &:hover {
             background: $panel;
         }
@@ -127,7 +126,7 @@ StoreScreen {
 
     Launcher {
         GridSelect {
-            width: 1fr;            
+            width: 1fr;
         }
         &.-empty {
             LauncherGridSelect {
@@ -137,22 +136,21 @@ StoreScreen {
         .no-agents {
             text-style: dim italic;
             padding: 1 2;
-        }            
+        }
     }
 
     LauncherItem {
-        height: auto;               
+        height: auto;
         border: tall transparent;
         padding: 0 1;
         &:hover {
             background: $panel;
         }
         pointer: pointer;
-        Digits {
+        .digit {
             width: auto;
             padding: 0 1 0 0;
             color: $text-success;
-            # text-style: bold;
         }
         #description {
             text-style: dim;
@@ -167,10 +165,10 @@ StoreScreen {
 
 }
 
-AgentModal {    
+AgentModal {
     align: center middle;
-    
-    .acp-warning {    
+
+    .acp-warning {
         color: $text-success;
         margin-left: 1;
         padding: 0 1;
@@ -178,7 +176,7 @@ AgentModal {
     }
 
     #container {
-        
+
         margin: 2 4 1 4;
         padding: 0 1 0 0;
         max-width: 100;
@@ -190,53 +188,52 @@ AgentModal {
             padding: 0 0 0 0;
             margin: 0 0 1 1;
             max-height: 20;
-            overflow-y: auto;            
-            Markdown {                
+            overflow-y: auto;
+            Markdown {
                 padding: 0 1;
                 MarkdownH1 {
                     margin: 1 1 1 0
                 }
             }
-            
+
             &:focus {
-                background: $primary 7%;                
+                background: $primary 7%;
             }
         }
 
         Select {
-            width: 1fr;            
+            width: 1fr;
             margin-right: 1;
         }
         Checkbox {
-            margin: 0;                        
+            margin: 0;
         }
     }
-    Footer {        
-        # margin: 0 0 0 0;
+    Footer {
         opacity: 0.0;
         FooterKey {
             .footer-key--key {
-                color: $accent !important;            
-            }                    
-        }        
+                color: $accent !important;
+            }
+        }
     }
 }
 
-CommandEditModal {    
+CommandEditModal {
     align: center middle;
 
     #container {
         padding: 1 1 0 1;
         border: thick $primary 20%;
-        border-title-color: $text;            
+        border-title-color: $text;
         margin: 3 6;
         height: 1fr;
         height: auto;
         max-width: 80;
 
-        .instructions {                
+        .instructions {
             color: $text-primary;
-            padding: 0 1 1 1;                            
+            padding: 0 1 1 1;
         }
 
         TextArea {
@@ -254,23 +251,23 @@ CommandEditModal {
 
 
 ActionModal {
-    align: center middle;    
+    align: center middle;
     #container {
-        margin: 3 6;    
+        margin: 3 6;
         height: 1fr;
         max-height: 48;
-        CommandPane {    
+        CommandPane {
             padding: 1 1;
-            background: black 10%;          
-            border: tab $primary;                        
+            background: black 10%;
+            border: tab $primary;
             &.-success {
-                border: tab $text-success 70%;            
+                border: tab $text-success 70%;
             }
             &.-fail {
-                border: tab $text-error 50%;            
-            }                        
+                border: tab $text-error 50%;
+            }
         }
-        Button {            
+        Button {
             width: 100%;
         }
     }
