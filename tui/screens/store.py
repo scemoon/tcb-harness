@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
 from itertools import zip_longest
@@ -227,6 +228,7 @@ class StoreScreen(Screen):
     BINDING_GROUP_TITLE = "Screen"
     CSS_PATH = "store.tcss"
     FOCUS_GROUP = Binding.Group("Focus")
+
     BINDINGS = [
         Binding(
             "tab",
@@ -253,6 +255,7 @@ class StoreScreen(Screen):
             "Directory",
             tooltip="Change project directory",
         ),
+        Binding("escape", "dismiss", "Dismiss"),
     ]
 
     agents_view = getters.query_one("#agents-view", GridSelect)
@@ -434,18 +437,22 @@ class StoreScreen(Screen):
                 first_grid = self.container.query(GridSelect).first()
                 first_grid.focus(scroll_visible=False)
 
-    async def setting_updated(self, setting: tuple[str, object]) -> None:
+    def setting_updated(self, setting: tuple[str, object]) -> None:
         key, value = setting
         if key == "launcher.agents":
-            await self.launcher.recompose()
+            try:
+                launcher = self.launcher
+            except NoMatches:
+                return
 
-            def focus_screen():
+            async def _recompose():
+                await launcher.recompose()
                 try:
-                    self.screen.query(GridSelect).focus()
+                    self.query(GridSelect).first().focus()
                 except Exception:
                     pass
 
-            self.call_later(focus_screen)
+            asyncio.create_task(_recompose())
 
     def on_key(self, event: events.Key) -> None:
         if event.character is None:
@@ -455,8 +462,8 @@ class StoreScreen(Screen):
         if event.character in LAUNCHER_KEYS:
             launch_item_offset = LAUNCHER_KEYS.find(event.character)
             try:
-                self.launcher.grid_select.children[launch_item_offset]
-            except IndexError:
+                item = self.launcher.grid_select.children[launch_item_offset]
+            except (IndexError, NoMatches):
                 self.notify(
                     f"No agent on key [b]{LAUNCHER_KEYS[launch_item_offset]}",
                     title="Quick launch",
@@ -464,12 +471,15 @@ class StoreScreen(Screen):
                 )
                 self.app.bell()
                 return
-            self.launcher.focus()
-            self.launcher.highlighted = launch_item_offset
-            self.launcher.launch_highlighted()
+            if not isinstance(item, LauncherItem):
+                return
+            self.post_message(messages.LaunchAgent(item.agent["identity"]))
 
     def action_quick_launch(self) -> None:
-        self.launcher.focus()
+        try:
+            self.launcher.focus()
+        except NoMatches:
+            self.notify("Launcher not ready yet", severity="warning")
 
     @work
     async def action_resume(self) -> None:

@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from cdha.agent.engine import AgentEngine
+from cdha.agent.session import AgentSession
 from cdha.config import load_config
 from cdha.models.provider import ProviderRegistry
 from cdha.models.registry import ModelRegistry
@@ -23,6 +24,32 @@ from cdha.models.providers.openai_provider import OpenAIProvider
 from cdha.models.providers.deepseek_provider import DeepSeekProvider
 from cdha.models.providers.glm_provider import GLMProvider
 from cdha.models.providers.ollama_provider import OllamaProvider
+
+
+_DEFAULT_MODES = {
+    "currentModeId": "agent",
+    "availableModes": [
+        {"id": "agent", "name": "Agent", "description": "Standard agent mode"},
+        {"id": "plan", "name": "Plan", "description": "Planning mode"},
+        {"id": "solo", "name": "Solo", "description": "Solo mode"},
+    ],
+}
+
+
+def _create_engine(cwd: str) -> AgentEngine:
+    cfg = load_config()
+    ModelRegistry.initialize()
+    provider_cls = ProviderRegistry.get(cfg.default_provider)
+    if provider_cls is None:
+        provider_cls = ProviderRegistry.get("minimaxi")
+
+    class MinimalApp:
+        config = cfg
+        current_provider = cfg.default_provider
+        current_model = cfg.default_model
+
+    project_dir = Path(cwd).resolve() if cwd else Path.cwd()
+    return AgentEngine(MinimalApp(), project_dir=project_dir)
 
 
 class CDHACPAdapter:
@@ -38,12 +65,19 @@ class CDHACPAdapter:
         notification = {"jsonrpc": "2.0", "method": method, "params": params}
         print(json.dumps(notification), flush=True)
 
+    def send_session_update(self, update: dict):
+        """Send a session/update notification with proper ACP protocol format."""
+        self.send_notification("session/update", {
+            "sessionId": self.session_id,
+            "update": update,
+        })
+
     async def initialize(self, protocol_version: int, client_capabilities: dict, client_info: dict):
         """Handle ACP initialize."""
         return {
             "protocolVersion": 1,
             "agentCapabilities": {
-                "loadSession": False,
+                "loadSession": True,
                 "promptCapabilities": {
                     "audio": False,
                     "embeddedContent": False,
@@ -60,33 +94,41 @@ class CDHACPAdapter:
 
     async def session_new(self, cwd: str, mcp_servers: list):
         """Create new session."""
-        import os
-        from pathlib import Path
-        self.session_id = f"cdh-session-{os.getpid()}"
         cfg = load_config()
+        self.agent = _create_engine(cwd)
 
-        ModelRegistry.initialize()
-        provider_cls = ProviderRegistry.get(cfg.default_provider)
-        if provider_cls is None:
-            provider_cls = ProviderRegistry.get("minimaxi")
-
-        class MinimalApp:
-            config = cfg
-            current_provider = cfg.default_provider
-            current_model = cfg.default_model
-
-        project_dir = Path(cwd).resolve() if cwd else Path.cwd()
-        self.agent = AgentEngine(MinimalApp(), project_dir=project_dir)
+        session = AgentSession()
+        session.name = "New Session"
+        session.mode = cfg.default_mode
+        session.project = str(Path(cwd).resolve() if cwd else Path.cwd())
+        session.model = cfg.default_model
+        session.provider = cfg.default_provider
+        session.save()
+        self.agent.attach_session(session)
+        self.session_id = session.id
 
         return {
             "sessionId": self.session_id,
             "modes": {
                 "currentModeId": cfg.default_mode,
-                "availableModes": [
-                    {"id": "agent", "name": "Agent", "description": "Standard agent mode"},
-                    {"id": "plan", "name": "Plan", "description": "Planning mode"},
-                    {"id": "solo", "name": "Solo", "description": "Solo mode"},
-                ],
+                "availableModes": _DEFAULT_MODES["availableModes"],
+            },
+        }
+
+    async def session_load(self, cwd: str, mcp_servers: list, session_id: str):
+        """Load existing session."""
+        self.agent = _create_engine(cwd)
+        self.session_id = session_id
+
+        loaded = self.agent.load_session(session_id)
+        if not loaded:
+            return {"modes": _DEFAULT_MODES}
+
+        cfg = load_config()
+        return {
+            "modes": {
+                "currentModeId": cfg.default_mode,
+                "availableModes": _DEFAULT_MODES["availableModes"],
             },
         }
 
@@ -102,10 +144,17 @@ class CDHACPAdapter:
 
         async for event in self.agent.chat_stream(user_message):
             if event.type == StreamEventType.TEXT_DELTA:
-                self.send_notification("session/update", {
-                    "sessionUpdate": "agent_message_chunk",
-                    "content": {"type": "text", "text": event.text},
-                })
+                text = event.text
+                if text.lstrip().startswith("```thinking"):
+                    self.send_session_update({
+                        "sessionUpdate": "agent_thought_chunk",
+                        "content": {"type": "text", "text": text},
+                    })
+                else:
+                    self.send_session_update({
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": text},
+                    })
             elif event.type == StreamEventType.TOOL_CALL_START:
                 self.tool_calls[event.tool_id] = {
                     "sessionUpdate": "tool_call",
@@ -113,7 +162,7 @@ class CDHACPAdapter:
                     "title": event.tool_name,
                     "input": event.tool_args,
                 }
-                self.send_notification("session/update", self.tool_calls[event.tool_id])
+                self.send_session_update(self.tool_calls[event.tool_id])
             elif event.type == StreamEventType.TOOL_RESULT:
                 if event.tool_id in self.tool_calls:
                     self.tool_calls[event.tool_id].update({
@@ -129,8 +178,16 @@ class CDHACPAdapter:
                         "result": event.result_content,
                         "status": "error" if event.result_is_error else "success",
                     }
-                self.send_notification("session/update", self.tool_calls[event.tool_id])
+                self.send_session_update(self.tool_calls[event.tool_id])
+            elif event.type == StreamEventType.ERROR:
+                self.send_session_update({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": f"Error: {event.error_message}"},
+                })
+                self.agent.save_session()
+                return {"stopReason": "error", "message": event.error_message}
 
+        self.agent.save_session()
         return {"stopReason": "stop"}
 
     async def session_cancel(self, session_id: str, _meta: dict):
@@ -150,6 +207,7 @@ class JSONRPCServer:
         self.methods = {
             "initialize": self._handle_initialize,
             "session/new": self._handle_session_new,
+            "session/load": self._handle_session_load,
             "session/prompt": self._handle_session_prompt,
             "session/cancel": self._handle_session_cancel,
             "session/set_mode": self._handle_session_set_mode,
@@ -182,6 +240,13 @@ class JSONRPCServer:
         return await self.adapter.session_new(
             params.get("cwd", "."),
             params.get("mcpServers", []),
+        )
+
+    async def _handle_session_load(self, params: dict):
+        return await self.adapter.session_load(
+            params.get("cwd", "."),
+            params.get("mcpServers", []),
+            params.get("sessionId"),
         )
 
     async def _handle_session_prompt(self, params: dict):

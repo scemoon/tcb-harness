@@ -746,6 +746,10 @@ class AgentEngine:
                     logger.exception(f"Error during chat() fallback turn {turn+1}: {e}")
                     yield StreamEvent.error(str(e))
                     break
+            except Exception as e:
+                logger.exception(f"Error during chat_stream_response turn {turn+1}: {e}")
+                yield StreamEvent.error(str(e))
+                break
 
             # Track usage
             self._turn_usages.append(turn_usage)

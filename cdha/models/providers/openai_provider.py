@@ -11,8 +11,9 @@ from cdha.models.provider import ChatResponse, Message, ModelResponse, Provider,
 class OpenAIProvider(Provider):
     name = "openai"
 
-    def __init__(self, api_key: str = "", **kwargs):
+    def __init__(self, api_key: str = "", endpoint: str = "", **kwargs):
         self.api_key = api_key
+        self._endpoint = endpoint or "https://api.openai.com/v1"
         self._stream_tool_calls: dict[int, dict] = {}
 
     def is_anthropic_style(self) -> bool:
@@ -41,7 +42,7 @@ class OpenAIProvider(Provider):
 
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
-                "https://api.openai.com/v1/chat/completions",
+                f"{self._endpoint}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {key}",
                     "content-type": "application/json",
@@ -99,7 +100,7 @@ class OpenAIProvider(Provider):
         async with httpx.AsyncClient(timeout=300) as client:
             async with client.stream(
                 "POST",
-                "https://api.openai.com/v1/chat/completions",
+                f"{self._endpoint}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {key}",
                     "content-type": "application/json",
@@ -155,7 +156,7 @@ class OpenAIProvider(Provider):
         async with httpx.AsyncClient(timeout=300) as client:
             async with client.stream(
                 "POST",
-                "https://api.openai.com/v1/chat/completions",
+                f"{self._endpoint}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {key}",
                     "content-type": "application/json",

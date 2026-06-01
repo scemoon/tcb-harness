@@ -11,8 +11,9 @@ from cdha.models.provider import ChatResponse, Message, ModelResponse, Provider,
 class AnthropicProvider(Provider):
     name = "anthropic"
 
-    def __init__(self, api_key: str = "", **kwargs):
+    def __init__(self, api_key: str = "", endpoint: str = "", **kwargs):
         self.api_key = api_key
+        self._endpoint = endpoint or "https://api.anthropic.com/v1"
 
     def is_anthropic_style(self) -> bool:
         return True
@@ -28,7 +29,7 @@ class AnthropicProvider(Provider):
             )
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
+                f"{self._endpoint}/messages",
                 headers={
                     "x-api-key": key,
                     "anthropic-version": "2023-06-01",
@@ -58,7 +59,7 @@ class AnthropicProvider(Provider):
         async with httpx.AsyncClient(timeout=300) as client:
             async with client.stream(
                 "POST",
-                "https://api.anthropic.com/v1/messages",
+                f"{self._endpoint}/messages",
                 headers={
                     "x-api-key": key,
                     "anthropic-version": "2023-06-01",
@@ -108,7 +109,7 @@ class AnthropicProvider(Provider):
 
             async with client.stream(
                 "POST",
-                "https://api.anthropic.com/v1/messages",
+                f"{self._endpoint}/messages",
                 headers={
                     "x-api-key": key,
                     "anthropic-version": "2023-06-01",

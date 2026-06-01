@@ -12,6 +12,7 @@ Inspired by DeepSeek-TUI's structured message hierarchy:
 
 from __future__ import annotations
 
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -426,7 +427,11 @@ class StreamEvent:
 
 # ── Unified block type ──
 
-AgentBlock = ThinkBlock | ToolCall | ToolResult | SubAgentBlock | TextBlock
+if sys.version_info >= (3, 10):
+    AgentBlock = ThinkBlock | ToolCall | ToolResult | SubAgentBlock | TextBlock
+else:
+    from typing import Union
+    AgentBlock = Union[ThinkBlock, ToolCall, ToolResult, SubAgentBlock, TextBlock]
 StreamEventOrStr = "StreamEvent | str"  # Marker type for documentation
 
 

@@ -5,10 +5,20 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import var
+from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Button, Label, Static
+from textual.widgets import Button, Input, Label, Select, Static
 
-from cdha.config import GlobalConfig, load_config, save_config
+from cdha.config import GlobalConfig, load_config, resolve_env, save_config
+
+def _display_val(v: str | None) -> str:
+    if not v:
+        return "default"
+    resolved = resolve_env(v)
+    return resolved if resolved else v
+
+def _truncate(s: str, max_len: int) -> str:
+    return s if len(s) <= max_len else s[:max_len-1] + "…"
 
 
 SECTIONS = [
@@ -17,8 +27,6 @@ SECTIONS = [
     ("cloud",        "Cloud",         "cloud platform settings"),
     ("agent",        "Agent",         "agent parameters"),
     ("observability","Observability", "tracing & monitoring"),
-    ("shell",        "Shell",         "shell configuration"),
-    ("tui",          "TUI",           "TUI settings"),
     ("attachments",  "Attachments",   "file attachment settings"),
     ("model_auto",   "Model Auto",    "model selection hints"),
 ]
@@ -38,11 +46,13 @@ class ConfigItem(Static, can_focus=True):
         self.item_type = item_type
 
     def render(self) -> str:
-        if self.item_type == "section":
-            return f"> {self.label}"
+        if self.item_type == "section" or self.item_type == "provider":
+            return f"> {self.label:<18} {self.value}"
         if self.item_type == "back":
             return f"< {self.label}"
-        return f"  {self.label:<18} {self.value}"
+        if self.item_type == "add_model":
+            return f"  {self.label}"
+        return f"  {self.label:<18} {_truncate(self.value, 36)}"
 
 
 CSS = """
@@ -55,8 +65,8 @@ ConfigScreen {
 }
 
 #dialog {
-    width: 60;
-    height: 25;
+    width: 64;
+    height: 27;
     background: #000;
     border: solid #555;
 }
@@ -94,6 +104,14 @@ ConfigItem:hover, ConfigItem.-focus {
     background: #444;
 }
 
+#shortcuts {
+    height: 1;
+    background: #222;
+    color: #888;
+    padding: 0 1;
+    content-align: left middle;
+}
+
 #button-row {
     height: 3;
     background: #333;
@@ -103,7 +121,95 @@ ConfigItem:hover, ConfigItem.-focus {
 Button {
     margin: 0 1;
 }
+
+Button:disabled {
+    color: #666;
+}
 """
+
+
+class EditFieldScreen(ModalScreen[str]):
+    def __init__(self, field_label: str, current_value: str):
+        super().__init__()
+        self.field_label = field_label
+        self.current_value = current_value
+
+    BINDINGS = [
+        Binding("escape", "dismiss_modal", "Cancel"),
+    ]
+
+    CSS = """
+    EditFieldScreen { background: rgba(0,0,0,0.7); align: center middle; }
+    #edit-dialog { width: 50; height: 7; background: #111; border: solid #555; }
+    #edit-label { height: 1; background: #333; color: #fff; padding: 0 1; }
+    #edit-input { height: 3; padding: 0 1; }
+    #edit-buttons { height: 3; background: #222; align: center middle; }
+    Button { margin: 0 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="edit-dialog"):
+            yield Label(f"  {self.field_label}", id="edit-label")
+            yield Input(value=self.current_value, id="edit-input")
+            with Horizontal(id="edit-buttons"):
+                yield Button("Cancel", id="edit-cancel")
+                yield Button("Save", id="edit-save")
+
+    @on(Button.Pressed, "#edit-save")
+    def on_save(self) -> None:
+        self.dismiss(self.query_one("#edit-input", Input).value)
+
+    @on(Button.Pressed, "#edit-cancel")
+    def on_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Input.Submitted)
+    def on_input_submitted(self) -> None:
+        self.dismiss(self.query_one("#edit-input", Input).value)
+
+    def action_dismiss_modal(self) -> None:
+        self.dismiss(None)
+
+
+class SelectFieldScreen(ModalScreen[str]):
+    def __init__(self, field_label: str, options: list[tuple[str, str]], current_value: str):
+        super().__init__()
+        self.field_label = field_label
+        self.options = options
+        self.current_value = current_value
+
+    BINDINGS = [
+        Binding("escape", "dismiss_modal", "Cancel"),
+    ]
+
+    CSS = """
+    SelectFieldScreen { background: rgba(0,0,0,0.7); align: center middle; }
+    #select-dialog { width: 50; height: 10; background: #111; border: solid #555; }
+    #select-label { height: 1; background: #333; color: #fff; padding: 0 1; }
+    #select-widget { height: 3; padding: 0 1; }
+    #select-buttons { height: 3; background: #222; align: center middle; }
+    Button { margin: 0 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="select-dialog"):
+            yield Label(f"  {self.field_label}", id="select-label")
+            yield Select(self.options, value=self.current_value, id="select-widget")
+            with Horizontal(id="select-buttons"):
+                yield Button("Cancel (ESC)", id="select-cancel")
+                yield Button("Confirm", id="select-confirm")
+
+    @on(Button.Pressed, "#select-confirm")
+    def on_confirm(self) -> None:
+        select = self.query_one("#select-widget", Select)
+        self.dismiss(str(select.value) if select.value != Select.NULL else None)
+
+    @on(Button.Pressed, "#select-cancel")
+    def on_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_dismiss_modal(self) -> None:
+        self.dismiss(None)
 
 
 class ConfigScreen(App):
@@ -111,13 +217,22 @@ class ConfigScreen(App):
     CSS = CSS
 
     BINDINGS = [
-        Binding("up", "cursor_up", show=False),
-        Binding("down", "cursor_down", show=False),
-        Binding("left", "go_back", show=False),
-        Binding("right", "go_enter", show=False),
-        Binding("enter", "confirm", show=False),
+        Binding("up", "cursor_up", "Up", show=False),
+        Binding("down", "cursor_down", "Down", show=False),
+        Binding("left", "go_back", "Back"),
+        Binding("right", "go_enter", "Select"),
+        Binding("enter", "confirm", "Confirm"),
         Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+q", "quit_app", "Quit"),
     ]
+
+    MODE_OPTIONS = [
+        ("Agent", "agent"),
+        ("Plan", "plan"),
+        ("Solo", "solo"),
+    ]
+
+    LOG_LEVELS = ["debug", "info", "warn", "error"]
 
     cursor: var[int] = var(0)
     view: var[str] = var("menu")
@@ -129,10 +244,11 @@ class ConfigScreen(App):
         self._breadcrumb = ["Menu"]
         self._current_section: str | None = None
         self._section_fields: list[ConfigItem] = []
+        self._current_provider: str | None = None
 
     @property
     def current_items(self) -> list[ConfigItem]:
-        return self._section_fields if self.view == "section" else list(self.section_items)
+        return self._section_fields if self.view in ("section", "provider") else list(self.section_items)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
@@ -140,10 +256,11 @@ class ConfigScreen(App):
             yield Label("Menu", id="breadcrumb")
             with Widget(id="content"):
                 pass
+            yield Label("", id="shortcuts")
             with Horizontal(id="button-row"):
-                yield Button("Save", id="save")
-                yield Button("Reset", id="reset")
-                yield Button("Quit", id="quit")
+                yield Button("Confirm (↵)", id="save")
+                yield Button("Cancel (ESC)", id="cancel")
+                yield Button("Quit (Ctrl+Q)", id="quit")
 
     def on_mount(self) -> None:
         self._build_menu()
@@ -171,7 +288,11 @@ class ConfigScreen(App):
                 self._section_fields.append(ConfigItem("log_level", "Log", cfg.log_level))
             case "providers":
                 for pid, pcfg in cfg.providers.items():
-                    self._section_fields.append(ConfigItem(f"providers.{pid}.api_key", PROVIDER_NAMES.get(pid, pid), pcfg.api_key and "set" or "unset"))
+                    n_models = len(pcfg.models)
+                    ak = _truncate(_display_val(pcfg.api_key), 24)
+                    ep = _truncate(_display_val(pcfg.endpoint), 20)
+                    status = f"ep:{ep} ak:{ak}"
+                    self._section_fields.append(ConfigItem(pid, PROVIDER_NAMES.get(pid, pid), status, item_type="provider"))
             case "cloud":
                 for cid, ccfg in cfg.clouds.items():
                     self._section_fields.append(ConfigItem(f"clouds.{cid}.region", cid.upper(), ccfg.region))
@@ -180,15 +301,33 @@ class ConfigScreen(App):
                 self._section_fields.append(ConfigItem("agent.timeout_seconds", "Timeout", str(cfg.agent.timeout_seconds)))
             case "observability":
                 self._section_fields.append(ConfigItem("observability.trace_dir", "Trace Dir", cfg.observability.trace_dir))
-            case "shell":
-                self._section_fields.append(ConfigItem("shell.default_shell", "Shell", cfg.shell.default_shell))
-            case "tui":
-                self._section_fields.append(ConfigItem("tui.theme", "Theme", cfg.tui.theme))
             case "attachments":
                 self._section_fields.append(ConfigItem("attachments.max_size_mb", "Max Size", str(cfg.attachments.max_size_mb)))
             case "model_auto":
                 self._section_fields.append(ConfigItem("model_auto.simple_tasks", "Simple", cfg.model_auto.simple_tasks))
         self.cursor = 0
+
+    def _build_provider(self, provider_id: str) -> None:
+        self._section_fields = [
+            ConfigItem("__back__", "Back to Providers", item_type="back")
+        ]
+        pcfg = self._cfg.providers.get(provider_id)
+        if pcfg:
+            self._section_fields.append(ConfigItem(f"{provider_id}.api_key", "API Key", _display_val(pcfg.api_key)))
+            self._section_fields.append(ConfigItem(f"{provider_id}.endpoint", "Endpoint", _display_val(pcfg.endpoint)))
+            for i, m in enumerate(pcfg.models):
+                self._section_fields.append(ConfigItem(f"{provider_id}.models.{i}", "Model", m))
+            self._section_fields.append(ConfigItem("__add_model__", "+ Add Model", item_type="add_model"))
+        self.cursor = 0
+
+    def _update_shortcuts(self) -> None:
+        label = self.query_one("#shortcuts", Label)
+        if self.view == "menu":
+            label.update("")
+        elif self.view == "provider":
+            label.update("← Back to Providers  ↵ Confirm")
+        else:
+            label.update("← Back to Menu  → Select  ↵ Confirm")
 
     def _refresh_items(self) -> None:
         content = self.query_one("#content", Widget)
@@ -196,6 +335,7 @@ class ConfigScreen(App):
         for item in self.current_items:
             content.mount(item)
         self.query_one("#breadcrumb", Label).update(" / ".join(self._breadcrumb))
+        self._update_shortcuts()
         self._clamp_cursor()
 
     def _clamp_cursor(self) -> None:
@@ -226,20 +366,96 @@ class ConfigScreen(App):
         items[self.cursor].focus()
 
     def action_go_back(self) -> None:
-        if self.view == "section":
+        if self.view == "provider":
+            self.view = "section"
+            self._breadcrumb = ["Menu", "Providers"]
+            self._current_provider = None
+            self._build_section(self._current_section or "providers")
+            self._refresh_items()
+        elif self.view == "section":
             self.view = "menu"
             self._breadcrumb = ["Menu"]
             self._current_section = None
             self.cursor = 0
+            self._build_menu()
             self._refresh_items()
-        else:
-            self.exit()
 
     def action_go_enter(self) -> None:
         self._activate_current()
 
     def action_confirm(self) -> None:
         self._activate_current()
+
+    def _edit_field(self, item: ConfigItem) -> None:
+        key = item.key
+        label = item.label
+        options = self._get_enum_options(key)
+        if options is not None:
+            val = item.value if any(v == item.value for _, v in options) else options[0][1]
+            self.push_screen(SelectFieldScreen(label, options, val), lambda v, k=key: self._on_field_edited(v, k))
+        else:
+            self.push_screen(EditFieldScreen(label, item.value), lambda v, k=key: self._on_field_edited(v, k))
+
+    def _get_enum_options(self, key: str) -> list[tuple[str, str]] | None:
+        if key == "default_mode":
+            return self.MODE_OPTIONS
+        if key == "log_level":
+            return [(v, v) for v in self.LOG_LEVELS]
+        if key == "default_provider":
+            pids = list(self._cfg.providers.keys())
+            return [(PROVIDER_NAMES.get(v, v), v) for v in pids]
+        if key == "default_cloud":
+            cids = list(self._cfg.clouds.keys())
+            return [(v.upper(), v) for v in cids]
+        if key == "default_model":
+            pcfg = self._cfg.providers.get(self._cfg.default_provider)
+            if pcfg and pcfg.models:
+                return [(m, m) for m in pcfg.models]
+        return None
+
+    def _apply_field_value(self, key: str, value: str) -> None:
+        parts = key.split(".")
+        if len(parts) == 1:
+            setattr(self._cfg, parts[0], value)
+        elif len(parts) == 2:
+            parent = getattr(self._cfg, parts[0], None)
+            if parent is not None:
+                setattr(parent, parts[1], value)
+            elif parts[0] in self._cfg.providers:
+                setattr(self._cfg.providers[parts[0]], parts[1], value)
+            elif parts[0] in self._cfg.clouds:
+                setattr(self._cfg.clouds[parts[0]], parts[1], value)
+        elif len(parts) == 3 and parts[0] == "providers":
+            pcfg = self._cfg.providers.get(parts[1])
+            if pcfg:
+                setattr(pcfg, parts[2], value)
+        elif len(parts) == 3 and parts[0] == "clouds":
+            ccfg = self._cfg.clouds.get(parts[1])
+            if ccfg:
+                setattr(ccfg, parts[2], value)
+
+    def _on_field_edited(self, value: str | None, key: str = "") -> None:
+        if value is None:
+            return
+        self._apply_field_value(key, value)
+        for item in self.current_items:
+            if item.key == key:
+                item.value = value
+                if item.item_type == "field":
+                    item.refresh()
+                break
+        save_config(self._cfg)
+
+    def _on_model_added(self, value: str | None) -> None:
+        if not value or not self._current_provider:
+            return
+        pcfg = self._cfg.providers.get(self._current_provider)
+        if pcfg:
+            pcfg.models.append(value)
+            save_config(self._cfg)
+            self._build_provider(self._current_provider)
+            self.cursor = len(self._section_fields) - 1
+            self._refresh_items()
 
     def _activate_current(self) -> None:
         items = self.current_items
@@ -253,10 +469,25 @@ class ConfigScreen(App):
             self._build_section(item.key)
             self.cursor = 0
             self._refresh_items()
+        elif item.item_type == "provider":
+            self.view = "provider"
+            self._current_provider = item.key
+            self._breadcrumb = ["Menu", "Providers", item.label]
+            self._build_provider(item.key)
+            self.cursor = 0
+            self._refresh_items()
+        elif item.item_type == "field":
+            self._edit_field(item)
+        elif item.item_type == "add_model":
+            self.push_screen(EditFieldScreen("Model Name", ""), self._on_model_added)
         elif item.item_type == "back":
             self.action_go_back()
 
     def action_cancel(self) -> None:
+        if self.view != "menu":
+            self.action_go_back()
+
+    def action_quit_app(self) -> None:
         self.exit()
 
     def _on_click(self, event) -> None:
@@ -264,19 +495,12 @@ class ConfigScreen(App):
 
     @on(Button.Pressed, "#save")
     def on_save(self) -> None:
-        save_config(self._cfg)
         self.notify("Configuration saved")
         self.exit()
 
-    @on(Button.Pressed, "#reset")
-    def on_reset(self) -> None:
-        self._cfg = load_config()
-        self.cursor = 0
-        if self.view == "menu":
-            self._build_menu()
-        elif self._current_section:
-            self._build_section(self._current_section)
-        self._refresh_items()
+    @on(Button.Pressed, "#cancel")
+    def on_cancel_button(self) -> None:
+        self.exit()
 
     @on(Button.Pressed, "#quit")
     def on_quit(self) -> None:

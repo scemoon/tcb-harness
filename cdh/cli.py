@@ -1,29 +1,36 @@
 import sys
+from pathlib import Path
 
 import click
 
 from cdha.cli import cli as cdha_cli
 from cdha.cli import setup_logging
-from cdha.config import ensure_dirs, load_config, save_config
+from cdha.config import ensure_dirs, load_config
 from tui.app import A2TUIApp
 
 
+_CDH_DIR = Path.home() / ".cdh"
+
 _COMMON_HELP = """
 \b
-Quick config:
-  cdh model <name>      Set default model
-  cdh provider <name>   Set default provider
-  cdh mode <name>       Set default mode
-  cdh cloud <name>      Set default cloud
-
-\b
-TUI config editor:
-  cdh config            Open interactive configuration UI
+Usage:
+  cdh                         Launch TUI (agent store)
+  cdh tui                     Launch TUI (agent store)
+  cdh tui --agent cdh.cloud-dev-harness   Launch TUI with agent
+  cdh help                    Show this help message
+  cdh config                  Configuration editor (TUI)
+  cdh config set              Set a config value
+  cdh config get              Get a config value
+  cdh config list             Show full YAML configuration
+  cdh logs                    View application logs
+  cdh project                 Project management
+  cdh version                 Show version information
 
 \b
 Paths:
   Config   ~/.cdh/cdh.config.yaml
   Logs     ~/.cdh/logs/
+  Projects ~/.cdh/projects/
 """
 
 
@@ -41,148 +48,18 @@ def cli(ctx):
     CDH (Cloud Dev Harness) is an AI agent framework with LLM provider
     integration, session management, and a Textual-based TUI.
 
-    Run without arguments to launch the TUI.
+    Run without arguments to open the agent store. Use cdh tui --agent
+    <identity> to launch a specific agent directly.
     """
     if ctx.invoked_subcommand is None:
-        ctx.invoke(tui)
+        ensure_dirs()
+        cfg = load_config()
+        setup_logging(cfg.log_level)
+        app = A2TUIApp()
+        app.run()
 
 
-@cli.command(
-    short_help="Launch the TUI",
-)
-@click.option("--mode", default=None, help="Startup mode (plan|agent|solo)")
-@click.option("--project", default=None, help="Project directory to open on startup")
-def tui(mode, project):
-    """
-    Launch the CDH TUI interface.
-
-    This is the default command when no subcommand is given.
-
-    \b
-    Examples:
-      cdh                    Start TUI
-      cdh tui --mode plan    Start in plan mode
-      cdh tui --project .    Start with current project
-    """
-    ensure_dirs()
-    cfg = load_config()
-    setup_logging(cfg.log_level)
-
-    agent_data = {
-        "identity": "cdh.cloud-dev-harness",
-        "name": "CDH Agent",
-        "short_name": "cdh",
-        "url": "https://github.com/cloud-dev-harness/cdh",
-        "protocol": "acp",
-        "type": "coding",
-        "author_name": "CDH Team",
-        "author_url": "https://github.com/cloud-dev-harness",
-        "publisher_name": "CDH Team",
-        "publisher_url": "https://github.com/cloud-dev-harness",
-        "description": "Cloud Dev Harness Agent",
-        "tags": [],
-        "run_command": {"*": f"{sys.executable} -m cdha.agent.cdh_agent_acp"},
-        "actions": {},
-    }
-
-    app = A2TUIApp(project_dir=project, agent_data=agent_data)
-    app.run()
-
-
-CONFIG_KEY_MAP = {
-    "mode": ("default_mode",),
-    "model": ("default_model",),
-    "provider": ("default_provider",),
-    "cloud": ("default_cloud",),
-    "log-level": ("log_level",),
-}
-
-def _set_config(key: str, value: str):
-    cfg = load_config()
-    attrs = CONFIG_KEY_MAP.get(key)
-    if not attrs:
-        return False
-    for attr in attrs:
-        setattr(cfg, attr, value)
-    save_config(cfg)
-    click.echo(f"{key} = {value}")
-    return True
-
-
-@cli.command(short_help="Set default model")
-@click.argument("value")
-def model(value):
-    """
-    Set the default model used by the CDH agent.
-
-    \b
-    Examples:
-      cdh model claude-opus-4.7    Use Claude Opus 4.7
-      cdh model deepseek-v4-flash  Use DeepSeek V4 Flash
-      cdh model MiniMax-M2.7       Use MiniMax M2.7
-    """
-    _set_config("model", value)
-
-
-@cli.command(short_help="Set default provider")
-@click.argument("value")
-def provider(value):
-    """
-    Set the default LLM provider.
-
-    \b
-    Supported providers:
-      anthropic   Claude models
-      openai      GPT models
-      deepseek    DeepSeek models
-      minimax     MiniMax models
-      minimaxi    MiniMaxi models
-      glm         GLM models
-      ollama      Local Ollama models
-
-    \b
-    Examples:
-      cdh provider anthropic    Use Anthropic
-      cdh provider deepseek     Use DeepSeek
-      cdh provider ollama       Use local Ollama
-    """
-    _set_config("provider", value)
-
-
-@cli.command(short_help="Set default mode (agent|plan|solo)")
-@click.argument("value")
-def mode(value):
-    """
-    Set the default agent startup mode.
-
-    \b
-    Modes:
-      agent   Full agent mode with tool access
-      plan    Planning-only mode
-      solo    Solo/chat mode
-
-    \b
-    Examples:
-      cdh mode agent    Full agent mode
-      cdh mode plan     Planning mode
-    """
-    _set_config("mode", value)
-
-
-@cli.command(short_help="Set default cloud")
-@click.argument("value")
-def cloud(value):
-    """
-    Set the default cloud platform for deployments.
-
-    \b
-    Examples:
-      cdh cloud tcb    Tencent Cloud Base
-    """
-    _set_config("cloud", value)
-
-
-# --- config group (overrides cdha's config) ---
+# --- config group ---
 
 @cli.group(
     invoke_without_command=True,
@@ -190,8 +67,7 @@ def cloud(value):
 )
 @click.pass_context
 def config(ctx):
-    """
-    Open the interactive TUI configuration editor.
+    """Open the interactive TUI configuration editor.
 
     Launches a Textual-based UI for editing all CDH settings
     including providers, models, cloud platforms, agent parameters.
@@ -202,45 +78,176 @@ def config(ctx):
 
 
 @config.command(short_help="Get a config value")
-@click.argument("key")
+@click.argument("key", required=False)
 def get(key):
-    """Get a single config value by key.
+    """Get configuration values.
 
-    \b
-    Keys: mode, model, provider, cloud, log-level
+    If KEY is provided, show the value for that key.
+    If no KEY, show all configuration with current values.
     """
     cfg = load_config()
-    mapping = {"mode": cfg.default_mode, "model": cfg.default_model,
-               "provider": cfg.default_provider, "cloud": cfg.default_cloud,
-               "log-level": cfg.log_level}
-    val = mapping.get(key)
-    if val is None:
-        click.echo(f"Unknown key: {key}")
+    mapping = {
+        "mode": cfg.default_mode,
+        "model": cfg.default_model,
+        "provider": cfg.default_provider,
+        "cloud": cfg.default_cloud,
+        "log-level": cfg.log_level,
+    }
+    hints = {
+        "mode": "agent | plan | solo",
+        "model": "model name (e.g. MiniMax-M2.7)",
+        "provider": "anthropic | openai | deepseek | minimax | minimaxi | glm | ollama",
+        "cloud": "tcb",
+        "log-level": "debug | info | warn | error",
+    }
+    if key:
+        val = mapping.get(key)
+        if val is None:
+            click.echo(f"Unknown key: {key}\nAvailable keys: {', '.join(mapping)}")
+        else:
+            click.echo(f"{key} = {val}")
     else:
-        click.echo(val)
+        click.echo("Current configuration:")
+        for k, v in mapping.items():
+            hint = hints.get(k, "")
+            click.echo(f"  {k:12} = {v:<20}  ({hint})")
 
 
-@config.command(short_help="Unset/reset a config value")
-@click.argument("key")
-def unset(key):
-    """Reset a config value to its default."""
-    cfg = load_config()
-    defaults = {"mode": "agent", "model": "", "provider": "minimaxi",
-                "cloud": "tcb", "log-level": "info"}
-    if key not in defaults:
-        click.echo(f"Unknown key: {key}")
-        return
-    _set_config(key, defaults[key])
-
-# Reuse subcommands from cdha (set, list)
+# Reuse set/list from cdha's config group
 for _cfg_cmd in cdha_cli.get_command(None, "config").commands.values():
-    if _cfg_cmd.name not in config.commands:
+    if _cfg_cmd.name not in config.commands and _cfg_cmd.name not in ("tui",):
         config.add_command(_cfg_cmd)
 
 
-# Attach remaining cdha subcommands (skip config/init since we override or remove)
+# --- logs command ---
+
+@cli.command(short_help="View application logs")
+@click.option("--tail", "-t", default=20, help="Number of recent log lines to show")
+@click.option("--follow", "-f", is_flag=True, help="Follow log output")
+def logs(tail, follow):
+    """View CDH application logs.
+
+    \b
+    Examples:
+      cdh logs              Show last 20 log lines
+      cdh logs --tail 100   Show last 100 lines
+      cdh logs --follow     Follow log output
+    """
+    log_file = _CDH_DIR / "logs" / "cdh.log"
+    if not log_file.exists():
+        click.echo("No log file found.")
+        return
+    if follow:
+        click.echo(f"Following {log_file}...")
+        import subprocess
+        subprocess.run(["tail", "-f", str(log_file)])
+    else:
+        import subprocess
+        subprocess.run(["tail", "-n", str(tail), str(log_file)])
+
+
+# --- project command ---
+
+@cli.command(short_help="Project management")
+@click.argument("action", type=click.Choice(["list", "show"]), default="list")
+@click.argument("name", required=False)
+def project(action, name):
+    """Manage CDH projects.
+
+    \b
+    Actions:
+      list           List all projects
+      show <name>    Show project details
+
+    \b
+    Examples:
+      cdh project          List projects
+      cdh project list     List projects
+      cdh project show my-project   Show project details
+    """
+    projects_dir = _CDH_DIR / "projects"
+    projects_dir.mkdir(parents=True, exist_ok=True)
+
+    if action == "list":
+        project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
+        if not project_files:
+            click.echo("No projects found.")
+            return
+        click.echo("Projects:")
+        for pf in sorted(project_files):
+            click.echo(f"  {pf.stem}")
+    elif action == "show":
+        if not name:
+            click.echo("Usage: cdh project show <name>")
+            return
+        for ext in ["yaml", "yml", "json"]:
+            pf = projects_dir / f"{name}.{ext}"
+            if pf.exists():
+                click.echo(pf.read_text())
+                return
+        click.echo(f"Project '{name}' not found.")
+
+
+# --- help command ---
+
+# --- tui command ---
+
+@cli.command(short_help="Launch the TUI")
+@click.option("--project-dir", "-d", default=".", help="Project directory")
+@click.option("--agent", "agent_identity", default=None, help="Agent identity to auto-launch (e.g. cdh.cloud-dev-harness)")
+@click.pass_context
+def tui(ctx, project_dir, agent_identity):
+    """Launch the CDH TUI (Textual User Interface).
+
+    By default opens the agent store, showing your configured launcher
+    agents. Use --agent to skip the store and directly launch an agent.
+    """
+    ensure_dirs()
+    cfg = load_config()
+    setup_logging(cfg.log_level)
+    app = A2TUIApp(
+        project_dir=project_dir,
+        launch_agent_identity=agent_identity,
+    )
+    app.run()
+
+
+# --- help command ---
+
+@cli.command(short_help="Show help for commands")
+@click.argument("command", required=False)
+def help_cmd(command):
+    """Show help for cdh commands and usage information.
+
+    \b
+    Examples:
+      cdh help          Show top-level help
+      cdh help config   Show config subcommand help
+      cdh help logs     Show logs command help
+    """
+    if command:
+        cmd = cli.commands.get(command)
+        if cmd:
+            click.echo(cmd.get_help(click.Context(cmd)))
+        else:
+            click.echo(f"Unknown command: {command}")
+    else:
+        click.echo(cli.get_help(click.Context(cli)))
+
+
+# --- version command ---
+
+@cli.command(short_help="Show version info")
+def version():
+    """Show CDH version and build information."""
+    from cdha import __version__
+    click.echo(f"cdh version {__version__}")
+
+
+# Attach remaining cdha subcommands selectively
+_skip = {"config", "init", "set", "list", "tui", "help", "version"}
 for cmd_name in cdha_cli.commands:
-    if cmd_name in ("config", "init"):
+    if cmd_name in _skip:
         continue
     cli.add_command(cdha_cli.get_command(None, cmd_name))
 

@@ -38,10 +38,29 @@ def init():
 
 
 @cli.command()
-@click.argument("key")
+@click.argument("key", required=False)
 @click.argument("value", required=False)
 def set(key, value):
-    """Set a config value."""
+    """Set a config value.
+
+    \b
+    Available keys:
+      mode       agent | plan | solo
+      model       model name (e.g. MiniMax-M2.7)
+      provider   anthropic | openai | deepseek | minimax | minimaxi | glm | ollama
+      cloud      tcb
+      log-level  debug | info | warn | error
+
+    \b
+    Examples:
+      cdh set mode agent
+      cdh set model deepseek-v4-flash
+      cdh set provider ollama
+    """
+    if not key:
+        click.echo("Usage: cdh set <key> <value>")
+        click.echo("Available keys: mode, model, provider, cloud, log-level")
+        return
     cfg = load_config()
     if key == "mode":
         cfg.default_mode = value or "agent"
@@ -76,10 +95,28 @@ def config():
 
 
 @config.command()
-@click.argument("key")
+@click.argument("key", required=False)
 @click.argument("value", required=False)
 def set(key, value):
-    """Set a config value."""
+    """Set a config value.
+
+    \b
+    Available keys:
+      mode       agent | plan | solo
+      model       model name (e.g. MiniMax-M2.7)
+      provider   anthropic | openai | deepseek | minimax | minimaxi | glm | ollama
+      cloud      tcb
+      log-level  debug | info | warn | error
+
+    \b
+    Examples:
+      cdh config set mode agent
+      cdh config set model deepseek-v4-flash
+    """
+    if not key:
+        click.echo("Usage: cdh config set <key> <value>")
+        click.echo("Available keys: mode, model, provider, cloud, log-level")
+        return
     cfg = load_config()
     if key == "mode":
         cfg.default_mode = value or "agent"
@@ -100,7 +137,7 @@ def set(key, value):
 
 @config.command()
 def list():
-    """Show all configuration."""
+    """Show full YAML configuration with all sections."""
     cfg = load_config()
     import yaml
     from cdha.config import _dataclass_to_dict

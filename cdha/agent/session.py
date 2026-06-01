@@ -82,6 +82,10 @@ class AgentSession:
     def messages(self) -> list[dict]:
         return self._data.messages
 
+    @messages.setter
+    def messages(self, value: list[dict]) -> None:
+        self._data.messages = value
+
     @property
     def lifecycle_state(self) -> dict:
         return self._data.lifecycle_state

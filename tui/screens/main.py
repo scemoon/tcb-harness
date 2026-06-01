@@ -73,7 +73,7 @@ class MainScreen(Screen, can_focus=False):
     SESSION_NAVIGATION_GROUP = Binding.Group(description="Sessions")
     BINDINGS = [
         Binding("ctrl+b,f20", "show_sidebar", "Sidebar"),
-        Binding("ctrl+h", "go_home", "Home"),
+        Binding("ctrl+g", "go_home", "Home", priority=True),
         Binding(
             "ctrl+left_square_bracket",
             "session_previous",

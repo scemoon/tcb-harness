@@ -19,13 +19,6 @@ class ProviderConfig:
 
 
 @dataclass
-class CloudConfig:
-    region: str = "ap-shanghai"
-    env_id: str = ""
-    credentials: str = ""
-
-
-@dataclass
 class ObservabilityConfig:
     trace_enabled: bool = True
     trace_exporter: str = "file"
@@ -50,18 +43,18 @@ class AttachmentsConfig:
 
 
 @dataclass
-class ShellConfig:
-    default_shell: str = "auto"
-    startup_commands: list[str] = field(default_factory=list)
-    allowed_commands: list[str] = field(default_factory=list)
-
-
-@dataclass
 class AgentConfig:
     max_iterations: int = 20
     timeout_seconds: int = 300
     allow_shell_commands: bool = True
     shell_command_whitelist: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CloudConfig:
+    region: str = "ap-shanghai"
+    env_id: str = ""
+    credentials: str = ""
 
 
 @dataclass
@@ -81,9 +74,7 @@ class GlobalConfig:
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
     clouds: dict[str, CloudConfig] = field(default_factory=dict)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
-    tui: TuiConfig = field(default_factory=TuiConfig)
     attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
-    shell: ShellConfig = field(default_factory=ShellConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     model_auto: ModelAutoConfig = field(default_factory=ModelAutoConfig)
     current_project: str = ""
@@ -149,6 +140,7 @@ def _write_default_config():
         "providers": {
             "anthropic": {
                 "api_key": "${ANTHROPIC_API_KEY}",
+                "endpoint": "https://api.anthropic.com/v1",
                 "models": [
                     "claude-opus-4.7",
                     "claude-opus-4.7-fast"
@@ -156,6 +148,7 @@ def _write_default_config():
             },
             "openai": {
                 "api_key": "${OPENAI_API_KEY}",
+                "endpoint": "https://api.openai.com/v1",
                 "models": ["gpt-5.5-pro", "gpt-5.5"],
             },
             "ollama": {
@@ -164,18 +157,22 @@ def _write_default_config():
             },
             "deepseek": {
                 "api_key": "${DEEPSEEK_API_KEY}",
+                "endpoint": "https://api.deepseek.com/v1",
                 "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
             },
             "minimax": {
                 "api_key": "${MINIMAX_API_KEY}",
-                 "models": ["MiniMax-M2.7", "MiniMax-M2.5"],
+                "endpoint": "https://api.minimax.com/v1",
+                "models": ["MiniMax-M2.7", "MiniMax-M2.5"],
             },
             "minimaxi": {
                 "api_key": "${MINMAXI_API_KEY}",
+                "endpoint": "https://api.minimaxi.com/v1",
                 "models": ["MiniMax-M2.7", "MiniMax-M2.5"],
             },
             "glm": {
                 "api_key": "${GLM_API_KEY}",
+                "endpoint": "https://open.bigmodel.cn/api/paas/v4",
                 "models": ["glm-5.1", "glm-5"],
             },
         },
@@ -192,19 +189,10 @@ def _write_default_config():
             "otlp_endpoint": "http://localhost:4317",
             "trace_dir": "~/.cdh/traces",
         },
-        "tui": {
-            "theme": "auto",
-            "show_right_panel": True,
-            "command_history_size": 100,
-        },
         "attachments": {
             "max_size_mb": 10,
             "allowed_extensions": [".txt", ".md", ".py", ".json", ".yaml", ".sql"],
             "sandbox_read": True,
-        },
-        "shell": {
-            "default_shell": "auto",
-            "startup_commands": [],
         },
         "agent": {
             "max_iterations": 20,

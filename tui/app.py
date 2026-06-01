@@ -290,6 +290,7 @@ class A2TUIApp(App, inherit_bindings=False):
         agent_data: AgentData | None = None,
         project_dir: str | None = None,
         mode: str | None = None,
+        launch_agent_identity: str | None = None,
     ) -> None:
         """TUI app.
 
@@ -297,7 +298,7 @@ class A2TUIApp(App, inherit_bindings=False):
             agent_data: Agent data to run.
             project_dir: Project directory.
             mode: Initial mode.
-            agent: Agent identity or shor name.
+            launch_agent_identity: Agent identity to auto-launch on startup.
         """
         self.settings_changed_signal: Signal[tuple[int, object]] = Signal(
             self, "settings_changed"
@@ -305,6 +306,7 @@ class A2TUIApp(App, inherit_bindings=False):
         self.agent_data = agent_data
 
         self._initial_mode = mode
+        self._launch_agent_identity = launch_agent_identity
         self.version_meta: VersionMeta | None = None
         self._supports_pyperclip: bool | None = None
         self._terminal_title_flash_timer: Timer | None = None
@@ -705,11 +707,24 @@ class A2TUIApp(App, inherit_bindings=False):
         await self.switch_mode(session_details.mode_name)
         return session_details
 
+    def _resolve_launch_agent(self) -> str | None:
+        identity = self._launch_agent_identity
+        if identity:
+            return identity
+        agents = self.settings.get("launcher.agents", str).splitlines()
+        for agent in agents:
+            agent = agent.strip()
+            if agent:
+                return agent
+        return None
+
     async def on_mount(self) -> None:
         self.capture_event("tui-run")
         self.anon_id  # Created on frst reference
         if mode := self._initial_mode:
             self.switch_mode(mode)
+        elif agent_identity := self._resolve_launch_agent():
+            self.launch_agent(agent_identity, project_path=Path(self.project_dir))
         else:
             self.push_screen("store")
 
