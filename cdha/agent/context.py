@@ -63,6 +63,23 @@ class ContextManager:
     def add_system(self, content: str) -> None:
         self.add_message("system", content)
 
+    def replace_system_section(self, marker: str, new_content: str) -> bool:
+        """Replace a tagged system message by marker substring.
+
+        Args:
+            marker: Substring to identify the system message to replace.
+            new_content: New content for the system message.
+
+        Returns:
+            True if a matching system message was found and replaced.
+        """
+        for m in self.messages:
+            if m.role == "system" and isinstance(m.content, str) and marker in m.content:
+                m.content = new_content
+                self._update_token_count()
+                return True
+        return False
+
     def add_user(self, content: str) -> None:
         self.add_message("user", content)
 

@@ -29,9 +29,9 @@ from cdha.models.providers.ollama_provider import OllamaProvider
 _DEFAULT_MODES = {
     "currentModeId": "agent",
     "availableModes": [
-        {"id": "agent", "name": "Agent", "description": "Standard agent mode"},
-        {"id": "plan", "name": "Plan", "description": "Planning mode"},
-        {"id": "solo", "name": "Solo", "description": "Solo mode"},
+        {"id": "agent", "name": "Agent", "description": "Full development agent with all tools enabled"},
+        {"id": "plan",  "name": "Plan",  "description": "Read-only planning and analysis. Edits and shell commands require approval."},
+        {"id": "solo",  "name": "Solo",  "description": "Independent mode with plan-first workflow. Edits allowed, shell commands require approval."},
     ],
 }
 
@@ -96,6 +96,7 @@ class CDHACPAdapter:
         """Create new session."""
         cfg = load_config()
         self.agent = _create_engine(cwd)
+        self.agent.set_agent(cfg.default_mode)
 
         session = AgentSession()
         session.name = "New Session"
@@ -121,10 +122,11 @@ class CDHACPAdapter:
         self.session_id = session_id
 
         loaded = self.agent.load_session(session_id)
+        cfg = load_config()
+        self.agent.set_agent(cfg.default_mode)
         if not loaded:
             return {"modes": _DEFAULT_MODES}
 
-        cfg = load_config()
         return {
             "modes": {
                 "currentModeId": cfg.default_mode,
@@ -197,8 +199,14 @@ class CDHACPAdapter:
         return {}
 
     async def session_set_mode(self, session_id: str, mode_id: str):
-        """Set session mode."""
-        return {}
+        """Set session mode — propagates to engine and notifies TUI."""
+        if self.agent:
+            self.agent.set_agent(mode_id)
+            self.send_session_update({
+                "sessionUpdate": "current_mode_update",
+                "currentModeId": mode_id,
+            })
+        return {"modeId": mode_id}
 
 
 class JSONRPCServer:

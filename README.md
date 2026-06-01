@@ -4,15 +4,20 @@ AI-powered terminal-based development framework for cloud-native applications, f
 
 ## Features
 
-- **TUI Chat Interface** — Stream AI responses with rich markdown rendering, thinking blocks, tool use visualization, and command autocomplete
-- **7 LLM Providers** — OpenAI, Anthropic Claude, DeepSeek, MiniMax, GLM (Zhipu), Ollama (local), with auto-model selection by task complexity
+- **TUI Chat Interface** — Stream AI responses with rich markdown rendering, thinking blocks, tool use visualization, command autocomplete, and file attachment
+- **8 LLM Providers** — MiniMaxi (default), OpenAI, Anthropic, DeepSeek, MiniMax, GLM (Zhipu), Ollama (local) with auto-model selection by task complexity
 - **Pipeline Lifecycle** — Structured Init → Spec → Design → Coding (TDD) → Testing → Deploy with quality gates
-- **MCP Client** — Connect to external Model Context Protocol servers for extended tool capabilities
-- **Skill System** — Domain-specific knowledge injection (git, shell, cloud-harness)
-- **Session Management** — SQLite-backed persistence with create/load/rename/delete/export
-- **Multi-Mode Agent** — Build (full tools), Plan (read-only), Solo (independent)
+- **MCP Client** — Connect to external Model Context Protocol servers (SSE and stdio transports)
+- **Skill System** — Domain-specific knowledge injection with built-in git and shell skills
+- **Session Management** — SQLite-backed persistence with create/load/resume/delete/export
+- **Multi-Mode Agent** — Build (full tools), Plan (read-only), Solo (independent) modes
+- **Subagents** — General, Explore (read-only codebase), Scout (web research)
 - **Observability** — Distributed tracing with local JSON export or OTLP
-- **Themes** — Dark and light UI themes with CSS variable customization
+- **Task Management** — Task dependency tracking, cron scheduling
+- **ACP Protocol** — Agent Communication Protocol for inter-agent messaging
+- **HTTP/SSE Server** — Remote agent access via web interface
+- **CloudSpec Framework** — Vendor-neutral specification with multi-cloud support (TCB, Aliyun, AWS)
+- **Themes** — Dark and light UI themes with CSS customization
 
 ## Quick Start
 
@@ -28,9 +33,9 @@ pip install -e .
 # Initialize config directory
 cdh init
 
-# Set API key (pick your provider)
-cdh config set provider openai
-cdh config set model gpt-4o
+# Set API key (MiniMaxi is default provider)
+cdh config set provider minimaxi
+cdh config set model MiniMax-M2.7
 
 # Start the TUI
 cdh tui
@@ -48,6 +53,7 @@ cdh tui
 | Key | Action |
 |-----|--------|
 | `Ctrl+F` | Focus chat input |
+| `Ctrl+R` | Resume previous session |
 | `Tab` | Cycle modes (agent → plan → solo) |
 | `Ctrl+P` | Command palette |
 | `Ctrl+Q` | Quit |
@@ -62,11 +68,14 @@ cdh tui
 ### CLI
 
 ```bash
-cdh tui                    # Start TUI
-cdh tui --mode plan        # Start in plan mode
-cdh init                   # Create config directory
-cdh config set workspace ~/my-project
-cdh config list            # Show full config
+cdh tui                       # Start TUI
+cdh tui --mode plan           # Start in plan mode
+cdh tui --agent <name>        # Start specific agent
+cdh init                      # Create config directory
+cdh config                    # Open configuration editor
+cdh config set provider openai
+cdh config list               # Show full config
+cdh logs --tail               # View logs
 ```
 
 ### Key Commands
@@ -76,36 +85,37 @@ cdh config list            # Show full config
 | `/model switch <name>` | Switch LLM model |
 | `/provider switch <name>` | Switch provider |
 | `/mode <plan\|agent\|solo>` | Change agent mode |
-| `/session list / new / load` | Session management |
-| `/spec generate / accept` | Lifecycle — spec phase |
-| `/design generate / accept` | Lifecycle — design phase |
-| `/test run / accept` | Lifecycle — testing phase |
-| `/deploy` | Lifecycle — deployment |
-| `/harness init / import` | CloudBase project scaffolding |
-| `/skill list / toggle` | Manage skills |
-| `/mcp list / connect` | MCP server management |
-| `/trace start / stop / view` | Observability |
-| `/vim <file>` | Edit file in vim |
+| `/skill list/add/remove` | Manage skills |
+| `/mcp list/add/remove` | MCP server management |
+| `/spec` | Show lifecycle stages |
 | `/clear` | Clear chat log |
 | `/theme` | Toggle dark/light theme |
+| `/vim <file>` | Edit file in vim |
 
 ## Configuration
 
 Config file: `~/.cdh/cdh.config.yaml`
 
 ```yaml
-default_provider: openai
-default_model: gpt-4o
+default_provider: minimaxi
+default_model: MiniMax-M2.7
 default_mode: agent
 log_level: info
 
 providers:
+  minimaxi:
+    api_key: ${MINMAXI_API_KEY}
   openai:
     api_key: ${OPENAI_API_KEY}
   anthropic:
     api_key: ${ANTHROPIC_API_KEY}
   deepseek:
     api_key: ${DEEPSEEK_API_KEY}
+
+observability:
+  trace_enabled: true
+  trace_exporter: file
+  trace_dir: ~/.cdh/traces
 
 tui:
   theme: auto
@@ -121,29 +131,58 @@ Environment variables are interpolated with `${VAR}` syntax in config values.
 ## Project Structure
 
 ```
-├── cdh/                  # Main Python package
-│   ├── agent/            # Agent engine, tools, pipeline, sessions
-│   ├── models/           # LLM provider abstraction + 7 providers
-│   ├── tui/              # Textual TUI (app, widgets, screens, commands)
-│   ├── lifecycle/        # Spec/Design/Testing/Deploy stages
-│   ├── mcp/              # Model Context Protocol client
-│   ├── cloud/            # Cloud provider integration (TCB)
-│   ├── storage/          # SQLite session store, project config
-│   └── trace/            # Distributed tracing (JSON + OTLP)
-├── cloud-harness/        # CloudBase development skill (bundled)
-├── skills/               # Built-in skills (git, shell)
-├── tests/                # pytest test suite (100+ tests)
-├── install.sh            # GitHub release installer
+├── cdha/                  # Main Python package (CDH Agent)
+│   ├── agent/             # Agent engine, tools, pipeline, sessions
+│   ├── models/           # LLM provider abstraction + 8 providers
+│   ├── lifecycle/         # Spec/Design/Testing/Deploy stages
+│   ├── mcp/               # Model Context Protocol client
+│   ├── skills/            # Skill system and loader
+│   ├── storage/           # SQLite session store
+│   ├── trace/             # Distributed tracing (JSON + OTLP)
+│   ├── tasks/             # Task management with dependencies
+│   ├── memory/            # Memory systems (pyramid, recall, symbolic)
+│   └── server/            # HTTP/SSE agent server
+├── tui/                   # Textual TUI (A2TUI)
+│   ├── screens/           # Main, store, settings, sessions screens
+│   ├── widgets/           # TUI widgets
+│   └── acp/               # ACP protocol implementation
+├── cloud-spec-skill/       # CloudSpec specification framework
+│   ├── rules/             # Development standards
+│   ├── providers/         # Cloud abstractions (TCB, Aliyun, AWS)
+│   └── templates/         # Project scaffolding
+├── builtin_skills/         # Built-in skills (git, shell)
+├── tests/                 # pytest test suite
+├── install.sh             # GitHub release installer
 └── pyproject.toml
 ```
 
 ## Supported Providers
 
-| Provider | Models | Env Var |
-|----------|--------|---------|
-| OpenAI | gpt-4o, gpt-4-turbo | `OPENAI_API_KEY` |
-| Anthropic | claude-3-opus, claude-3-sonnet, claude-3-haiku | `ANTHROPIC_API_KEY` |
-| DeepSeek | deepseek-chat, deepseek-reasoner | `DEEPSEEK_API_KEY` |
-| MiniMax | MiniMax-M2.7, MiniMax-M2.5 | `MINIMAX_API_KEY` |
-| GLM | glm-4-plus, glm-4-flash | `GLM_API_KEY` |
-| Ollama | llama2, codellama (local) | — |
+| Provider | Endpoint | Default Models | Env Var |
+|----------|----------|----------------|---------|
+| MiniMaxi | api.minimaxi.com | MiniMax-M2.7, MiniMax-M2.5 | `MINMAXI_API_KEY` |
+| OpenAI | api.openai.com | gpt-4o, gpt-4-turbo | `OPENAI_API_KEY` |
+| Anthropic | api.anthropic.com | claude-3-opus, claude-3-sonnet, claude-3-haiku | `ANTHROPIC_API_KEY` |
+| DeepSeek | api.deepseek.com | deepseek-chat, deepseek-reasoner | `DEEPSEEK_API_KEY` |
+| MiniMax | api.minimax.com | MiniMax-M2.7, MiniMax-M2.5 | `MINIMAX_API_KEY` |
+| GLM | open.bigmodel.cn | glm-4-plus, glm-4-flash | `GLM_API_KEY` |
+| Ollama | localhost:11434 | llama2, codellama (local) | — |
+
+## CloudSpec Framework
+
+Vendor-neutral specification system with multi-cloud support:
+
+```bash
+# Initialize a new project
+cdh harness init
+
+# Import existing cloud project
+cdh harness import
+
+# Generate specification
+/spec generate
+```
+
+Rules: GEN-* (general), SEC-* (security), QLT-* (quality), SPC-* (spec)
+
+Supported clouds: Tencent CloudBase (TCB), Aliyun, AWS

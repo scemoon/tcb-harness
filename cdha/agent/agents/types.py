@@ -99,6 +99,23 @@ class PlanAgent(AgentConfig):
         )
 
 
+class SoloAgent(AgentConfig):
+    def __init__(self):
+        super().__init__(
+            name="solo",
+            description="Independent agent that plans first, then acts with full tool access. Shell commands require user approval.",
+            mode=AgentMode.PRIMARY,
+            permission_edit=AgentPermission.ALLOW,
+            permission_bash=AgentPermission.ASK,
+            permission_read=AgentPermission.ALLOW,
+            permission_webfetch=AgentPermission.ALLOW,
+            permission_websearch=AgentPermission.ALLOW,
+            max_turns=10,
+            temperature=0.3,
+            tools=[],
+        )
+
+
 class GeneralAgent(AgentConfig):
     def __init__(self):
         super().__init__(
@@ -145,6 +162,7 @@ class ScoutAgent(AgentConfig):
 BUILT_IN_AGENTS = {
     "build": BuildAgent,
     "plan": PlanAgent,
+    "solo": SoloAgent,
     "general": GeneralAgent,
     "explore": ExploreAgent,
     "scout": ScoutAgent,

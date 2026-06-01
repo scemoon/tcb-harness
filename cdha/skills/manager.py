@@ -45,3 +45,31 @@ class SkillManager:
             data = yaml.safe_load(config_path.read_text()) or {}
             data["enabled"] = enabled
             config_path.write_text(yaml.dump(data, default_flow_style=False))
+
+    def remove(self, name: str) -> Optional[str]:
+        """Remove a skill by name.
+
+        Returns error message or None on success.
+        """
+        skill_path = self.skills_dir / name
+        if not skill_path.exists():
+            return f"Skill '{name}' not found"
+        if not skill_path.is_dir():
+            return f"'{name}' is not a skill directory"
+        import shutil
+        shutil.rmtree(skill_path)
+        self._skills.pop(name, None)
+        return None
+
+    def get(self, name: str) -> Optional[dict]:
+        """Get a skill by name."""
+        if name in self._skills:
+            return self._skills[name]
+        skill_path = self.skills_dir / name / "skill.yaml"
+        if skill_path.exists():
+            data = yaml.safe_load(skill_path.read_text()) or {}
+            data["name"] = data.get("name", name)
+            data["enabled"] = data.get("enabled", True)
+            self._skills[name] = data
+            return data
+        return None

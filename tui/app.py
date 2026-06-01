@@ -645,8 +645,6 @@ class A2TUIApp(App, inherit_bindings=False):
                 cfg.default_provider = value
             elif cdh_key == "model":
                 cfg.default_model = value
-            elif cdh_key == "cloud":
-                cfg.default_cloud = value
             elif cdh_key == "log_level":
                 cfg.log_level = value
             elif cdh_key == "session_auto_save":
@@ -664,7 +662,6 @@ class A2TUIApp(App, inherit_bindings=False):
                 "cdh.mode": cfg.default_mode,
                 "cdh.provider": cfg.default_provider,
                 "cdh.model": cfg.default_model,
-                "cdh.cloud": cfg.default_cloud,
                 "cdh.log_level": cfg.log_level,
                 "cdh.session_auto_save": cfg.session_auto_save,
             }

@@ -403,14 +403,6 @@ SCHEMA: list[SchemaDict] = [
                 "default": "MiniMax-M2.7",
             },
             {
-                "key": "cloud",
-                "title": "Default Cloud",
-                "help": "Default cloud provider",
-                "type": "choices",
-                "default": "tcb",
-                "choices": ["tcb"],
-            },
-            {
                 "key": "log_level",
                 "title": "Log Level",
                 "help": "Logging verbosity",

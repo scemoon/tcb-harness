@@ -1,6 +1,7 @@
 import click
 import logging
 from pathlib import Path
+from typing import Optional
 
 from cdha.config import ensure_dirs, load_config, save_config
 
@@ -30,58 +31,117 @@ def cli():
     pass
 
 
-@cli.command()
-def init():
-    """Initialize CDH config directory and default config."""
-    ensure_dirs()
-    click.echo("CDH initialized at ~/.cdh/")
+@cli.group(invoke_without_command=True)
+def config():
+    """Manage CDH configuration (mode, model, provider, cloud, skill, mcp)."""
+    pass
 
 
-@cli.command()
-@click.argument("key", required=False)
-@click.argument("value", required=False)
-def set(key, value):
-    """Set a config value.
+# --- config mode sub-command ---
 
-    \b
-    Available keys:
-      mode       agent | plan | solo
-      model       model name (e.g. MiniMax-M2.7)
-      provider   anthropic | openai | deepseek | minimax | minimaxi | glm | ollama
-      cloud      tcb
-      log-level  debug | info | warn | error
+@config.group("mode")
+def config_mode():
+    """Manage default agent mode (agent, plan, solo)."""
+    pass
 
-    \b
-    Examples:
-      cdh set mode agent
-      cdh set model deepseek-v4-flash
-      cdh set provider ollama
-    """
-    if not key:
-        click.echo("Usage: cdh set <key> <value>")
-        click.echo("Available keys: mode, model, provider, cloud, log-level")
-        return
+
+@config_mode.command("get")
+def config_mode_get():
+    """Show current mode."""
     cfg = load_config()
-    if key == "mode":
-        cfg.default_mode = value or "agent"
-    elif key == "model":
-        cfg.default_model = value or ""
-    elif key == "provider":
-        cfg.default_provider = value or ""
-    elif key == "cloud":
-        cfg.default_cloud = value or ""
-    elif key == "log-level":
-        cfg.log_level = value or "info"
-    else:
-        click.echo(f"Unknown config key: {key}")
-        return
+    click.echo(f"mode = {cfg.default_mode}  (agent | plan | solo)")
+
+
+@config_mode.command("set")
+@click.argument("value", default="agent")
+def config_mode_set(value):
+    """Set default agent mode."""
+    cfg = load_config()
+    cfg.default_mode = value
     save_config(cfg)
-    click.echo(f"config.{key} = {value}")
+    click.echo(f"mode = {value}")
 
 
-@cli.command()
-def list():
-    """Show all configuration."""
+# --- config model sub-command ---
+
+@config.group("model")
+def config_model():
+    """Manage default LLM model."""
+    pass
+
+
+@config_model.command("get")
+def config_model_get():
+    """Show current model."""
+    cfg = load_config()
+    click.echo(f"model = {cfg.default_model}")
+
+
+@config_model.command("set")
+@click.argument("value")
+def config_model_set(value):
+    """Set default LLM model."""
+    cfg = load_config()
+    cfg.default_model = value
+    save_config(cfg)
+    click.echo(f"model = {value}")
+
+
+# --- config provider sub-command ---
+
+@config.group("provider")
+def config_provider():
+    """Manage default LLM provider."""
+    pass
+
+
+@config_provider.command("get")
+def config_provider_get():
+    """Show current provider."""
+    cfg = load_config()
+    click.echo(f"provider = {cfg.default_provider}")
+
+
+@config_provider.command("set")
+@click.argument("value")
+def config_provider_set(value):
+    """Set default LLM provider."""
+    cfg = load_config()
+    cfg.default_provider = value
+    save_config(cfg)
+    click.echo(f"provider = {value}")
+
+
+# --- config log-level sub-command ---
+
+@config.group("log-level")
+def config_log_level():
+    """Manage log level."""
+    pass
+
+
+@config_log_level.command("get")
+def config_log_level_get():
+    """Show current log level."""
+    cfg = load_config()
+    click.echo(f"log-level = {cfg.log_level}  (debug | info | warn | error)")
+
+
+@config_log_level.command("set")
+@click.argument("value", default="info")
+def config_log_level_set(value):
+    """Set log level."""
+    cfg = load_config()
+    cfg.log_level = value
+    save_config(cfg)
+    click.echo(f"log-level = {value}")
+
+
+# --- config list ---
+
+@config.command("list")
+def config_list():
+    """Show full YAML configuration."""
     cfg = load_config()
     import yaml
     from cdha.config import _dataclass_to_dict
@@ -89,77 +149,374 @@ def list():
 
 
 @cli.group(invoke_without_command=True)
-def config():
-    """Open TUI config screen or manage config."""
+def skill():
+    """Manage CDH skills (list, add, remove).
+
+    \b
+    Skills are instruction sets that extend the agent's capabilities.
+    Use `cdh skill list` to see available skills.
+    """
     pass
 
 
-@config.command()
-@click.argument("key", required=False)
-@click.argument("value", required=False)
-def set(key, value):
-    """Set a config value.
-
-    \b
-    Available keys:
-      mode       agent | plan | solo
-      model       model name (e.g. MiniMax-M2.7)
-      provider   anthropic | openai | deepseek | minimax | minimaxi | glm | ollama
-      cloud      tcb
-      log-level  debug | info | warn | error
-
-    \b
-    Examples:
-      cdh config set mode agent
-      cdh config set model deepseek-v4-flash
-    """
-    if not key:
-        click.echo("Usage: cdh config set <key> <value>")
-        click.echo("Available keys: mode, model, provider, cloud, log-level")
-        return
-    cfg = load_config()
-    if key == "mode":
-        cfg.default_mode = value or "agent"
-    elif key == "model":
-        cfg.default_model = value or ""
-    elif key == "provider":
-        cfg.default_provider = value or ""
-    elif key == "cloud":
-        cfg.default_cloud = value or ""
-    elif key == "log-level":
-        cfg.log_level = value or "info"
-    else:
-        click.echo(f"Unknown config key: {key}")
-        return
-    save_config(cfg)
-    click.echo(f"config.{key} = {value}")
-
-
-@config.command()
-def list():
-    """Show full YAML configuration with all sections."""
-    cfg = load_config()
+@skill.command("list")
+def skill_list():
+    """List all installed skills."""
+    from cdha.skills.manager import SkillManager
     import yaml
-    from cdha.config import _dataclass_to_dict
-    click.echo(yaml.dump(_dataclass_to_dict(cfg), default_flow_style=False))
+
+    mgr = SkillManager()
+    skills = mgr.list()
+
+    if not skills:
+        click.echo("No skills installed. Use `cdh skill add <path>` to install one.")
+        return
+
+    click.echo("Installed skills:")
+    for s in skills:
+        name = s.get("name", "unknown")
+        desc = s.get("description", "")
+        enabled = s.get("enabled", True)
+        status = "[enabled]" if enabled else "[disabled]"
+        click.echo(f"  {status} {name}")
+        if desc:
+            click.echo(f"           {desc}")
+    click.echo(f"\nTotal: {len(skills)} skill(s)")
 
 
-@config.command()
-def tui():
-    """Open TUI config screen."""
-    from cdha.config_screen import main as config_main
-    config_main()
+@skill.command("add")
+@click.argument("path", type=click.Path(exists=True, file_okay=True, dir_okay=True, path_type=Path))
+def skill_add(path):
+    """Install a skill from a local path.
+
+    \b
+    The path should contain a skill.yaml and SKILL.md file.
+
+    \b
+    Example:
+      cdh skill add /path/to/my-skill
+    """
+    from cdha.skills.manager import SkillManager
+
+    skill_path = Path(path)
+    if skill_path.is_file():
+        skill_path = skill_path.parent
+
+    mgr = SkillManager()
+    err = mgr.install(skill_path)
+    if err:
+        click.echo(f"Error: {err}")
+    else:
+        click.echo(f"Skill installed from {skill_path}")
 
 
-@cli.command()
-@click.option("--mode", default="agent", help="Agent mode: agent, plan, solo")
-@click.option("--provider", help="Override default provider")
-@click.option("--model", help="Override default model")
-@click.option("--session", help="Session ID to resume")
-def tui(mode, provider, model, session):
-    """Launch the CDH TUI."""
-    from tui.app import main as tui_main
-    tui_main()
+@skill.command("remove")
+@click.argument("name")
+def skill_remove(name):
+    """Remove an installed skill by name.
+
+    \b
+    Example:
+      cdh skill remove my-skill
+    """
+    from cdha.skills.manager import SkillManager
+
+    mgr = SkillManager()
+    err = mgr.remove(name)
+    if err:
+        click.echo(f"Error: {err}")
+    else:
+        click.echo(f"Skill '{name}' removed.")
+
+
+@config.group("skill")
+def config_skill():
+    """Manage CDH skills (alias for cdh skill)."""
+    pass
+
+
+@config_skill.command("list")
+def config_skill_list():
+    """List all installed skills."""
+    from cdha.skills.manager import SkillManager
+
+    mgr = SkillManager()
+    skills = mgr.list()
+
+    if not skills:
+        click.echo("No skills installed. Use `cdh skill add <path>` to install one.")
+        return
+
+    click.echo("Installed skills:")
+    for s in skills:
+        name = s.get("name", "unknown")
+        desc = s.get("description", "")
+        enabled = s.get("enabled", True)
+        status = "[enabled]" if enabled else "[disabled]"
+        click.echo(f"  {status} {name}")
+        if desc:
+            click.echo(f"           {desc}")
+    click.echo(f"\nTotal: {len(skills)} skill(s)")
+
+
+@config_skill.command("add")
+@click.argument("path", type=click.Path(exists=True, file_okay=True, dir_okay=True, path_type=Path))
+def config_skill_add(path):
+    """Install a skill from a local path."""
+    from cdha.skills.manager import SkillManager
+
+    skill_path = Path(path)
+    if skill_path.is_file():
+        skill_path = skill_path.parent
+
+    mgr = SkillManager()
+    err = mgr.install(skill_path)
+    if err:
+        click.echo(f"Error: {err}")
+    else:
+        click.echo(f"Skill installed from {skill_path}")
+
+
+@config_skill.command("remove")
+@click.argument("name")
+def config_skill_remove(name):
+    """Remove an installed skill by name."""
+    from cdha.skills.manager import SkillManager
+
+    mgr = SkillManager()
+    err = mgr.remove(name)
+    if err:
+        click.echo(f"Error: {err}")
+    else:
+        click.echo(f"Skill '{name}' removed.")
+
+
+@cli.group(invoke_without_command=True)
+def mcp():
+    """Manage MCP (Model Context Protocol) servers.
+
+    \b
+    MCP servers expose tools and resources to the agent.
+    Use `cdh mcp list` to see configured servers.
+    """
+    pass
+
+
+@mcp.command("list")
+def mcp_list():
+    """List all configured MCP servers."""
+    from cdha.mcp.manager import MCPManager
+
+    mgr = MCPManager()
+    servers = mgr.list()
+
+    if not servers:
+        click.echo("No MCP servers configured. Use `cdh mcp add <name> <url>` to add one.")
+        return
+
+    click.echo("Configured MCP servers:")
+    for s in servers:
+        name = s.get("name", "unknown")
+        transport = s.get("transport", "sse")
+        enabled = s.get("enabled", True)
+        status = "[enabled]" if enabled else "[disabled]"
+        if transport == "sse":
+            url = s.get("url", "")
+            click.echo(f"  {status} {name} (SSE)")
+            if url:
+                click.echo(f"         URL: {url}")
+        else:
+            cmd = s.get("command", "")
+            args = " ".join(s.get("args", []))
+            click.echo(f"  {status} {name} (stdio)")
+            if cmd:
+                click.echo(f"         Command: {cmd} {args}")
+    click.echo(f"\nTotal: {len(servers)} server(s)")
+
+
+@mcp.command("add")
+@click.argument("name")
+@click.argument("url")
+@click.option("--type", "transport", default="sse", help="Transport type: sse or stdio")
+@click.option("--command", help="Command for stdio transport")
+@click.option("--args", help="Arguments for stdio transport (comma-separated)")
+def mcp_add(name, url, transport, command, args):
+    """Add an MCP server configuration.
+
+    \b
+    For SSE transport (default):
+      cdh mcp add my-server https://example.com/mcp
+
+    \b
+    For stdio transport:
+      cdh mcp add my-server --type stdio --command npx --args "server-name"
+    """
+    from cdha.mcp.manager import MCPManager
+
+    mgr = MCPManager()
+    if mgr.get(name):
+        click.echo(f"Error: MCP server '{name}' already exists")
+        return
+
+    if transport == "stdio":
+        if not command:
+            click.echo("Error: --command required for stdio transport")
+            return
+        cmd_args = [a.strip() for a in args.split(",")] if args else []
+        mgr.add_stdio(name, command, cmd_args)
+        click.echo(f"MCP server '{name}' added (stdio)")
+    else:
+        mgr.add(name, url, transport="sse")
+        click.echo(f"MCP server '{name}' added (SSE) at {url}")
+
+
+@mcp.command("remove")
+@click.argument("name")
+def mcp_remove(name):
+    """Remove an MCP server configuration."""
+    from cdha.mcp.manager import MCPManager
+
+    mgr = MCPManager()
+    err = mgr.remove(name)
+    if err:
+        click.echo(f"Error: MCP server '{name}' not found")
+    else:
+        click.echo(f"MCP server '{name}' removed.")
+
+
+@mcp.command("enable")
+@click.argument("name")
+def mcp_enable(name):
+    """Enable an MCP server."""
+    from cdha.mcp.manager import MCPManager
+
+    mgr = MCPManager()
+    err = mgr.enable(name, True)
+    if err:
+        click.echo(f"Error: {err}")
+    else:
+        click.echo(f"MCP server '{name}' enabled.")
+
+
+@mcp.command("disable")
+@click.argument("name")
+def mcp_disable(name):
+    """Disable an MCP server."""
+    from cdha.mcp.manager import MCPManager
+
+    mgr = MCPManager()
+    err = mgr.enable(name, False)
+    if err:
+        click.echo(f"Error: {err}")
+    else:
+        click.echo(f"MCP server '{name}' disabled.")
+
+
+@config.group("mcp")
+def config_mcp():
+    """Manage MCP servers (alias for cdh mcp)."""
+    pass
+
+
+@config_mcp.command("list")
+def config_mcp_list():
+    """List all configured MCP servers."""
+    from cdha.mcp.manager import MCPManager
+
+    mgr = MCPManager()
+    servers = mgr.list()
+
+    if not servers:
+        click.echo("No MCP servers configured. Use `cdh mcp add <name> <url>` to add one.")
+        return
+
+    click.echo("Configured MCP servers:")
+    for s in servers:
+        name = s.get("name", "unknown")
+        transport = s.get("transport", "sse")
+        enabled = s.get("enabled", True)
+        status = "[enabled]" if enabled else "[disabled]"
+        if transport == "sse":
+            url = s.get("url", "")
+            click.echo(f"  {status} {name} (SSE)")
+            if url:
+                click.echo(f"         URL: {url}")
+        else:
+            cmd = s.get("command", "")
+            args = " ".join(s.get("args", []))
+            click.echo(f"  {status} {name} (stdio)")
+            if cmd:
+                click.echo(f"         Command: {cmd} {args}")
+    click.echo(f"\nTotal: {len(servers)} server(s)")
+
+
+@config_mcp.command("add")
+@click.argument("name")
+@click.argument("url")
+@click.option("--type", "transport", default="sse", help="Transport type: sse or stdio")
+@click.option("--command", help="Command for stdio transport")
+@click.option("--args", help="Arguments for stdio transport (comma-separated)")
+def config_mcp_add(name, url, transport, command, args):
+    """Add an MCP server configuration."""
+    from cdha.mcp.manager import MCPManager
+
+    mgr = MCPManager()
+    if mgr.get(name):
+        click.echo(f"Error: MCP server '{name}' already exists")
+        return
+
+    if transport == "stdio":
+        if not command:
+            click.echo("Error: --command required for stdio transport")
+            return
+        cmd_args = [a.strip() for a in args.split(",")] if args else []
+        mgr.add_stdio(name, command, cmd_args)
+        click.echo(f"MCP server '{name}' added (stdio)")
+    else:
+        mgr.add(name, url, transport="sse")
+        click.echo(f"MCP server '{name}' added (SSE) at {url}")
+
+
+@config_mcp.command("remove")
+@click.argument("name")
+def config_mcp_remove(name):
+    """Remove an MCP server configuration."""
+    from cdha.mcp.manager import MCPManager
+
+    mgr = MCPManager()
+    err = mgr.remove(name)
+    if err:
+        click.echo(f"Error: MCP server '{name}' not found")
+    else:
+        click.echo(f"MCP server '{name}' removed.")
+
+
+@config_mcp.command("enable")
+@click.argument("name")
+def config_mcp_enable(name):
+    """Enable an MCP server."""
+    from cdha.mcp.manager import MCPManager
+
+    mgr = MCPManager()
+    err = mgr.enable(name, True)
+    if err:
+        click.echo(f"Error: {err}")
+    else:
+        click.echo(f"MCP server '{name}' enabled.")
+
+
+@config_mcp.command("disable")
+@click.argument("name")
+def config_mcp_disable(name):
+    """Disable an MCP server."""
+    from cdha.mcp.manager import MCPManager
+
+    mgr = MCPManager()
+    err = mgr.enable(name, False)
+    if err:
+        click.echo(f"Error: {err}")
+    else:
+        click.echo(f"MCP server '{name}' disabled.")
 
 
 @cli.command()

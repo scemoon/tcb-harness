@@ -51,13 +51,6 @@ class AgentConfig:
 
 
 @dataclass
-class CloudConfig:
-    region: str = "ap-shanghai"
-    env_id: str = ""
-    credentials: str = ""
-
-
-@dataclass
 class ModelAutoConfig:
     simple_tasks: str = "minimax-2.7"
     medium_tasks: str = "minimax-2.7"
@@ -69,10 +62,8 @@ class GlobalConfig:
     default_mode: str = "agent"
     default_provider: str = "minimaxi"
     default_model: str = "MiniMax-M2.7"
-    default_cloud: str = "tcb"
 
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
-    clouds: dict[str, CloudConfig] = field(default_factory=dict)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
@@ -136,7 +127,6 @@ def _write_default_config():
         "default_mode": "agent",
         "default_provider": "minimaxi",
         "default_model": "MiniMax-M2.7",
-        "default_cloud": "tcb",
         "providers": {
             "anthropic": {
                 "api_key": "${ANTHROPIC_API_KEY}",
@@ -175,13 +165,6 @@ def _write_default_config():
                 "endpoint": "https://open.bigmodel.cn/api/paas/v4",
                 "models": ["glm-5.1", "glm-5"],
             },
-        },
-        "clouds": {
-            "tcb": {
-                "region": "ap-shanghai",
-                "env_id": "your-env-id",
-                "credentials": "~/.cdh/tcb-credentials.json",
-            }
         },
         "observability": {
             "trace_enabled": True,

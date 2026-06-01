@@ -1,0 +1,11 @@
+name: cloud-spec-skill
+description: >-
+  CloudSpec - Cloud Development Specification framework.
+  Defines vendor-neutral standards for cloud-native development
+  including rules, provider abstraction, workflows, and templates.
+version: 1.0.0
+entry: SKILL.md
+categories:
+  - specification
+  - multi-cloud
+  - standards

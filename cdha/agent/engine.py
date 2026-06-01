@@ -246,7 +246,7 @@ class AgentEngine:
 
         # Clawd-Code subsystems
         self._skill_loader = SkillLoader(
-            workspace_skills_dir=Path(__file__).parent.parent.parent / "skills"
+            workspace_skills_dir=Path(__file__).parent.parent / "builtin_skills"
         )
         self._mcp = MCPManager()
         self._cron_scheduler = CronScheduler()
@@ -440,7 +440,9 @@ class AgentEngine:
 
         system_parts.append(TOOL_DESCRIPTIONS)
 
-        self.context.add_system("\n".join(system_parts))
+        tagged_content = "<!-- AGENT_CONFIG -->\n" + "\n".join(system_parts)
+        if not self.context.replace_system_section("AGENT_CONFIG", tagged_content):
+            self.context.add_system(tagged_content)
 
     def get_available_tools(self) -> str:
         from cdha.agent.agents.types import TOOL_DESCRIPTIONS

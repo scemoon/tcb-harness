@@ -24,11 +24,12 @@ def _truncate(s: str, max_len: int) -> str:
 SECTIONS = [
     ("general",      "General",       "basic settings"),
     ("providers",    "Providers",     "LLM provider config"),
-    ("cloud",        "Cloud",         "cloud platform settings"),
     ("agent",        "Agent",         "agent parameters"),
     ("observability","Observability", "tracing & monitoring"),
     ("attachments",  "Attachments",   "file attachment settings"),
     ("model_auto",   "Model Auto",    "model selection hints"),
+    ("skills",       "Skills",        "skill management"),
+    ("mcps",         "MCPs",          "MCP server management"),
 ]
 
 PROVIDER_NAMES = {
@@ -46,7 +47,7 @@ class ConfigItem(Static, can_focus=True):
         self.item_type = item_type
 
     def render(self) -> str:
-        if self.item_type == "section" or self.item_type == "provider":
+        if self.item_type in ("section", "provider", "skill", "mcp"):
             return f"> {self.label:<18} {self.value}"
         if self.item_type == "back":
             return f"< {self.label}"
@@ -144,7 +145,9 @@ class EditFieldScreen(ModalScreen[str]):
     #edit-label { height: 1; background: #333; color: #fff; padding: 0 1; }
     #edit-input { height: 3; padding: 0 1; }
     #edit-buttons { height: 3; background: #222; align: center middle; }
-    Button { margin: 0 1; }
+    Button { margin: 0 1; background: #444; color: #fff; }
+    Button:hover { background: #666; }
+    Button:focus { background: #555; }
     """
 
     def compose(self) -> ComposeResult:
@@ -171,40 +174,81 @@ class EditFieldScreen(ModalScreen[str]):
         self.dismiss(None)
 
 
-class SelectFieldScreen(ModalScreen[str]):
+class OptionPickerScreen(ModalScreen[str]):
     def __init__(self, field_label: str, options: list[tuple[str, str]], current_value: str):
         super().__init__()
         self.field_label = field_label
         self.options = options
         self.current_value = current_value
+        self._selected_index = 0
 
     BINDINGS = [
         Binding("escape", "dismiss_modal", "Cancel"),
+        Binding("up", "cursor_up", "Up"),
+        Binding("down", "cursor_down", "Down"),
+        Binding("enter", "confirm", "Confirm"),
     ]
 
     CSS = """
-    SelectFieldScreen { background: rgba(0,0,0,0.7); align: center middle; }
-    #select-dialog { width: 50; height: 10; background: #111; border: solid #555; }
-    #select-label { height: 1; background: #333; color: #fff; padding: 0 1; }
-    #select-widget { height: 3; padding: 0 1; }
-    #select-buttons { height: 3; background: #222; align: center middle; }
-    Button { margin: 0 1; }
+    OptionPickerScreen { background: rgba(0,0,0,0.7); align: center middle; }
+    #picker-dialog { width: 50; height: auto; background: #111; border: solid #555; max-height: 20; }
+    #picker-label { height: 1; background: #333; color: #fff; padding: 0 1; }
+    #picker-list { height: auto; max-height: 15; background: #000; }
+    .option-item { height: 1; padding: 0 1; color: #fff; background: #000; }
+    .option-item:hover, .option-item.selected { background: #444; }
+    #picker-buttons { height: 3; background: #222; align: center middle; }
+    Button { margin: 0 1; background: #444; color: #fff; }
+    Button:hover { background: #666; }
+    Button:focus { background: #555; }
     """
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="select-dialog"):
-            yield Label(f"  {self.field_label}", id="select-label")
-            yield Select(self.options, value=self.current_value, id="select-widget")
-            with Horizontal(id="select-buttons"):
-                yield Button("Cancel (ESC)", id="select-cancel")
-                yield Button("Confirm", id="select-confirm")
+        with Vertical(id="picker-dialog"):
+            yield Label(f"  {self.field_label}", id="picker-label")
+            with Vertical(id="picker-list"):
+                pass
+            with Horizontal(id="picker-buttons"):
+                yield Button("Cancel (ESC)", id="picker-cancel")
+                yield Button("Confirm (ENTER)", id="picker-confirm")
 
-    @on(Button.Pressed, "#select-confirm")
-    def on_confirm(self) -> None:
-        select = self.query_one("#select-widget", Select)
-        self.dismiss(str(select.value) if select.value != Select.NULL else None)
+    def on_mount(self) -> None:
+        list_container = self.query_one("#picker-list", Vertical)
+        for i, (label, val) in enumerate(self.options):
+            is_selected = (val == self.current_value) or (self.current_value is None and i == 0)
+            if is_selected:
+                self._selected_index = i
+            item = Static(f"  {'>' if is_selected else ' '}{label}", classes="option-item")
+            item._option_index = i
+            list_container.mount(item)
+        self.query_one("#picker-confirm", Button).focus()
 
-    @on(Button.Pressed, "#select-cancel")
+    def _refresh_list(self) -> None:
+        list_container = self.query_one("#picker-list", Vertical)
+        for i, item in enumerate(list_container.children):
+            if isinstance(item, Static):
+                label = self.options[i][0]
+                marker = ">" if i == self._selected_index else " "
+                item.update(f"  {marker}{label}")
+
+    def action_cursor_up(self) -> None:
+        if self._selected_index > 0:
+            self._selected_index -= 1
+            self._refresh_list()
+
+    def action_cursor_down(self) -> None:
+        if self._selected_index < len(self.options) - 1:
+            self._selected_index += 1
+            self._refresh_list()
+
+    def action_confirm(self) -> None:
+        _, val = self.options[self._selected_index]
+        self.dismiss(val)
+
+    @on(Button.Pressed, "#picker-confirm")
+    def on_confirm_button(self) -> None:
+        self.action_confirm()
+
+    @on(Button.Pressed, "#picker-cancel")
     def on_cancel(self) -> None:
         self.dismiss(None)
 
@@ -284,7 +328,6 @@ class ConfigScreen(App):
                 self._section_fields.append(ConfigItem("default_mode", "Mode", cfg.default_mode))
                 self._section_fields.append(ConfigItem("default_provider", "Provider", cfg.default_provider))
                 self._section_fields.append(ConfigItem("default_model", "Model", cfg.default_model))
-                self._section_fields.append(ConfigItem("default_cloud", "Cloud", cfg.default_cloud))
                 self._section_fields.append(ConfigItem("log_level", "Log", cfg.log_level))
             case "providers":
                 for pid, pcfg in cfg.providers.items():
@@ -293,9 +336,6 @@ class ConfigScreen(App):
                     ep = _truncate(_display_val(pcfg.endpoint), 20)
                     status = f"ep:{ep} ak:{ak}"
                     self._section_fields.append(ConfigItem(pid, PROVIDER_NAMES.get(pid, pid), status, item_type="provider"))
-            case "cloud":
-                for cid, ccfg in cfg.clouds.items():
-                    self._section_fields.append(ConfigItem(f"clouds.{cid}.region", cid.upper(), ccfg.region))
             case "agent":
                 self._section_fields.append(ConfigItem("agent.max_iterations", "Max Iter", str(cfg.agent.max_iterations)))
                 self._section_fields.append(ConfigItem("agent.timeout_seconds", "Timeout", str(cfg.agent.timeout_seconds)))
@@ -305,6 +345,19 @@ class ConfigScreen(App):
                 self._section_fields.append(ConfigItem("attachments.max_size_mb", "Max Size", str(cfg.attachments.max_size_mb)))
             case "model_auto":
                 self._section_fields.append(ConfigItem("model_auto.simple_tasks", "Simple", cfg.model_auto.simple_tasks))
+            case "skills":
+                from cdha.skills.manager import SkillManager
+                mgr = SkillManager()
+                for s in mgr.list():
+                    status = "[enabled]" if s.get("enabled", True) else "[disabled]"
+                    self._section_fields.append(ConfigItem(f"skills.{s['name']}", s["name"], status, item_type="skill"))
+            case "mcps":
+                from cdha.mcp.manager import MCPManager
+                mgr = MCPManager()
+                for m in mgr.list():
+                    status = "[enabled]" if m.get("enabled", True) else "[disabled]"
+                    transport = m.get("transport", "sse")
+                    self._section_fields.append(ConfigItem(f"mcps.{m['name']}", m["name"], f"{status} ({transport})", item_type="mcp"))
         self.cursor = 0
 
     def _build_provider(self, provider_id: str) -> None:
@@ -392,7 +445,7 @@ class ConfigScreen(App):
         options = self._get_enum_options(key)
         if options is not None:
             val = item.value if any(v == item.value for _, v in options) else options[0][1]
-            self.push_screen(SelectFieldScreen(label, options, val), lambda v, k=key: self._on_field_edited(v, k))
+            self.push_screen(OptionPickerScreen(label, options, val), lambda v, k=key: self._on_field_edited(v, k))
         else:
             self.push_screen(EditFieldScreen(label, item.value), lambda v, k=key: self._on_field_edited(v, k))
 
@@ -404,9 +457,6 @@ class ConfigScreen(App):
         if key == "default_provider":
             pids = list(self._cfg.providers.keys())
             return [(PROVIDER_NAMES.get(v, v), v) for v in pids]
-        if key == "default_cloud":
-            cids = list(self._cfg.clouds.keys())
-            return [(v.upper(), v) for v in cids]
         if key == "default_model":
             pcfg = self._cfg.providers.get(self._cfg.default_provider)
             if pcfg and pcfg.models:
@@ -457,6 +507,35 @@ class ConfigScreen(App):
             self.cursor = len(self._section_fields) - 1
             self._refresh_items()
 
+    def _toggle_skill(self, item: ConfigItem) -> None:
+        parts = item.key.split(".", 1)
+        if len(parts) < 2:
+            return
+        name = parts[1]
+        from cdha.skills.manager import SkillManager
+        mgr = SkillManager()
+        skill = mgr.get(name)
+        if skill:
+            new_enabled = not skill.get("enabled", True)
+            mgr.enable(name, new_enabled)
+            item.value = "[enabled]" if new_enabled else "[disabled]"
+            item.refresh()
+
+    def _toggle_mcp(self, item: ConfigItem) -> None:
+        parts = item.key.split(".", 1)
+        if len(parts) < 2:
+            return
+        name = parts[1]
+        from cdha.mcp.manager import MCPManager
+        mgr = MCPManager()
+        mcp = mgr.get(name)
+        if mcp:
+            new_enabled = not mcp.get("enabled", True)
+            mgr.enable(name, new_enabled)
+            transport = mcp.get("transport", "sse")
+            item.value = f"[{'enabled' if new_enabled else 'disabled'}] ({transport})"
+            item.refresh()
+
     def _activate_current(self) -> None:
         items = self.current_items
         if not items or self.cursor >= len(items):
@@ -482,6 +561,10 @@ class ConfigScreen(App):
             self.push_screen(EditFieldScreen("Model Name", ""), self._on_model_added)
         elif item.item_type == "back":
             self.action_go_back()
+        elif item.item_type == "skill":
+            self._toggle_skill(item)
+        elif item.item_type == "mcp":
+            self._toggle_mcp(item)
 
     def action_cancel(self) -> None:
         if self.view != "menu":

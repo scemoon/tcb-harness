@@ -8,7 +8,6 @@ def test_default_config_values():
     assert cfg.default_mode == "agent"
     assert cfg.default_provider == "minimaxi"
     assert cfg.default_model == "MiniMax-M2.7"
-    assert cfg.default_cloud == "tcb"
     assert cfg.log_level == "info"
     assert cfg.session_auto_save is True
 

@@ -6,7 +6,6 @@ import click
 from cdha.cli import cli as cdha_cli
 from cdha.cli import setup_logging
 from cdha.config import ensure_dirs, load_config
-from tui.app import A2TUIApp
 
 
 _CDH_DIR = Path.home() / ".cdh"
@@ -19,9 +18,6 @@ Usage:
   cdh tui --agent cdh.cloud-dev-harness   Launch TUI with agent
   cdh help                    Show this help message
   cdh config                  Configuration editor (TUI)
-  cdh config set              Set a config value
-  cdh config get              Get a config value
-  cdh config list             Show full YAML configuration
   cdh logs                    View application logs
   cdh project                 Project management
   cdh version                 Show version information
@@ -55,6 +51,7 @@ def cli(ctx):
         ensure_dirs()
         cfg = load_config()
         setup_logging(cfg.log_level)
+        from tui.app import A2TUIApp
         app = A2TUIApp()
         app.run()
 
@@ -77,43 +74,7 @@ def config(ctx):
         config_main()
 
 
-@config.command(short_help="Get a config value")
-@click.argument("key", required=False)
-def get(key):
-    """Get configuration values.
-
-    If KEY is provided, show the value for that key.
-    If no KEY, show all configuration with current values.
-    """
-    cfg = load_config()
-    mapping = {
-        "mode": cfg.default_mode,
-        "model": cfg.default_model,
-        "provider": cfg.default_provider,
-        "cloud": cfg.default_cloud,
-        "log-level": cfg.log_level,
-    }
-    hints = {
-        "mode": "agent | plan | solo",
-        "model": "model name (e.g. MiniMax-M2.7)",
-        "provider": "anthropic | openai | deepseek | minimax | minimaxi | glm | ollama",
-        "cloud": "tcb",
-        "log-level": "debug | info | warn | error",
-    }
-    if key:
-        val = mapping.get(key)
-        if val is None:
-            click.echo(f"Unknown key: {key}\nAvailable keys: {', '.join(mapping)}")
-        else:
-            click.echo(f"{key} = {val}")
-    else:
-        click.echo("Current configuration:")
-        for k, v in mapping.items():
-            hint = hints.get(k, "")
-            click.echo(f"  {k:12} = {v:<20}  ({hint})")
-
-
-# Reuse set/list from cdha's config group
+# Reuse subcommands from cdha's config group (mode, model, provider, cloud, log-level, skill, mcp, list)
 for _cfg_cmd in cdha_cli.get_command(None, "config").commands.values():
     if _cfg_cmd.name not in config.commands and _cfg_cmd.name not in ("tui",):
         config.add_command(_cfg_cmd)
@@ -205,6 +166,7 @@ def tui(ctx, project_dir, agent_identity):
     ensure_dirs()
     cfg = load_config()
     setup_logging(cfg.log_level)
+    from tui.app import A2TUIApp
     app = A2TUIApp(
         project_dir=project_dir,
         launch_agent_identity=agent_identity,
@@ -245,7 +207,7 @@ def version():
 
 
 # Attach remaining cdha subcommands selectively
-_skip = {"config", "init", "set", "list", "tui", "help", "version"}
+_skip = {"config", "init", "set", "list", "tui", "help", "version", "skill", "mcp"}
 for cmd_name in cdha_cli.commands:
     if cmd_name in _skip:
         continue

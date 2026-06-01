@@ -17,14 +17,23 @@ class _CommandEntry:
 
 
 _registry: dict[str, _CommandEntry] = {}
+_registry_prefix: str = ""
+
+
+def set_prefix(prefix: str) -> None:
+    global _registry_prefix
+    _registry_prefix = prefix
 
 
 def register(command: str, help: str, handler: Handler, hint: str | None = None) -> None:
-    _registry[command] = _CommandEntry(command, help, handler, hint)
+    prefixed = f"{_registry_prefix}{command}"
+    _registry[prefixed] = _CommandEntry(prefixed, help, handler, hint)
 
 
 def clear() -> None:
+    global _registry_prefix
     _registry.clear()
+    _registry_prefix = ""
 
 
 def get_commands() -> dict[str, _CommandEntry]:

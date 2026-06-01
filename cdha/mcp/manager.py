@@ -104,6 +104,21 @@ class MCPManager:
             {"name": name, **cfg} for name, cfg in self._data.items()
         ]
 
+    def get(self, name: str) -> Optional[dict]:
+        """Get an MCP server config by name."""
+        return self._data.get(name)
+
+    def enable(self, name: str, enabled: bool = True) -> Optional[str]:
+        """Enable or disable an MCP server.
+
+        Returns error message or None on success.
+        """
+        if name not in self._data:
+            return f"MCP server '{name}' not found"
+        self._data[name]["enabled"] = enabled
+        self._save()
+        return None
+
     def remove(self, name: str):
         self._data.pop(name, None)
         if name in self._clients:

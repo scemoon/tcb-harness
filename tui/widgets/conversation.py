@@ -405,6 +405,7 @@ class Conversation(containers.Vertical):
         self._msg_log: MessageLog | None = None
 
         self._post_lock = asyncio.Lock()
+        self._auto_named_session = False
 
     def update_title(self) -> None:
         """Update the screen title."""
@@ -834,9 +835,19 @@ class Conversation(containers.Vertical):
                 self._msg_log.user_input(text, self._turn_count)
             self.send_prompt_to_agent(text)
 
+    async def _auto_name_session(self, prompt: str) -> None:
+        if self._auto_named_session or self.agent is None:
+            return
+        self._auto_named_session = True
+        name = prompt.strip().split("\n")[0][:60].strip()
+        if name:
+            await self.agent.set_session_name(name)
+            self.post_message(messages.SessionUpdate(name=name))
+
     @work
     async def send_prompt_to_agent(self, prompt: str) -> None:
         if self.agent is not None:
+            await self._auto_name_session(prompt)
             stop_reason: str | None = None
             self.busy_count += 1
             try:
@@ -1406,6 +1417,9 @@ class Conversation(containers.Vertical):
 
         platform_commands.clear()
         if self._agent_data is not None:
+            commands_prefix = self._agent_data.get("commands_prefix", "")
+            if commands_prefix:
+                platform_commands.set_prefix(commands_prefix)
             commands_module = self._agent_data.get("commands_module", "")
             if commands_module:
                 import importlib

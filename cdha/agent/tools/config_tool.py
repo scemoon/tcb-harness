@@ -46,7 +46,6 @@ class ConfigReadTool:
             "default_model": self._config.default_model,
             "default_provider": self._config.default_provider,
             "default_mode": self._config.default_mode,
-            "default_cloud": self._config.default_cloud,
             "current_project": self._config.current_project,
             "tui.theme": self._config.tui.theme if self._config.tui else None,
             "log_level": self._config.log_level,
@@ -86,7 +85,7 @@ class ConfigWriteTool:
         )
 
     ALLOWED_KEYS = {
-        "default_model", "default_provider", "default_mode", "default_cloud",
+        "default_model", "default_provider", "default_mode",
         "tui.theme", "log_level", "current_project",
     }
 
