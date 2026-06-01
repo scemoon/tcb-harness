@@ -24,7 +24,7 @@ class Command(TypedDict):
 
 
 class Agent(TypedDict):
-    """Describes an agent which TUI2 can connect to. Currently only Agent Client Protocol is supported.
+    """Describes an agent which A2TUI can connect to. Currently only Agent Client Protocol is supported.
 
     This information is stoed within TOML files, where the filename is the "identity" key plus the extension ".toml"
 
@@ -66,5 +66,9 @@ class Agent(TypedDict):
     """A Markdown document shown to the user when the conversation starts. Should contain a welcome message and any advice on getting started."""
     run_command: dict[OS, str]
     """Command to run the agent, by OS or wildcard."""
+    commands_module: NotRequired[str]
+    """Python module path to a commands module with a `register_commands()` function.
+    If set, the TUI will import this module and call `register_commands()` to register
+    platform-specific slash commands (e.g. `cdha:mode`, `cdha:spec`)."""
     actions: dict[OS, dict[Action, Command]]
     """Scripts to perform actions, typically at least to install the agent."""

@@ -1,5 +1,5 @@
 import pytest
-from cdh.lifecycle.manager import (
+from cdha.lifecycle.manager import (
     LifecycleManager,
     LifecycleStage,
     StageStatus,

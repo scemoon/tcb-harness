@@ -37,9 +37,11 @@ from textual.strip import Strip
 
 from tui import jsonrpc, messages
 from tui import paths
+from tui import platform_commands
+from tui.message_log import MessageLog
 from tui.agent_schema import Agent as AgentData
 from tui.acp import messages as acp_messages
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 from tui.acp import protocol as acp_protocol
 from tui.answer import Answer
 from tui.agent import AgentBase, AgentReady, AgentFail
@@ -61,6 +63,7 @@ from tui.menus import MenuItem
 from tui.widgets.shell_terminal import ShellTerminal
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from tui.acp.agent import Mode
     from tui.widgets.terminal import Terminal
     from tui.widgets.agent_response import AgentResponse
@@ -76,7 +79,7 @@ AGENT_FAIL_HELP = {
 
 Check that the agent is installed and up-to-date.
 
-Note that some agents require an ACP adapter to be installed to work with TUI2.
+Note that some agents require an ACP adapter to be installed to work with A2TUI.
 
 - Exit the app, and run `tui` again
 - Select the agent and hit ENTER
@@ -115,7 +118,7 @@ The agent reported an internal error:
 $ERROR
 ```
 
-This is likely an issue with the agent, and not TUI2.
+This is likely an issue with the agent, and not A2TUI.
 
 - Try the prompt again
 - Report the issue to the Agent developer
@@ -338,7 +341,7 @@ class Conversation(containers.Vertical):
     window = getters.query_one(Window)
     cursor = getters.query_one(Cursor)
     prompt = getters.query_one(Prompt)
-    app = getters.app(TUI2App)
+    app = getters.app(A2TUIApp)
 
     _shell: var[Shell | None] = var(None)
     shell_history_index: var[int] = var(0, init=False)
@@ -398,6 +401,8 @@ class Conversation(containers.Vertical):
         self._directory_watcher: DirectoryWatcher | None = None
 
         self._initial_prompt = initial_prompt
+
+        self._msg_log: MessageLog | None = None
 
         self._post_lock = asyncio.Lock()
 
@@ -720,10 +725,17 @@ class Conversation(containers.Vertical):
                     "agent-session-begin",
                     agent=self._agent_data["identity"],
                 )
+            session_id = getattr(self.agent, "session_id", None) or self._agent_session_id or "unknown"
+            self._msg_log = MessageLog(
+                session_id=session_id,
+                agent_name=self.agent_title or "unknown",
+            )
 
         self.agent_ready = True
 
     async def on_unmount(self) -> None:
+        if self._msg_log is not None:
+            self._msg_log.close()
         if self._directory_watcher is not None:
             self._directory_watcher.stop()
         if self.agent is not None:
@@ -744,6 +756,8 @@ class Conversation(containers.Vertical):
     async def on_agent_fail(self, message: AgentFail) -> None:
         self.agent_ready = True
         self._agent_fail = True
+        if self._msg_log is not None:
+            self._msg_log.error(message.message, turn=self._turn_count, details=message.details)
         self.notify(message.message, title="Agent failure", severity="error", timeout=5)
 
         if self._agent_data is not None:
@@ -810,12 +824,14 @@ class Conversation(containers.Vertical):
             await self.prompt_history.append(event.body)
             self.prompt_history_index = 0
             if text.startswith("/") and await self.slash_command(text):
-                # TUI2 has processed the slash command.
+                # A2TUI has processed the slash command.
                 return
             await self.post(UserInput(text))
             self.window.scroll_end(animate=False)
             self._loading = await self.post(Loading("Please wait..."), loading=True)
             await asyncio.sleep(0)
+            if self._msg_log is not None:
+                self._msg_log.user_input(text, self._turn_count)
             self.send_prompt_to_agent(text)
 
     @work
@@ -830,6 +846,8 @@ class Conversation(containers.Vertical):
                 from tui.widgets.markdown_note import MarkdownNote
 
                 self.turn = "client"
+                if self._msg_log is not None:
+                    self._msg_log.error(str(error), turn=self._turn_count)
 
                 message = error.message or "no details were provided"
 
@@ -863,6 +881,9 @@ class Conversation(containers.Vertical):
             self.prompt.project_directory_updated()
 
         self._turn_count += 1
+
+        if self._msg_log is not None:
+            self._msg_log.turn_end(self._turn_count, stop_reason)
 
         self.post_message(messages.SessionUpdate(state="idle"))
 
@@ -935,6 +956,8 @@ class Conversation(containers.Vertical):
     async def on_acp_agent_message(self, message: acp_messages.Update):
         message.stop()
         self._agent_thought = None
+        if self._msg_log is not None:
+            self._msg_log.agent_output(message.text, self._turn_count)
         await self.post_agent_response(message.text)
 
     @on(acp_messages.UserMessage)
@@ -947,6 +970,8 @@ class Conversation(containers.Vertical):
     @on(acp_messages.Thinking)
     async def on_acp_agent_thinking(self, message: acp_messages.Thinking):
         message.stop()
+        if self._msg_log is not None:
+            self._msg_log.agent_thought(message.text, self._turn_count)
         await self.post_agent_thought(message.text)
 
     @on(acp_messages.RequestPermission)
@@ -992,6 +1017,12 @@ class Conversation(containers.Vertical):
         from tui.widgets.tool_call import ToolCall
 
         tool_call = message.tool_call
+        if self._msg_log is not None and isinstance(message, acp_messages.ToolCall):
+            self._msg_log.tool_call(
+                tool_call.get("title", "unknown"),
+                tool_call.get("toolCallId", ""),
+                self._turn_count,
+            )
 
         if tool_call.get("status", None) in (None, "completed"):
             self._agent_thought = None
@@ -1320,7 +1351,7 @@ class Conversation(containers.Vertical):
 
     def _build_slash_commands(self) -> list[SlashCommand]:
         slash_commands = [
-            SlashCommand("/tui:about", "About TUI2"),
+            SlashCommand("/tui:about", "About A2TUI"),
             SlashCommand(
                 "/tui:clear",
                 "Clear conversation window",
@@ -1345,13 +1376,9 @@ class Conversation(containers.Vertical):
                 "Tweet a testimonial regarding TUI",
                 "<what you think of tui>",
             ),
-            SlashCommand("/mode", "Set mode", "<agent|plan|solo>"),
-            SlashCommand("/provider", "Set provider", "<provider name>"),
-            SlashCommand("/model", "Set model", "<model name>"),
-            SlashCommand("/harness", "Show harness info"),
-            SlashCommand("/cloud", "Set cloud", "<cloud name>"),
         ]
 
+        slash_commands.extend(platform_commands.get_slash_commands())
         slash_commands.extend(self.agent_slash_commands)
         deduplicated_slash_commands = {
             slash_command.command: slash_command for slash_command in slash_commands
@@ -1376,7 +1403,18 @@ class Conversation(containers.Vertical):
             self.app.settings.get("shell.allow_commands", expect_type=str).split()
         )
         self.shell
+
+        platform_commands.clear()
         if self._agent_data is not None:
+            commands_module = self._agent_data.get("commands_module", "")
+            if commands_module:
+                import importlib
+                try:
+                    mod = importlib.import_module(commands_module)
+                    mod.register_commands()
+                except Exception:
+                    log.warning(f"Failed to load commands from {commands_module}")
+            self.prompt.slash_commands = self._build_slash_commands()
 
             async def start_agent() -> None:
                 """Start the agent after refreshing the UI."""
@@ -1836,7 +1874,7 @@ class Conversation(containers.Vertical):
         )
         console.print(render)
         path = platformdirs.user_pictures_dir()
-        svg_filename = generate_datetime_filename("TUI2", ".svg", None)
+        svg_filename = generate_datetime_filename("A2TUI", ".svg", None)
         svg_path = os.path.expanduser(os.path.join(path, svg_filename))
         console.save_svg(svg_path)
         import webbrowser
@@ -1863,13 +1901,13 @@ class Conversation(containers.Vertical):
         self.refresh_bindings()
 
     async def slash_command(self, text: str) -> bool:
-        """Give TUI2 the opertunity to process slash commands.
+        """Give A2TUI the opertunity to process slash commands.
 
         Args:
             text: The prompt, including the slash in the first position.
 
         Returns:
-            `True` if TUI2 has processed the slash command, `False` if it should
+            `True` if A2TUI has processed the slash command, `False` if it should
                 be forwarded to the agent.
         """
         command, _, parameters = text[1:].partition(" ")
@@ -1932,11 +1970,11 @@ class Conversation(containers.Vertical):
         elif command == "tui:testimonial":
             if self.agent_title is not None:
                 default_testimonial = (
-                    f"I'm running {self.agent_title} in the terminal with TUI2."
+                    f"I'm running {self.agent_title} in the terminal with A2TUI."
                 )
             else:
                 default_testimonial = (
-                    "Try TUI2, the universal interface for AI in your terminal"
+                    "Try A2TUI, the universal interface for AI in your terminal"
                 )
 
             testimonial = parameters or default_testimonial
@@ -1949,65 +1987,7 @@ class Conversation(containers.Vertical):
                 hashtags=["ai"],
             )
             return True
-        elif command == "mode":
-            from cdh.config import load_config, save_config
-            mode = parameters.strip().lower()
-            if mode not in ("agent", "plan", "solo"):
-                self.notify("Mode must be: agent, plan, or solo", title="/mode", severity="error")
-                return True
-            cfg = load_config()
-            cfg.default_mode = mode
-            save_config(cfg)
-            self.app.settings.set("mode", mode)
-            self.flash(f"CDH mode set to [b]{mode}")
-            return True
-        elif command == "provider":
-            from cdh.config import load_config, save_config
-            provider = parameters.strip()
-            if not provider:
-                self.notify("Provider name required", title="/provider", severity="error")
-                return True
-            cfg = load_config()
-            cfg.default_provider = provider
-            save_config(cfg)
-            self.app.settings.set("provider", provider)
-            self.flash(f"CDH provider set to [b]{provider}")
-            return True
-        elif command == "model":
-            from cdh.config import load_config, save_config
-            model = parameters.strip()
-            if not model:
-                self.notify("Model name required", title="/model", severity="error")
-                return True
-            cfg = load_config()
-            cfg.default_model = model
-            save_config(cfg)
-            self.app.settings.set("model", model)
-            self.flash(f"CDH model set to [b]{model}")
-            return True
-        elif command == "cloud":
-            from cdh.config import load_config, save_config
-            cloud = parameters.strip()
-            if not cloud:
-                self.notify("Cloud name required", title="/cloud", severity="error")
-                return True
-            cfg = load_config()
-            cfg.default_cloud = cloud
-            save_config(cfg)
-            self.app.settings.set("cloud", cloud)
-            self.flash(f"CDH cloud set to [b]{cloud}")
-            return True
-        elif command == "cdh:harness":
-            from cdh.config import load_config
-            cfg = load_config()
-            info = f"""CDH Harness Info:
-Provider: {cfg.default_provider}
-Model: {cfg.default_model}
-Mode: {cfg.default_mode}
-Cloud: {cfg.default_cloud}
-Workspace: {cfg.default_workspace}"""
-            from tui.widgets.markdown_note import MarkdownNote
-            await self.post(MarkdownNote(info))
+        if await platform_commands.dispatch(self, command, parameters):
             return True
 
         return False

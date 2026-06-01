@@ -1,4 +1,4 @@
-# CDH (Cloud Dev Harness) - Agent for TUI2
+# CDH (Cloud Dev Harness) - Agent for A2TUI
 # https://github.com/cloud-dev-harness/cdh
 
 identity = "cdh.cloud-dev-harness"
@@ -13,4 +13,9 @@ publisher_url = "https://github.com/cloud-dev-harness"
 type = "coding"
 description = "Cloud Dev Harness - cloud-native development Agent framework with LLM provider integration"
 tags = []
-run_command."*" = "cdh-agent-acp"
+recommended = true
+help = "CDH Agent - Cloud Dev Harness\n\nA cloud-native development Agent framework with LLM provider integration.\n\nSupported providers: MiniMax, Anthropic, OpenAI, DeepSeek, GLM, Ollama"
+commands_module = "cdha.commands"
+run_command."*" = "python3 -m cdha.agent.cdh_agent_acp"
+
+[actions]

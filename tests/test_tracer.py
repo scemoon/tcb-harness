@@ -1,5 +1,5 @@
 import pytest
-from cdh.trace.tracer import Tracer
+from cdha.trace.tracer import Tracer
 
 
 def test_tracer_start_stop():

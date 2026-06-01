@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent  # cloud-harness root
-CDH_DIR = Path(os.environ.get("CLOUD_DEV_HARNESS_DIR", Path.home() / ".cloud-dev-harness"))
+CDH_DIR = Path(os.environ.get("CLOUD_DEV_HARNESS_DIR", Path.home() / ".cdh"))
 DEFAULT_WORKSPACE = CDH_DIR / "workspace"
 TOKEN_FILE = CDH_DIR / ".cloud-harness-tokens.json"
 GITHUB_API = "https://api.github.com"

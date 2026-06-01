@@ -21,7 +21,7 @@ from textual.widgets.option_list import Option
 from textual.widgets.text_area import Selection
 from textual import events
 
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 from tui import messages
 from tui.widgets.highlighted_textarea import HighlightedTextArea
 from tui.widgets.condensed_path import CondensedPath
@@ -133,7 +133,7 @@ See on-screen instructions for details.
         ),
     ]
 
-    app = getters.app(TUI2App)
+    app = getters.app(A2TUIApp)
 
     auto_completes: var[list[Option]] = var(list)
     multi_line = var(False, bindings=True)
@@ -462,7 +462,7 @@ class Prompt(containers.VerticalGroup):
     modes: var[dict[str, Mode] | None] = var(None)
     status: var[str] = var("")
 
-    app = getters.app(TUI2App)
+    app = getters.app(A2TUIApp)
 
     def __init__(
         self,

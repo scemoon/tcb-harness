@@ -1,7 +1,7 @@
 import sys
 
 import click
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 from tui.agent_schema import Agent
 
 
@@ -73,7 +73,7 @@ class DefaultCommandGroup(click.Group):
 @click.option("-v", "--version", is_flag=True, help="Show version and exit.")
 @click.pass_context
 def main(ctx, version):
-    """ TUI2 — AI for your terminal."""
+    """ A2TUI — AI for your terminal."""
     if version:
         from tui import get_version
 
@@ -111,7 +111,7 @@ def main(ctx, version):
     default=None,
     help="Public URL to use in conjunction with --serve",
 )
-@click.option("-s", "--serve", is_flag=True, help="Serve TUI2 as a web application")
+@click.option("-s", "--serve", is_flag=True, help="Serve A2TUI as a web application")
 def run(
     port: int,
     host: str,
@@ -120,11 +120,11 @@ def run(
     agent: str = "",
     public_url: str | None = None,
 ):
-    """Run TUI2."""
+    """Run A2TUI."""
 
     check_directory(project_dir)
 
-    app = TUI2App(
+    app = A2TUIApp(
         agent_data=None,
         project_dir=project_dir,
     )
@@ -181,7 +181,7 @@ def run(
     default="localhost",
     help="Host to use in conjunction with --serve",
 )
-@click.option("-s", "--serve", is_flag=True, help="Serve TUI2 as a web application")
+@click.option("-s", "--serve", is_flag=True, help="Serve A2TUI as a web application")
 def acp(
     command: str,
     host: str,
@@ -235,12 +235,12 @@ def acp(
         server.serve()
 
     else:
-        app = TUI2App(agent_data=agent_data, project_dir=project_dir)
+        app = A2TUIApp(agent_data=agent_data, project_dir=project_dir)
         app.run()
         app.run_on_exit()
 
     print("")
-    print("[bold magenta]Thanks for trying out TUI2!")
+    print("[bold magenta]Thanks for trying out A2TUI!")
     print("Please head to Discussions to share your experiences (good or bad).")
     print("https://github.com/batrachianai/tui/discussions")
 
@@ -248,7 +248,7 @@ def acp(
 @main.command("settings")
 def settings() -> None:
     """Settings information."""
-    app = TUI2App()
+    app = A2TUIApp()
     print(f"{app.settings_path}")
 
 
@@ -263,7 +263,7 @@ def replay(path: str) -> None:
 
     tui acp "tui replay tui.log"
 
-    This will replay the agents output, and TUI2 will update the conversation as it would a real agent.
+    This will replay the agents output, and A2TUI will update the conversation as it would a real agent.
     """
     import time
 
@@ -288,11 +288,11 @@ def replay(path: str) -> None:
     help="Public URL for textual_serve Server (e.g. https://example.com)",
 )
 def serve(port: int, host: str, public_url: str | None = None) -> None:
-    """Serve TUI2 as a web application."""
+    """Serve A2TUI as a web application."""
     from textual_serve.server import Server
 
     server = Server(
-        sys.argv[0], host=host, port=port, title="TUI2", public_url=public_url
+        sys.argv[0], host=host, port=port,         title="A2TUI", public_url=public_url
     )
     set_process_title("tui serve")
     server.serve()
@@ -304,7 +304,7 @@ def about() -> None:
 
     from tui import about
 
-    app = TUI2App()
+    app = A2TUIApp()
 
     print(about.render(app))
 

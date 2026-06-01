@@ -16,7 +16,7 @@ from textual import widgets
 from textual import getters
 from textual.message import Message
 
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 from tui.session_tracker import SessionDetails
 from tui import messages
 
@@ -83,7 +83,7 @@ class Underline(Widget):
 class SessionsTabs(Widget):
 
     ALLOW_SELECT = False
-    app: getters.app[TUI2App] = getters.app(TUI2App)
+    app: getters.app[A2TUIApp] = getters.app(A2TUIApp)
 
     title_container = getters.query_one("#title-container", Widget)
 

@@ -18,7 +18,7 @@ from textual.reactive import reactive
 from textual import containers
 from textual import widgets
 
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 from tui.format_path import format_path
 from tui import messages
 from tui.pill import pill
@@ -156,7 +156,7 @@ class LauncherItem(containers.VerticalGroup):
 
 
 class Launcher(containers.VerticalGroup):
-    app = getters.app(TUI2App)
+    app = getters.app(A2TUIApp)
     grid_select = getters.query_one("#launcher-grid-select", GridSelect)
     DIGITS = "123456789ABCDEF"
 
@@ -261,7 +261,7 @@ class StoreScreen(Screen):
 
     project_dir: reactive[Path] = reactive(Path)
 
-    app = getters.app(TUI2App)
+    app = getters.app(A2TUIApp)
 
     @dataclass
     class OpenAgentDetails(Message):
@@ -291,7 +291,7 @@ class StoreScreen(Screen):
 
     def get_info(self) -> Content:
         content = Content.assemble(
-            Content.from_markup("[bold]🐸 TUI2[/]\n"),
+            Content.from_markup("[bold]🐸 A2TUI[/]\n"),
             Content.from_markup("[dim]Agent store - choose your fighter[/]"),
         )
         return content
@@ -417,6 +417,9 @@ class StoreScreen(Screen):
     @work
     async def on_mount(self) -> None:
         self.app.settings_changed_signal.subscribe(self, self.setting_updated)
+        if not self.app.settings.get("launcher.agents", str).strip():
+            self.app.settings.set("launcher.agents", "cdh.cloud-dev-harness")
+            await self.app.save_settings()
         try:
             self._agents = await read_agents()
         except Exception as error:

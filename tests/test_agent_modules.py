@@ -3,13 +3,13 @@ import tempfile
 import os
 from pathlib import Path
 
-from cdh.agent.session import AgentSession, SessionData
-from cdh.agent.hooks import HookManager, HookContext, HookResult, HookEvent
-from cdh.agent.permissions import (
+from cdha.agent.session import AgentSession, SessionData
+from cdha.agent.hooks import HookManager, HookContext, HookResult, HookEvent
+from cdha.agent.permissions import (
     PermissionChecker, PermissionSet, PermissionResult,
     PathRule, CommandRule, create_safe_permission_set
 )
-from cdh.agent.attachments import AttachmentSet, Attachment
+from cdha.agent.attachments import AttachmentSet, Attachment
 
 
 class TestSessionData:

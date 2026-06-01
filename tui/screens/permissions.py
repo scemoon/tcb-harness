@@ -15,7 +15,7 @@ from textual.widgets.option_list import Option
 from tui.answer import Answer
 from tui.widgets.question import Question
 
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 
 SOURCE1 = '''\
 def loop_first(values: Iterable[T]) -> Iterable[tuple[bool, T]]:
@@ -197,7 +197,7 @@ class PermissionsScreen(Screen[Answer]):
     def get_diff_type(self) -> str:
         app = self.app
         diff_type = "auto"
-        if isinstance(app, TUI2App):
+        if isinstance(app, A2TUIApp):
             diff_type = app.settings.get("diff.view", str)
         return diff_type
 
@@ -252,7 +252,7 @@ class PermissionsScreen(Screen[Answer]):
 
     async def on_mount(self):
         app = self.app
-        if isinstance(app, TUI2App):
+        if isinstance(app, A2TUIApp):
             diff_view_setting = app.settings.get("diff.view", str)
             self.query_one("#diff-select", Select).value = diff_view_setting
         self.navigator.highlighted = 0

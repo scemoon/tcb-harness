@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from cdh.storage.session import SessionStore
+from cdha.storage.session import SessionStore
 
 
 def test_create_session(tmp_path):

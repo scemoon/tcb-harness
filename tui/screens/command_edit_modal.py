@@ -33,7 +33,7 @@ class CommandEditModal(ModalScreen[str | None]):
                     classes="instructions",
                 )
             yield widgets.Static(
-                "TUI2 will run the following command (edit if you need to).",
+                "A2TUI will run the following command (edit if you need to).",
                 classes="instructions",
             )
             yield widgets.TextArea(

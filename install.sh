@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="${REPO:-anomalyco/cloud-dev-harness}"
 VERSION="${VERSION:-latest}"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.cloud-dev-harness}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.cdh}"
 
 if [ -t 1 ]; then
   GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'

@@ -1,7 +1,7 @@
 from textual.app import ComposeResult
 from textual import getters
 
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 from tui.widgets.grid_select import GridSelect
 from tui.widgets.session_summary import SessionSummary
 from tui.session_tracker import SessionTracker, SessionDetails
@@ -9,7 +9,7 @@ from tui.session_tracker import SessionTracker, SessionDetails
 
 class SessionGridSelect(GridSelect):
     FOCUS_ON_CLICK = True
-    app: getters.app[TUI2App] = getters.app(TUI2App)
+    app: getters.app[A2TUIApp] = getters.app(A2TUIApp)
 
     def __init__(
         self,

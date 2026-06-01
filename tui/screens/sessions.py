@@ -9,7 +9,7 @@ from textual import containers
 from textual import on
 
 
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 from tui.widgets.grid_select import GridSelect
 from tui.widgets.session_grid_select import SessionGridSelect
 from tui.widgets.session_summary import SessionSummary
@@ -22,7 +22,7 @@ class SessionsScreen(ModalScreen[str]):
     CSS_PATH = "sessions.tcss"
     BINDINGS = [Binding("escape", "dismiss", "Dismiss")]
 
-    app: getters.app[TUI2App] = getters.app(TUI2App)
+    app: getters.app[A2TUIApp] = getters.app(A2TUIApp)
     session_grid_select = getters.query_one(SessionGridSelect)
 
     def compose(self) -> ComposeResult:

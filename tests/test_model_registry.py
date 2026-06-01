@@ -1,5 +1,5 @@
 import pytest
-from cdh.models.registry import ModelRegistry, REFERENCE_MODELS
+from cdha.models.registry import ModelRegistry, REFERENCE_MODELS
 
 
 def test_registry_initialize():

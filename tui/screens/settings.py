@@ -13,7 +13,7 @@ from textual import getters
 
 
 from tui.settings import Setting
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 
 
 class SettingsInput(Input):
@@ -27,7 +27,7 @@ class SettingsScreen(ModalScreen):
     ]
     CSS_PATH = "settings.tcss"
 
-    app = getters.app(TUI2App)
+    app = getters.app(A2TUIApp)
 
     search_input = getters.query_one("Input#search", Input)
 

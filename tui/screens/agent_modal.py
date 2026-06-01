@@ -14,7 +14,7 @@ from textual.reactive import var
 import tui
 from textual.binding import Binding
 from tui.agent_schema import Action, Agent, OS, Command
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 
 
 class DescriptionContainer(containers.VerticalScroll):
@@ -33,7 +33,7 @@ class AgentModal(ModalScreen):
 
     action = var("")
 
-    app = getters.app(TUI2App)
+    app = getters.app(A2TUIApp)
     action_select = getters.query_one("#action-select", widgets.Select)
     launcher_checkbox = getters.query_one("#launcher-checkbox", widgets.Checkbox)
 
@@ -51,13 +51,13 @@ class AgentModal(ModalScreen):
         app = self.app
         launcher_set = frozenset(app.settings.get("launcher.agents", str).splitlines())
         agent = self._agent
-        actions = agent["actions"]
+        actions = agent.get("actions", {})
 
         script_os = cast(OS, tui.os)
         if script_os not in actions:
             script_os = "*"
 
-        commands: dict[Action, Command] = actions[cast(OS, script_os)]
+        commands: dict[Action, Command] = actions.get(cast(OS, script_os), {})
         script_choices = [
             (action["description"], name) for name, action in commands.items()
         ]
@@ -70,7 +70,7 @@ class AgentModal(ModalScreen):
                 if "install_acp" in commands:
                     yield widgets.Static(
                         Content(
-                            f"{agent['name']} requires an ACP adapter to work with TUI2. Install from the actions list."
+                            f"{agent['name']} requires an ACP adapter to work with A2TUI. Install from the actions list."
                         ),
                         classes="acp-warning",
                     )
@@ -119,7 +119,7 @@ class AgentModal(ModalScreen):
             self.dismiss("launch")
             return
 
-        agent_actions = self._agent["actions"]
+        agent_actions = self._agent.get("actions", {})
 
         if (commands := agent_actions.get(tui.os, None)) is None:
             commands = agent_actions.get("*", None)

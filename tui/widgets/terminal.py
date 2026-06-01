@@ -30,7 +30,7 @@ class Terminal(ScrollView, can_focus=True):
     HELP = """\
 ## Terminal
 
-An embedded terminal running within TUI2.
+An embedded terminal running within A2TUI.
 When the terminal has focus, it will take over the handling of keys.
 
 Tap escape *twice* to exit.

@@ -13,7 +13,7 @@ from textual.css.query import NoMatches
 from textual import containers
 from textual.widgets import Static, Markdown
 
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 from tui.acp import protocol
 from tui.menus import MenuItem
 from tui.pill import pill
@@ -61,7 +61,7 @@ class ToolCallHeader(Static):
 class ToolCall(containers.VerticalGroup):
     DEFAULT_CLASSES = "block"
 
-    app = getters.app(TUI2App)
+    app = getters.app(A2TUIApp)
     has_content: var[bool] = var(False, toggle_class="-has-content")
     expanded: var[bool] = var(False, toggle_class="-expanded")
     tool_call: var[protocol.ToolCall | None] = var(None)
@@ -247,7 +247,7 @@ class ToolCall(containers.VerticalGroup):
 
                     yield (diff_view := make_diff(path, path, old_text, new_text))
 
-                    if isinstance(self.app, TUI2App):
+                    if isinstance(self.app, A2TUIApp):
                         diff_view_setting = self.app.settings.get("diff.view", str)
                         diff_view.split = diff_view_setting == "split"
                         diff_view.auto_split = diff_view_setting == "auto"

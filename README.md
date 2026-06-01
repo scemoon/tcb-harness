@@ -91,7 +91,7 @@ cdh config list            # Show full config
 
 ## Configuration
 
-Config file: `~/.cloud-dev-harness/cdh.config.yaml`
+Config file: `~/.cdh/cdh.config.yaml`
 
 ```yaml
 default_provider: openai

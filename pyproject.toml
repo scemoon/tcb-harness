@@ -1,7 +1,7 @@
 [project]
 name = "cloud-dev-harness"
 version = "1.4.0"
-description = "Cloud Dev Harness - cloud-native development Agent framework with TUI2"
+description = "Cloud Dev Harness - cloud-native development Agent framework with A2TUI"
 requires-python = ">=3.14.2"
 dependencies = [
     "textual>=0.46.0",
@@ -36,7 +36,8 @@ dependencies = [
 
 [project.scripts]
 cdh = "cdh.cli:main"
-cdh-agent-acp = "cdh.agent.cdh_agent_acp:main"
+cdh-agent-acp = "cdha.agent.cdh_agent_acp:main"
+cdha = "cdha.cli:main"
 tui = "tui.cli:main"
 
 [build-system]
@@ -44,7 +45,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["cdh*", "tui*"]
+include = ["cdha*", "cdh*", "tui*"]
 
 [dependency-groups]
 dev = ["mypy>=1.19.1", "pyinstrument>=5.1.1", "textual-dev>=1.8.0"]

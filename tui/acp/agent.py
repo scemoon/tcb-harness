@@ -1,4 +1,5 @@
 import asyncio
+import sys
 
 from contextlib import suppress
 from datetime import datetime
@@ -473,6 +474,8 @@ class Agent(AgentBase):
         PIPE = asyncio.subprocess.PIPE
         env = os.environ.copy()
         env["TOAD_CWD"] = str(Path("./").absolute())
+        python_bin = str(Path(sys.executable).parent)
+        env["PATH"] = f"{python_bin}:{env.get('PATH', '')}"
 
         if (command := self.command) is None:
             self.post_message(

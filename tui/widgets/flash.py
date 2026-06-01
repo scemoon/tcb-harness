@@ -7,7 +7,7 @@ from textual.timer import Timer
 from textual import getters
 
 
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 
 
 class Flash(Static):
@@ -45,7 +45,7 @@ class Flash(Static):
         }
     }
     """
-    app = getters.app(TUI2App)
+    app = getters.app(A2TUIApp)
     flash_timer: var[Timer | None] = var(None)
 
     def flash(

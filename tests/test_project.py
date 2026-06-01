@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from cdh.storage.project import ProjectConfig
+from cdha.storage.project import ProjectConfig
 
 
 def test_create_project(tmp_path):

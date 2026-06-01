@@ -31,7 +31,7 @@ Use `ctrl+o` to enter Setup mode and type `go` to change settings.
 
 Use `/skills` to manage and install skills.
 
-Join the community at [TUI2 Hf Inference Explorers](https://huggingface.co/toad-hf-inference-explorers)
+Join the community at [A2TUI Hf Inference Explorers](https://huggingface.co/toad-hf-inference-explorers)
 '''
 
 recommended = false

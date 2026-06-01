@@ -2,7 +2,7 @@ from typing import Literal
 import platform
 
 NAME = "tui"
-TITLE = "TUI2"
+TITLE = "A2TUI"
 
 OS = Literal["linux", "macos", "windows", "*"]
 
@@ -30,7 +30,7 @@ def get_os_matrix(matrix: dict[OS, str]) -> str | None:
 
 
 def get_version() -> str:
-    """Get the current version of TUI2.
+    """Get the current version of A2TUI.
 
     Returns:
         str: Version string, e.g "1.2.3"

@@ -16,7 +16,7 @@ ASCII_TOAD = r"""
 
 
 WELCOME_MD = """\
-## TUI2 v1.0
+## A2TUI v1.0
 
 Welcome, **Will**!
 

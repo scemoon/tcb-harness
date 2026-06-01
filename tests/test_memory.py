@@ -2,12 +2,12 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from cdh.memory.pyramid import MemoryPyramid, MemoryLayer, MemoryEntry
-from cdh.memory.symbolic import SymbolicMemory, MermaidCanvas, NodeType
-from cdh.memory.offload import ContextOffloader, OffloadConfig
-from cdh.memory.recall import HybridRecall, BM25, RecallResult
-from cdh.memory.backend import MemoryBackend, MemoryRecord
-from cdh.memory import AgentMemory
+from cdha.memory.pyramid import MemoryPyramid, MemoryLayer, MemoryEntry
+from cdha.memory.symbolic import SymbolicMemory, MermaidCanvas, NodeType
+from cdha.memory.offload import ContextOffloader, OffloadConfig
+from cdha.memory.recall import HybridRecall, BM25, RecallResult
+from cdha.memory.backend import MemoryBackend, MemoryRecord
+from cdha.memory import AgentMemory
 
 
 class TestMemoryPyramid:

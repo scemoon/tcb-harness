@@ -16,7 +16,7 @@ from textual import containers
 from textual.widget import Widget
 
 
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 from tui import messages
 from tui.agent_schema import Agent
 from tui.acp import messages as acp_messages
@@ -100,7 +100,7 @@ class MainScreen(Screen, can_focus=False):
     scrollbar = reactive("")
     project_path: var[Path] = var(Path("./").expanduser().absolute())
 
-    app = getters.app(TUI2App)
+    app = getters.app(A2TUIApp)
 
     def __init__(
         self,

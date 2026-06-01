@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(/users/san/workspace/cloud-dev-harness/.venv/bin/python *)",
+      "Bash(.venv/bin/python *)"
+    ]
+  },
+  "$version": 4
+}

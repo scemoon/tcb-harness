@@ -1,6 +1,6 @@
 from textual_diff_view import DiffView
 
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 
 
 def make_diff(
@@ -36,7 +36,7 @@ def make_diff(
     except LookupError:
         pass
     else:
-        if isinstance(app, TUI2App):
+        if isinstance(app, A2TUIApp):
             diff_view_setting = app.settings.get("diff.view", str)
             split = diff_view_setting == "split"
             auto_split = diff_view_setting == "auto"

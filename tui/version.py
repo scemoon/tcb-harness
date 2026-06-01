@@ -5,7 +5,7 @@ VERSION_TOML_URL = "https://www.batrachian.ai/tui.toml"
 
 
 class VersionMeta(NamedTuple):
-    """Information about the current version of TUI2."""
+    """Information about the current version of A2TUI."""
 
     version: str
     upgrade_message: str
@@ -17,7 +17,7 @@ class VersionCheckFailed(Exception):
 
 
 async def check_version() -> tuple[bool, VersionMeta]:
-    """Check for a new version of TUI2.
+    """Check for a new version of A2TUI.
 
     Returns:
         A tuple containing a boolean that indicates if there is a newer version,

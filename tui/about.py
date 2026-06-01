@@ -3,17 +3,17 @@ from importlib.metadata import version
 import platform
 from string import Template
 
-from tui.app import TUI2App
+from tui.app import A2TUIApp
 from tui import paths
 from tui import get_version
 
 ABOUT_TEMPLATE = Template(
     """\
-# About TUI2 v${TOAD_VERSION}
+# About A2TUI v${TOAD_VERSION}
 
 © Will McGugan.
                           
-TUI2 is licensed under the terms of the [GNU AFFERO GENERAL PUBLIC LICENSE](https://www.gnu.org/licenses/agpl-3.0.txt).
+A2TUI is licensed under the terms of the [GNU AFFERO GENERAL PUBLIC LICENSE](https://www.gnu.org/licenses/agpl-3.0.txt).
 
 
 ## Config
@@ -45,7 +45,7 @@ $CONFIG
 
 | Library | Version |
 | --- | --- | 
-| TUI2 | $TOAD_VERSION |
+| A2TUI | $TOAD_VERSION |
 | Textual | $TEXTUAL_VERSION |
 | Rich | $RICH_VERSION |
                           
@@ -62,7 +62,7 @@ $CONFIG
 )
 
 
-def render(app: TUI2App) -> str:
+def render(app: A2TUIApp) -> str:
     """Render about markdown.
 
     Returns:

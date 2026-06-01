@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from cdh.config import GlobalConfig, AgentConfig, resolve_env, ensure_dirs
+from cdha.config import GlobalConfig, AgentConfig, resolve_env, ensure_dirs
 
 
 def test_default_config_values():
@@ -32,7 +32,7 @@ def test_resolve_env(monkeypatch):
 
 
 def test_ensure_dirs(tmp_path, monkeypatch):
-    monkeypatch.setattr("cdh.config.CLOUD_DEV_HARNESS_DIR", tmp_path)
+    monkeypatch.setattr("cdha.config.CLOUD_DEV_HARNESS_DIR", tmp_path)
     ensure_dirs()
     assert (tmp_path / "sessions").exists()
     assert (tmp_path / "skills").exists()

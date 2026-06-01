@@ -234,7 +234,7 @@ def get_store_screen():
     return StoreScreen()
 
 
-class TUI2App(App, inherit_bindings=False):
+class A2TUIApp(App, inherit_bindings=False):
     """The top level app."""
 
     CSS_PATH = "tui.tcss"
@@ -634,7 +634,7 @@ class TUI2App(App, inherit_bindings=False):
     def _sync_cdh_config(self, key: str, value: object) -> None:
         """Sync cdh config to GlobalConfig when tui settings change."""
         try:
-            from cdh.config import load_config, save_config
+            from cdha.config import load_config, save_config
             cfg = load_config()
             cdh_key = key[4:]
             if cdh_key == "mode":
@@ -645,8 +645,6 @@ class TUI2App(App, inherit_bindings=False):
                 cfg.default_model = value
             elif cdh_key == "cloud":
                 cfg.default_cloud = value
-            elif cdh_key == "workspace":
-                cfg.default_workspace = value
             elif cdh_key == "log_level":
                 cfg.log_level = value
             elif cdh_key == "session_auto_save":
@@ -658,14 +656,13 @@ class TUI2App(App, inherit_bindings=False):
     def _load_cdh_config(self) -> None:
         """Load cdh config into tui settings on startup."""
         try:
-            from cdh.config import load_config
+            from cdha.config import load_config
             cfg = load_config()
             cdh_settings = {
                 "cdh.mode": cfg.default_mode,
                 "cdh.provider": cfg.default_provider,
                 "cdh.model": cfg.default_model,
                 "cdh.cloud": cfg.default_cloud,
-                "cdh.workspace": cfg.default_workspace,
                 "cdh.log_level": cfg.log_level,
                 "cdh.session_auto_save": cfg.session_auto_save,
             }
@@ -782,9 +779,9 @@ class TUI2App(App, inherit_bindings=False):
 
         project_path = Path(self.project_dir or "./").resolve().absolute()
         return MainScreen(project_path, self.agent_data).data_bind(
-            column=TUI2App.column,
-            column_width=TUI2App.column_width,
-            scrollbar=TUI2App.scrollbar,
+            column=A2TUIApp.column,
+            column_width=A2TUIApp.column_width,
+            scrollbar=A2TUIApp.scrollbar,
         )
 
     @work
@@ -909,8 +906,8 @@ class TUI2App(App, inherit_bindings=False):
                 session_pk=session_pk,
                 initial_prompt=initial_prompt,
             ).data_bind(
-                column=TUI2App.column,
-                column_width=TUI2App.column_width,
+                column=A2TUIApp.column,
+                column_width=A2TUIApp.column_width,
             )
 
             return screen
