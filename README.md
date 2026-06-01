@@ -82,14 +82,19 @@ cdh tui
 ### CLI
 
 ```bash
-cdh tui                       # Start TUI
-cdh tui --mode plan           # Start in plan mode
-cdh tui --agent <name>        # Start specific agent
-cdh init                      # Create config directory
-cdh config                    # Open configuration editor
+cdh                          # Launch TUI (agent store)
+cdh tui                      # Launch TUI (agent store)
+cdh tui --mode plan          # Start in plan mode
+cdh tui --agent <identity>   # Launch specific agent directly
+cdh config                   # Open configuration editor
 cdh config set provider openai
-cdh config list               # Show full config
-cdh logs --tail               # View logs
+cdh config list              # Show full config
+cdh logs                     # View logs (last 20 lines)
+cdh logs --tail 100          # View last 100 log lines
+cdh logs --follow            # Follow log output
+cdh project                 # List projects
+cdh project show <name>     # Show project details
+cdh version                  # Show version
 ```
 
 ### Key Commands
@@ -182,16 +187,5 @@ Environment variables are interpolated with `${VAR}` syntax in config values.
 
 ## CloudSpec Framework
 
-Vendor-neutral specification system with multi-cloud support:
-
-```bash
-# Initialize a new project
-cdh harness init
-
-# Import existing cloud project
-cdh harness import
-```
-
-Rules: GEN-* (general), SEC-* (security), QLT-* (quality), SPC-* (spec)
-
-Supported clouds: Tencent CloudBase (TCB), Aliyun, AWS
+Vendor-neutral specification system with multi-cloud support (TCB, Aliyun, AWS).
+Rules: GEN-* (general), SEC-* (security), QLT-* (quality), SPC-* (spec).
