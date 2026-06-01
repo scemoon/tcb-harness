@@ -6,6 +6,16 @@ from tui.prompt.extract import extract_paths_from_prompt
 from tui.prompt.resource import load_resource, ResourceError
 
 
+CLOUD_SPEC_SKILL_PATH = Path(__file__).resolve().parent.parent.parent / "cloud-spec-skill" / "SKILL.md"
+
+
+def _get_cloud_spec_content() -> str:
+    """Load cloud-spec-skill content."""
+    if CLOUD_SPEC_SKILL_PATH.exists():
+        return CLOUD_SPEC_SKILL_PATH.read_text(encoding="utf-8")
+    return ""
+
+
 def build(project_path: Path, prompt: str) -> list[protocol.ContentBlock]:
     """Build the prompt structure and extract paths with the @ syntax.
 
@@ -17,6 +27,14 @@ def build(project_path: Path, prompt: str) -> list[protocol.ContentBlock]:
         A list of content blocks.
     """
     prompt_content: list[protocol.ContentBlock] = []
+
+    # Prepend cloud-spec-skill as system guidance
+    cloud_spec_content = _get_cloud_spec_content()
+    if cloud_spec_content:
+        prompt_content.append({
+            "type": "text",
+            "text": f"[System Guidance - Always follow these development standards]\n\n{cloud_spec_content}\n\n---\n\n"
+        })
 
     prompt_content.append({"type": "text", "text": prompt})
     for path, _, _ in extract_paths_from_prompt(prompt):

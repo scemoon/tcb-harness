@@ -359,6 +359,25 @@ class AgentEngine:
                 logger.warning("on_text_chunk failed: %s", e)
                 return
 
+    def _emit_plan_update(self) -> list[StreamEvent]:
+        """Emit a plan update event from current tasks and todos."""
+        from cdha.models.messages import StreamEvent
+
+        entries = []
+        for task in self._task_manager.list_tasks():
+            entries.append({
+                "content": task.get("subject", task.get("description", "")),
+                "status": task.get("status", "pending"),
+                "priority": task.get("metadata", {}).get("priority", "medium"),
+            })
+        for todo in self._task_manager.list_todos():
+            entries.append({
+                "content": todo.get("text", ""),
+                "status": "completed" if todo.get("completed") else "pending",
+                "priority": "low",
+            })
+        return [StreamEvent.plan(entries)]
+
     @property
     def _workspace(self) -> Path:
         return self._project_dir
@@ -883,6 +902,10 @@ class AgentEngine:
                             [{"type": "tool_result", "tool_use_id": tu["id"], "content": result_str, "is_error": is_error}],
                             name=tu["id"],
                         )
+                    # Emit plan update after task-manipulating tools
+                    if tu["name"] in ("TaskCreate", "TaskUpdate", "TaskStop", "TodoCreate", "TodoComplete", "TodoList"):
+                        for event in self._emit_plan_update():
+                            yield event
 
         usage_summary = ", ".join(
             f"turn {i+1}: {u.get('total_tokens', '?')} tokens"

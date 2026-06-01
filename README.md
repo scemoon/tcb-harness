@@ -87,10 +87,8 @@ cdh logs --tail               # View logs
 | `/mode <plan\|agent\|solo>` | Change agent mode |
 | `/skill list/add/remove` | Manage skills |
 | `/mcp list/add/remove` | MCP server management |
-| `/spec` | Show lifecycle stages |
 | `/clear` | Clear chat log |
 | `/theme` | Toggle dark/light theme |
-| `/vim <file>` | Edit file in vim |
 
 ## Configuration
 
@@ -178,9 +176,6 @@ cdh harness init
 
 # Import existing cloud project
 cdh harness import
-
-# Generate specification
-/spec generate
 ```
 
 Rules: GEN-* (general), SEC-* (security), QLT-* (quality), SPC-* (spec)

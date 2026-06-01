@@ -188,6 +188,11 @@ class CDHACPAdapter:
                 })
                 self.agent.save_session()
                 return {"stopReason": "error", "message": event.error_message}
+            elif event.type == StreamEventType.PLAN:
+                self.send_session_update({
+                    "sessionUpdate": "plan",
+                    "entries": event.plan_entries,
+                })
 
         self.agent.save_session()
         return {"stopReason": "stop"}

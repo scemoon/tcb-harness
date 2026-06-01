@@ -277,6 +277,7 @@ class StreamEventType(str, Enum):
     TOOL_RESULT = "tool_result"
     ASK_USER = "ask_user"
     ERROR = "error"
+    PLAN = "plan"
 
 
 @dataclass
@@ -310,6 +311,8 @@ class StreamEvent:
     ask_command: str = ""
     # ERROR fields
     error_message: str = ""
+    # PLAN fields
+    plan_entries: list[dict] = field(default_factory=list)
 
     @classmethod
     def text_delta(cls, text: str) -> "StreamEvent":
@@ -373,6 +376,18 @@ class StreamEvent:
     @classmethod
     def error(cls, message: str) -> "StreamEvent":
         return cls(type=StreamEventType.ERROR, error_message=message)
+
+    @classmethod
+    def plan(cls, entries: list[dict]) -> "StreamEvent":
+        """Create a plan update event.
+
+        Args:
+            entries: List of plan entries, each with:
+                - content: str - The task description
+                - status: str - "pending" | "in_progress" | "completed"
+                - priority: str - "high" | "medium" | "low"
+        """
+        return cls(type=StreamEventType.PLAN, plan_entries=entries)
 
     @staticmethod
     def is_text(event: "StreamEvent") -> bool:
