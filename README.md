@@ -19,25 +19,39 @@ AI-powered terminal-based development framework for cloud-native applications, f
 - **CloudSpec Framework** — Vendor-neutral specification with multi-cloud support (TCB, Aliyun, AWS)
 - **Themes** — Dark and light UI themes with CSS customization
 
-## Quick Start
+## Installation
 
+Choose one of three install methods:
+
+### install.sh (recommended)
 ```bash
-# One-liner install
 curl -fsSL https://raw.githubusercontent.com/scemoon/cloud-dev-harness/main/install.sh | bash
+```
+Downloads and installs the latest GitHub release via pip. Adds `cdh` shim to `~/.local/bin/` — add that to your `PATH` if needed.
 
-# Or from source
+### npm
+```bash
+npm install -g cdh
+```
+Installs via [npm registry](https://www.npmjs.com/package/cdh). Requires Node.js >= 16.
+
+Or install from a local `.tgz` built in this repo:
+```bash
+cd npm && ./build-package.sh build   # creates npm_pkg/cdh-*.tgz
+npm install -g ./npm_pkg/cdh-*.tgz
+```
+
+### source
+```bash
 git clone https://github.com/scemoon/cloud-dev-harness.git
 cd cloud-dev-harness
 pip install -e .
+```
+Best for development or if you want to track HEAD.
 
-# Initialize config directory
-cdh init
-
-# Set API key (MiniMaxi is default provider)
-cdh config set provider minimaxi
-cdh config set model MiniMax-M2.7
-
-# Start the TUI
+### verify
+After any install method, start the TUI:
+```bash
 cdh tui
 ```
 
