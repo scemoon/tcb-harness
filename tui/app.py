@@ -718,6 +718,16 @@ class A2TUIApp(App, inherit_bindings=False):
     async def on_mount(self) -> None:
         self.capture_event("tui-run")
         self.anon_id  # Created on frst reference
+
+        from tui.acp.prompt import ensure_cloud_spec_skill_installed
+
+        if err := ensure_cloud_spec_skill_installed():
+            self.notify(
+                f"Failed to install cloud-spec-skill: {err}",
+                title="cloud-spec-skill",
+                severity="warning",
+            )
+
         if mode := self._initial_mode:
             self.switch_mode(mode)
         elif agent_identity := self._resolve_launch_agent():
@@ -870,6 +880,15 @@ class A2TUIApp(App, inherit_bindings=False):
 
     @on(messages.LaunchAgent)
     def on_launch_agent(self, message: messages.LaunchAgent) -> None:
+        from tui.acp.prompt import ensure_cloud_spec_skill_installed
+
+        if err := ensure_cloud_spec_skill_installed():
+            self.notify(
+                f"Failed to install cloud-spec-skill: {err}",
+                title="cloud-spec-skill",
+                severity="warning",
+            )
+
         self.launch_agent(
             message.identity,
             agent_session_id=message.session_id,

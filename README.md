@@ -23,10 +23,10 @@ AI-powered terminal-based development framework for cloud-native applications, f
 
 ```bash
 # One-liner install
-curl -fsSL https://raw.githubusercontent.com/anomalyco/cloud-dev-harness/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/scemoon/cloud-dev-harness/main/install.sh | bash
 
 # Or from source
-git clone https://github.com/anomalyco/cloud-dev-harness.git
+git clone https://github.com/scemoon/cloud-dev-harness.git
 cd cloud-dev-harness
 pip install -e .
 

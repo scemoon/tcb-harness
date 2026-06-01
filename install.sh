@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${REPO:-anomalyco/cloud-dev-harness}"
+REPO="${REPO:-scemoon/cloud-dev-harness}"
 VERSION="${VERSION:-latest}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.cdh}"
 
