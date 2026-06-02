@@ -1,11 +1,12 @@
 import sys
 from pathlib import Path
+from typing import Optional
 
 import click
 
 from cdha.cli import cli as cdha_cli
 from cdha.cli import setup_logging
-from cdha.config import ensure_dirs, load_config
+from cdha.config import ensure_dirs, load_config, save_config
 
 
 _CDH_DIR = Path.home() / ".cdh"
@@ -109,8 +110,48 @@ def logs(tail, follow):
 
 # --- project command ---
 
+def _get_projects():
+    projects_dir = _CDH_DIR / "projects"
+    projects_dir.mkdir(parents=True, exist_ok=True)
+    return sorted(list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json")))
+
+
+def _load_project_by_name(name: str) -> Optional[tuple]:
+    projects_dir = _CDH_DIR / "projects"
+    for ext in ["yaml", "yml", "json"]:
+        pf = projects_dir / f"{name}.{ext}"
+        if pf.exists():
+            import yaml
+            proj_data = yaml.safe_load(pf.read_text()) if ext in ["yaml", "yml"] else __import__("json").loads(pf.read_text())
+            return name, proj_data.get("path", ".")
+    return None
+
+
+def _interactive_select_project():
+    project_files = _get_projects()
+    if not project_files:
+        return None
+    click.echo("Projects:")
+    for i, pf in enumerate(project_files, 1):
+        click.echo(f"  {i}) {pf.stem}")
+    click.echo("  n) Create new project")
+    click.echo("  q) Quit")
+    choice = click.prompt("Select project", type=str, default="q").strip().lower()
+    if choice == "q":
+        return None
+    if choice == "n":
+        return ("new", None)
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(project_files):
+            return ("load", project_files[idx].stem)
+    except ValueError:
+        pass
+    return None
+
+
 @cli.command(short_help="Project management")
-@click.argument("action", type=click.Choice(["list", "show", "new", "load"]), default="list")
+@click.argument("action", type=click.Choice(["list", "show", "new", "load", "select"]), default="select")
 @click.argument("name", required=False)
 @click.argument("path", required=False, default=".")
 def project(action, name, path):
@@ -118,6 +159,7 @@ def project(action, name, path):
 
     \b
     Actions:
+      select         Interactive project selection (default)
       list           List all projects
       show <name>    Show project details
       new <name> [path]   Create a new project
@@ -125,7 +167,8 @@ def project(action, name, path):
 
     \b
     Examples:
-      cdh project          List projects
+      cdh project          Interactive project selection
+      cdh project select   Interactive project selection
       cdh project list     List projects
       cdh project show my-project   Show project details
       cdh project new my-project /path/to/project   Create new project
@@ -135,13 +178,26 @@ def project(action, name, path):
     projects_dir = _CDH_DIR / "projects"
     projects_dir.mkdir(parents=True, exist_ok=True)
 
+    if action == "select":
+        result = _interactive_select_project()
+        if result is None:
+            return
+        action, name = result
+        if action == "new":
+            path = click.prompt("Project path", type=str, default=".").strip()
+            name = click.prompt("Project name", type=str).strip()
+            action = "new"
+        elif action == "load":
+            if name is None:
+                return
+
     if action == "list":
-        project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
+        project_files = _get_projects()
         if not project_files:
             click.echo("No projects found.")
             return
         click.echo("Projects:")
-        for pf in sorted(project_files):
+        for pf in project_files:
             click.echo(f"  {pf.stem}")
     elif action == "show":
         if not name:

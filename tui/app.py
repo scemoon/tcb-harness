@@ -326,7 +326,15 @@ class A2TUIApp(App, inherit_bindings=False):
         self.temporary_background_screen: Screen | None = None
 
         super().__init__()
-        self.project_dir = Path(project_dir or "./").expanduser().resolve()
+        if project_dir:
+            self.project_dir = Path(project_dir).expanduser().resolve()
+        else:
+            from cdha.config import load_config
+            cfg = load_config()
+            if cfg.current_project_path:
+                self.project_dir = Path(cfg.current_project_path).expanduser().resolve()
+            else:
+                self.project_dir = Path("./").expanduser().resolve()
         self.start_time = monotonic()
         """Time app was started."""
 

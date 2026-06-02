@@ -179,6 +179,7 @@ class MainScreen(Screen, can_focus=False):
 
     @on(messages.ProjectDirectoryUpdated)
     async def on_project_directory_update(self) -> None:
+        self.project_path = self.app.project_dir
         await self.query_one(ProjectDirectoryTree).reload()
 
     @on(DirectoryTree.FileSelected, "ProjectDirectoryTree")
