@@ -110,22 +110,28 @@ def logs(tail, follow):
 # --- project command ---
 
 @cli.command(short_help="Project management")
-@click.argument("action", type=click.Choice(["list", "show"]), default="list")
+@click.argument("action", type=click.Choice(["list", "show", "new", "load"]), default="list")
 @click.argument("name", required=False)
-def project(action, name):
+@click.argument("path", required=False, default=".")
+def project(action, name, path):
     """Manage CDH projects.
 
     \b
     Actions:
       list           List all projects
       show <name>    Show project details
+      new <name> [path]   Create a new project
+      load <name>    Load a project (set as current)
 
     \b
     Examples:
       cdh project          List projects
       cdh project list     List projects
       cdh project show my-project   Show project details
+      cdh project new my-project /path/to/project   Create new project
+      cdh project load my-project    Load project
     """
+    import yaml
     projects_dir = _CDH_DIR / "projects"
     projects_dir.mkdir(parents=True, exist_ok=True)
 
@@ -147,6 +153,84 @@ def project(action, name):
                 click.echo(pf.read_text())
                 return
         click.echo(f"Project '{name}' not found.")
+    elif action == "new":
+        if not name:
+            click.echo("Usage: cdh project new <name> [path]")
+            return
+        proj_data = {"name": name, "path": path, "description": ""}
+        project_file = projects_dir / f"{name}.yaml"
+        project_file.write_text(yaml.dump(proj_data))
+        cfg = load_config()
+        cfg.current_project = name
+        cfg.current_project_path = path
+        save_config(cfg)
+        click.echo(f"Created project '{name}' at {path}")
+    elif action == "load":
+        if not name:
+            click.echo("Usage: cdh project load <name>")
+            return
+        for ext in ["yaml", "yml", "json"]:
+            pf = projects_dir / f"{name}.{ext}"
+            if pf.exists():
+                proj_data = yaml.safe_load(pf.read_text()) if ext in ["yaml", "yml"] else __import__("json").loads(pf.read_text())
+                cfg = load_config()
+                cfg.current_project = name
+                cfg.current_project_path = proj_data.get("path", ".")
+                save_config(cfg)
+                click.echo(f"Loaded project '{name}' (path: {cfg.current_project_path})")
+                return
+        click.echo(f"Project '{name}' not found.")
+
+
+# --- session command ---
+
+@cli.command(short_help="Session management")
+@click.argument("action", type=click.Choice(["list", "load"]), default="list")
+@click.argument("session_id", required=False, type=int)
+def session(action, session_id):
+    """Manage CDH sessions.
+
+    \b
+    Actions:
+      list           List recent sessions
+      load <id>      Load a session by ID
+
+    \b
+    Examples:
+      cdh session          List recent sessions
+      cdh session list     List recent sessions
+      cdh session load 5   Load session with ID 5
+    """
+    import asyncio
+    from tui.db import DB
+
+    async def run():
+        db = DB()
+        if action == "list":
+            recent = await db.session_get_recent(max_results=20)
+            if not recent:
+                click.echo("No sessions found.")
+                return
+            click.echo("Recent sessions:")
+            for s in recent:
+                title = s.get("title", "Untitled") or "Untitled"
+                aid = s.get("agent_identity", "unknown")
+                sid = s.get("agent_session_id", "")[:8]
+                click.echo(f"  [{s['id']}] {title} ({aid[:30]}... {sid})")
+        elif action == "load":
+            if session_id is None:
+                click.echo("Usage: cdh session load <id>")
+                return
+            s = await db.session_get(session_id)
+            if s is None:
+                click.echo(f"Session {session_id} not found.")
+                return
+            click.echo(f"Session {session_id}:")
+            click.echo(f"  Title: {s.get('title', 'Untitled')}")
+            click.echo(f"  Agent: {s.get('agent_identity', 'unknown')}")
+            click.echo(f"  Agent Session ID: {s.get('agent_session_id', 'N/A')}")
+
+    asyncio.run(run())
 
 
 # --- help command ---

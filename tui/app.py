@@ -234,6 +234,12 @@ def get_store_screen():
     return StoreScreen()
 
 
+def get_projects_screen() -> "ProjectsScreen":
+    from tui.screens.projects_screen import ProjectsScreen
+
+    return ProjectsScreen()
+
+
 class A2TUIApp(App, inherit_bindings=False):
     """The top level app."""
 
@@ -243,6 +249,7 @@ class A2TUIApp(App, inherit_bindings=False):
         "settings": get_settings_screen,
         "sessions": get_sessions_screen,
         "store": get_store_screen,
+        "projects": get_projects_screen,
     }
     MODES = {}
     BINDING_GROUP_TITLE = "System"
@@ -257,7 +264,8 @@ class A2TUIApp(App, inherit_bindings=False):
         ),
         Binding("ctrl+c", "help_quit", show=False, system=True),
         Binding("ctrl+s", "sessions", "Sessions"),
-        
+        Binding("f3", "projects", "Projects"),
+
         Binding("f1", "toggle_help_panel", "Help", priority=True),
         Binding(
             "f2,ctrl+comma",
@@ -728,12 +736,38 @@ class A2TUIApp(App, inherit_bindings=False):
                 severity="warning",
             )
 
+        from pathlib import Path
+
         if mode := self._initial_mode:
             self.switch_mode(mode)
         elif agent_identity := self._resolve_launch_agent():
             self.launch_agent(agent_identity, project_path=Path(self.project_dir))
         else:
-            self.push_screen("store")
+            db = DB()
+            recent_sessions = await db.session_get_recent(max_results=10)
+            session_to_resume = None
+            if recent_sessions:
+                import json as json_module
+                from cdha.config import CLOUD_DEV_HARNESS_DIR
+                sessions_dir = CLOUD_DEV_HARNESS_DIR / "sessions"
+                for session in recent_sessions:
+                    session_file = sessions_dir / f"{session['agent_session_id']}.json"
+                    if session_file.exists():
+                        try:
+                            data = json_module.loads(session_file.read_text())
+                            if data.get("messages"):
+                                session_to_resume = session
+                                break
+                        except Exception:
+                            pass
+            if session_to_resume:
+                self.launch_agent(
+                    session_to_resume["agent_identity"],
+                    agent_session_id=session_to_resume["agent_session_id"],
+                    session_pk=session_to_resume["id"],
+                )
+            else:
+                self.push_screen("store")
 
         self.update_terminal_title()
         self.set_timer(1, self.run_version_check)
@@ -870,6 +904,25 @@ class A2TUIApp(App, inherit_bindings=False):
     def on_session_close(self) -> None:
         self.update_show_sessions()
 
+    @on(messages.SessionLoad)
+    def on_session_load(self, event: messages.SessionLoad) -> None:
+        self._load_session(event.session_pk)
+
+    @work
+    async def _load_session(self, session_pk: int) -> None:
+        db = DB()
+        session = await db.session_get(session_pk)
+        if session is None:
+            self.notify(f"Session {session_pk} not found", title="Session load", severity="error")
+            return
+        agent_identity = session["agent_identity"]
+        agent_session_id = session.get("agent_session_id")
+        self.launch_agent(
+            agent_identity,
+            agent_session_id=agent_session_id,
+            session_pk=session_pk,
+        )
+
     @work
     async def action_sessions(self) -> None:
         if (session_screen_name := await self.push_screen_wait("sessions")) is not None:
@@ -877,6 +930,35 @@ class A2TUIApp(App, inherit_bindings=False):
                 self.app.switch_mode(session_screen_name)
             except KeyError:
                 pass
+
+    @work
+    async def action_projects(self) -> None:
+        from pathlib import Path
+        from cdha.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
+        import yaml
+
+        result = await self.push_screen_wait("projects")
+        if result is not None:
+            project_name = result if isinstance(result, str) else getattr(result, 'name', None)
+            if project_name:
+                projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+                project_path = None
+                for ext in ["yaml", "yml", "json"]:
+                    pf = projects_dir / f"{project_name}.{ext}"
+                    if pf.exists():
+                        proj_data = yaml.safe_load(pf.read_text()) if ext in ["yaml", "yml"] else __import__("json").loads(pf.read_text())
+                        project_path = proj_data.get("path", ".")
+                        break
+                if project_path:
+                    cfg = load_config()
+                    cfg.current_project = project_name
+                    cfg.current_project_path = project_path
+                    save_config(cfg)
+
+                    new_project_dir = Path(project_path) if project_path else Path.cwd()
+                    self.project_dir = new_project_dir
+                    self.post_message(messages.ProjectDirectoryUpdated())
+                    self.notify(f"Switched to project: {project_name}")
 
     @on(messages.LaunchAgent)
     def on_launch_agent(self, message: messages.LaunchAgent) -> None:

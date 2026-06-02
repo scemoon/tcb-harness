@@ -1369,23 +1369,14 @@ class Conversation(containers.Vertical):
                 "<optional number of lines to preserve>",
             ),
             SlashCommand(
-                "/tui:rename",
-                "Give the current session a friendly name",
-                "<session name>",
+                "/tui:session",
+                "Session commands: list, load, new, close, rename",
+                "<list|load|new|close|rename> [args]",
             ),
             SlashCommand(
-                "/tui:session-close",
-                "Close the current session",
-            ),
-            SlashCommand(
-                "/tui:session-new",
-                "Open a new session in the current working directory",
-                "<initial prompt or command>",
-            ),
-            SlashCommand(
-                "/tui:testimonial",
-                "Tweet a testimonial regarding TUI",
-                "<what you think of tui>",
+                "/tui:project",
+                "Project commands: list, load, new",
+                "<list|load|new> [args]",
             ),
         ]
 
@@ -1950,13 +1941,76 @@ class Conversation(containers.Vertical):
                 return True
             await self.prune_window(line_count, line_count)
             return True
-        elif command == "tui:rename":
-            name = parameters.strip()
+        elif command == "tui:session":
+            return await self._handle_session_command(parameters)
+        elif command == "tui:project":
+            return await self._handle_project_command(parameters)
+        return await self._handle_tui_session_project_dispatch(command, parameters)
+
+    async def _handle_tui_session_project_dispatch(
+        self, command: str, parameters: str
+    ) -> bool:
+        if await platform_commands.dispatch(self, command, parameters):
+            return True
+        return False
+
+    async def _handle_session_command(self, parameters: str) -> bool:
+        parts = parameters.strip().split(maxsplit=1)
+        sub_cmd = parts[0] if parts else ""
+        arg = parts[1] if len(parts) > 1 else ""
+
+        if sub_cmd == "list":
+            from tui.db import DB
+            db = DB()
+            recent = await db.session_get_recent(max_results=20)
+            if not recent:
+                self.notify("No sessions found", title="/tui:session list")
+                return True
+            lines = ["Recent sessions:"]
+            for s in recent:
+                title = s.get("title", "Untitled") or "Untitled"
+                aid = s.get("agent_identity", "unknown")
+                sid = s.get("agent_session_id", "")[:8]
+                lines.append(f"  [{s['id']}] {title} ({aid[:20]}... {sid})")
+            self.notify("\n".join(lines), title="/tui:session list")
+            return True
+        elif sub_cmd == "load":
+            if not arg:
+                self.notify("Session ID required", title="/tui:session load", severity="error")
+                return True
+            try:
+                session_pk = int(arg)
+            except ValueError:
+                self.notify("Invalid session ID", title="/tui:session load", severity="error")
+                return True
+            from tui import messages
+            self.post_message(messages.SessionLoad(session_pk))
+            return True
+        elif sub_cmd == "new":
+            if self._agent_data is not None:
+                self.post_message(
+                    messages.SessionNew(
+                        self.working_directory,
+                        self._agent_data["identity"],
+                        arg,
+                    )
+                )
+                return True
+            return False
+        elif sub_cmd == "close":
+            if self.turn == "agent" and self.agent is not None:
+                await self.agent.cancel()
+            if self.screen.id is not None:
+                self.post_message(messages.SessionClose(self.screen.id))
+                return True
+            return False
+        elif sub_cmd == "rename":
+            name = arg.strip()
             if not name:
                 self.notify(
                     "Expected a name for the session.\n"
                     'For example: "add comments to blog"',
-                    title="/tui:rename",
+                    title="/tui:session rename",
                     severity="error",
                 )
                 return True
@@ -1965,43 +2019,92 @@ class Conversation(containers.Vertical):
                 self.post_message(messages.SessionUpdate(name=name))
                 self.flash(f"Renamed session to [b]'{name}'", style="success")
             return True
-        elif command == "tui:session-close":
-            if self.turn == "agent" and self.agent is not None:
-                await self.agent.cancel()
-            if self.screen.id is not None:
-                self.post_message(messages.SessionClose(self.screen.id))
-                return True
-        elif command == "tui:session-new":
-            if self._agent_data is not None:
-                self.post_message(
-                    messages.SessionNew(
-                        self.working_directory,
-                        self._agent_data["identity"],
-                        parameters.strip(),
-                    )
-                )
-                return True
-        elif command == "tui:testimonial":
-            if self.agent_title is not None:
-                default_testimonial = (
-                    f"I'm running {self.agent_title} in the terminal with A2TUI."
-                )
-            else:
-                default_testimonial = (
-                    "Try A2TUI, the universal interface for AI in your terminal"
-                )
-
-            testimonial = parameters or default_testimonial
-            from tui.twitter import open_tweet_intent
-
-            open_tweet_intent(
-                testimonial,
-                url="https://github.com/textualize/tui",
-                via="willmcgugan",
-                hashtags=["ai"],
+        else:
+            self.notify(
+                "Usage: /tui:session <list|load|new|close|rename>",
+                title="/tui:session",
+                severity="error",
             )
             return True
-        if await platform_commands.dispatch(self, command, parameters):
+
+    async def _handle_project_command(self, parameters: str) -> bool:
+        parts = parameters.strip().split(maxsplit=2)
+        sub_cmd = parts[0] if parts else ""
+        name = parts[1] if len(parts) > 1 else ""
+        path = parts[2] if len(parts) > 2 else ""
+
+        if sub_cmd == "list":
+            from pathlib import Path
+            from cdha.config import CLOUD_DEV_HARNESS_DIR
+            projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+            if not projects_dir.exists():
+                self.notify("No projects found", title="/tui:project list")
+                return True
+            project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
+            if not project_files:
+                self.notify("No projects found", title="/tui:project list")
+                return True
+            lines = ["Projects:"]
+            for pf in sorted(project_files):
+                lines.append(f"  {pf.stem}")
+            self.notify("\n".join(lines), title="/tui:project list")
+            return True
+        elif sub_cmd == "load":
+            if not name:
+                self.notify("Project name required", title="/tui:project load", severity="error")
+                return True
+            from pathlib import Path
+            from cdha.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
+            projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+            project_file = None
+            for ext in ["yaml", "yml", "json"]:
+                pf = projects_dir / f"{name}.{ext}"
+                if pf.exists():
+                    project_file = pf
+                    break
+            if not project_file:
+                self.notify(f"Project '{name}' not found", title="/tui:project load", severity="error")
+                return True
+            import yaml
+            proj_data = yaml.safe_load(project_file.read_text()) if project_file.suffix in [".yaml", ".yml"] else __import__("json").loads(project_file.read_text())
+            project_path = proj_data.get("path", ".")
+            cfg = load_config()
+            cfg.current_project = name
+            cfg.current_project_path = project_path
+            save_config(cfg)
+            new_project_dir = Path(project_path) if project_path else Path.cwd()
+            self.app.project_dir = new_project_dir
+            self.post_message(messages.ProjectDirectoryUpdated())
+            self.flash(f"Switched to project: {name}", style="success")
+            return True
+        elif sub_cmd == "new":
+            if not name:
+                self.notify("Project name required", title="/tui:project new", severity="error")
+                return True
+            from pathlib import Path
+            from cdha.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
+            import yaml
+            projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+            projects_dir.mkdir(parents=True, exist_ok=True)
+            project_path = path or str(Path.cwd())
+            proj_data = {"name": name, "path": project_path, "description": ""}
+            project_file = projects_dir / f"{name}.yaml"
+            project_file.write_text(yaml.dump(proj_data))
+            cfg = load_config()
+            cfg.current_project = name
+            cfg.current_project_path = project_path
+            save_config(cfg)
+            new_project_dir = Path(project_path)
+            self.app.project_dir = new_project_dir
+            self.post_message(messages.ProjectDirectoryUpdated())
+            self.flash(f"Created and switched to project: {name}", style="success")
+            return True
+        else:
+            self.notify(
+                "Usage: /tui:project <list|load|new> [name] [path]",
+                title="/tui:project",
+                severity="error",
+            )
             return True
 
         return False

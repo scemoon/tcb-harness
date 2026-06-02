@@ -127,6 +127,20 @@ class CDHACPAdapter:
         if not loaded:
             return {"modes": _DEFAULT_MODES}
 
+        for msg in self.agent._session.messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user":
+                self.send_session_update({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": content},
+                })
+            elif role == "assistant":
+                self.send_session_update({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": content},
+                })
+
         return {
             "modes": {
                 "currentModeId": cfg.default_mode,

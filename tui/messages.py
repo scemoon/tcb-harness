@@ -122,6 +122,14 @@ class SessionClose(Message):
 
 
 @dataclass
+class SessionLoad(Message):
+    """Load a session by ID."""
+
+    session_pk: int
+    """Primary key of the session to load."""
+
+
+@dataclass
 class LaunchAgent(Message):
     """Inform app to launch agent."""
 
