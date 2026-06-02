@@ -27,7 +27,13 @@ Choose one of three install methods:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/scemoon/cloud-dev-harness/main/install.sh | bash
 ```
-Downloads and installs the latest GitHub release via pip. Adds `cdh` shim to `~/.local/bin/` — add that to your `PATH` if needed.
+Downloads and installs the latest GitHub release via pip. The `cdh` shim is installed to `~/.local/bin/cdh`. Add this to your PATH:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Add this line to your `~/.bashrc` or `~/.zshrc` to make it permanent.
 
 ### npm
 ```bash
