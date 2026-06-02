@@ -20,30 +20,6 @@ Mode: {cfg.default_mode}"""
     await conversation.post(MarkdownNote(info))
 
 
-async def _spec(conversation: Conversation, parameters: str) -> None:
-    from tui.widgets.markdown_note import MarkdownNote
-    from cdha.lifecycle.manager import (
-        LifecycleManager,
-        PHASE_DESCRIPTIONS,
-        PIPELINE_ORDER,
-    )
-
-    mgr = LifecycleManager()
-    lines = ["**CDHA Spec Phase**\n"]
-    lines.append(f"Current stage: **{mgr.current.value}**")
-    lines.append("")
-
-    for stage in PIPELINE_ORDER:
-        status = mgr.stages.get(stage, None)
-        icon = {None: "○", "pending": "○", "in_progress": "◉", "completed": "✓", "failed": "✗"}.get(
-            status.value if status else None, "○"
-        )
-        desc = PHASE_DESCRIPTIONS.get(stage, "")
-        lines.append(f"{icon} **{stage.value}**: {desc}")
-
-    await conversation.post(MarkdownNote("\n".join(lines)))
-
-
 async def _mode(conversation: Conversation, parameters: str) -> None:
     from cdha.config import load_config, save_config
 

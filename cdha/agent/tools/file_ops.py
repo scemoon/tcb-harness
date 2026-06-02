@@ -16,7 +16,7 @@ class Permission(Enum):
 class FileOps:
     def __init__(self, workspace: Optional[Path] = None):
         self.workspace = workspace or Path.cwd()
-        self._undo_stack: list[dict] = []  # OpenCode undo history
+        self._undo_stack: list[dict] = []
 
     def read(self, path: str, offset: int = 0, limit: int = 0) -> str:
         p = self._resolve(path)
@@ -45,12 +45,6 @@ class FileOps:
             return {"success": False, "error": str(e)}
 
     def edit(self, path: str, old: str, new: str) -> dict:
-        """Replace old_string with new_string (first match only).
-
-        OpenCode-style: fails if old_string matches multiple locations
-        to prevent accidental corruption. Use a larger context string to
-        ensure uniqueness.
-        """
         p = self._resolve(path)
         if not p.exists():
             return {"success": False, "error": "File not found"}
@@ -60,13 +54,11 @@ class FileOps:
                 return {"success": False, "error": "String not found in file"}
             count = content.count(old)
             if count > 1:
-                # OpenCode behavior: fail on ambiguous match
                 return {
                     "success": False,
                     "error": f"old_string matches {count} locations in file. "
                              f"Provide a larger string with more surrounding context to make it unique.",
                 }
-            # Save undo snapshot before modifying
             self._undo_stack.append({"path": str(p), "content": content})
             content = content.replace(old, new, 1)
             p.write_text(content, encoding="utf-8")
@@ -75,25 +67,18 @@ class FileOps:
             return {"success": False, "error": str(e)}
 
     def insert(self, path: str, line: int, text: str) -> dict:
-        """Insert text at a specific line number (0-based, after line).
-
-        OpenCode-style insert: inserts after the given line number.
-        Use line=-1 to insert at the beginning of the file.
-        """
         p = self._resolve(path)
         if not p.exists():
             return {"success": False, "error": "File not found"}
         try:
             content = p.read_text(encoding="utf-8")
             lines = content.split("\n")
-            # Save undo snapshot
             self._undo_stack.append({"path": str(p), "content": content})
             if line == -1:
                 lines.insert(0, text)
             elif line < len(lines):
                 lines.insert(line + 1, text)
             else:
-                # Append at end
                 lines.append(text)
             new_content = "\n".join(lines)
             p.write_text(new_content, encoding="utf-8")
@@ -102,12 +87,10 @@ class FileOps:
             return {"success": False, "error": str(e)}
 
     def undo_edit(self, path: str) -> dict:
-        """Undo the last edit to a file (OpenCode undo_edit pattern)."""
         p = self._resolve(path)
         if not self._undo_stack:
             return {"success": False, "error": "No edit history to undo"}
         try:
-            # Find the most recent edit for this path
             for i in range(len(self._undo_stack) - 1, -1, -1):
                 snapshot = self._undo_stack[i]
                 if snapshot["path"] == str(p):
@@ -167,6 +150,7 @@ class FileOps:
 
 
 from cdha.agent.permissions import PermissionChecker, PermissionSet, create_safe_permission_set
+from cdha.agent.tools.sandbox import Sandbox, SandboxConfig, SandboxMode, ResourceLimits, create_sandbox
 
 
 class ShellTool:
@@ -175,10 +159,12 @@ class ShellTool:
         workspace: Optional[Path] = None,
         permission: Permission = Permission.ALLOW,
         permission_set: Optional[PermissionSet] = None,
+        sandbox_mode: str = "auto",
     ):
         self.workspace = workspace or Path.cwd()
         self.permission = permission
         self._checker = PermissionChecker(permission_set or create_safe_permission_set())
+        self._sandbox = create_sandbox(self.workspace, mode=sandbox_mode)
 
     def exec(self, cmd: str, cwd: Optional[str] = None, timeout: int = 60) -> dict:
         if self.permission == Permission.DENY:
@@ -198,26 +184,11 @@ class ShellTool:
         if result.value == "ask":
             return {"success": False, "error": "Command requires approval", "requires_approval": True}
 
-        try:
-            work_dir = Path(cwd) if cwd else self.workspace
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                cwd=str(work_dir),
-                timeout=timeout
-            )
-            return {
-                "success": result.returncode == 0,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "returncode": result.returncode
-            }
-        except subprocess.TimeoutExpired:
-            return {"success": False, "error": "Command timed out"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        work_dir = Path(cwd) if cwd else self.workspace
+        if not work_dir.is_relative_to(self.workspace.resolve()):
+            return {"success": False, "error": "CWD outside workspace"}
+
+        return self._sandbox.exec(cmd, timeout=timeout)
 
 
 class ToolFactory:

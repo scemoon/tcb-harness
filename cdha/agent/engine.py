@@ -215,7 +215,6 @@ class AgentEngine:
     def __init__(self, app, project_dir: Path | None = None):
         from cdha.agent.tools.file_ops import ToolFactory, Permission
         from cdha.agent.agents.types import BuildAgent
-        from cdha.lifecycle.manager import LifecycleManager
         from cdha.agent.hooks import HookManager
         from cdha.agent.permissions import PermissionChecker, create_safe_permission_set
         from cdha.skills.loader import SkillLoader
@@ -233,7 +232,6 @@ class AgentEngine:
         self.iterations = 0
         self.total_tokens = 0
         self._skills_loaded = False
-        self._pipeline = LifecycleManager()
         self._session: Optional[AgentSession] = None
         self._hooks = HookManager()
         self._permissions = PermissionChecker(create_safe_permission_set())
@@ -245,9 +243,7 @@ class AgentEngine:
         self._last_user_msg: str | None = None  # Last SendMessage visible to user
 
         # Clawd-Code subsystems
-        self._skill_loader = SkillLoader(
-            workspace_skills_dir=Path(__file__).parent.parent / "builtin_skills"
-        )
+        self._skill_loader = SkillLoader()
         self._mcp = MCPManager()
         self._cron_scheduler = CronScheduler()
         self._lsp_tool = LSPTool()
@@ -269,6 +265,7 @@ class AgentEngine:
     def _build_tool_registry(self) -> ToolRegistry:
         from cdha.agent.tools.registry import ToolRegistry
         from cdha.agent.tools.file_tools import ReadTool, WriteTool, EditTool, InsertTool, UndoEditTool, GlobTool, GrepTool, ListTool
+        from cdha.agent.tools.apply_patch_tool import ApplyPatchTool
         from cdha.agent.tools.bash_tool import BashTool
         from cdha.agent.tools.web_tools import WebFetchTool, WebSearchTool
         from cdha.agent.tools.communication_tools import SendMessageTool, AskUserTool, ToolSearchTool
@@ -289,6 +286,7 @@ class AgentEngine:
         registry.register(GlobTool(self.file_ops))
         registry.register(GrepTool(self.file_ops))
         registry.register(ListTool(self.file_ops))
+        registry.register(ApplyPatchTool(self.file_ops))
         # Shell
         registry.register(BashTool(self.shell))
         # Web
@@ -485,7 +483,6 @@ class AgentEngine:
             self.context.add_system(harness_content)
 
     def _inject_project_context(self, project_name: str) -> None:
-        from cdha.lifecycle.manager import LifecycleManager
         if not project_name:
             self._auto_init_harness()
             return
@@ -494,22 +491,14 @@ class AgentEngine:
 
         self._project_context_loaded = True
         self._harness_mode = True
-        self._pipeline = LifecycleManager(project_name, workspace=self._workspace)
         self._project_config = self._load_project_config(project_name)
-
-        pipeline_info = self._pipeline.get_pipeline_summary()
-        self.context.add_system(f"\n## Development Pipeline\n{pipeline_info}\n")
-
-        info = self._pipeline._config
-        state = self._pipeline._state
 
         context_parts = [
             f"Project: {project_name}",
-            f"Platform: {info.get('platform', 'unknown')}",
-            f"Phase: {state.get('phase', 'init')}",
+            f"Platform: {self._project_config.get('platform', 'unknown')}",
         ]
 
-        env_id = info.get("cloudbase", {}).get("envId", "")
+        env_id = self._project_config.get("cloudbase", {}).get("envId", "")
         if env_id:
             context_parts.append(f"TCB EnvId: {env_id}")
 
@@ -522,18 +511,6 @@ class AgentEngine:
                 pass
 
         self.context.add_system("\n".join(context_parts))
-
-    def get_current_phase(self) -> str:
-        return self._pipeline.current_phase
-
-    def get_phase_info(self, phase: str) -> dict:
-        return self._pipeline.get_phase_info(phase)
-
-    def can_advance_phase(self) -> bool:
-        next_phase = self._pipeline.get_next_phase()
-        if not next_phase:
-            return False
-        return self._pipeline.can_advance_to(next_phase)
 
     async def chat(self, user_input: str) -> str:
         self._load_skills()
@@ -670,19 +647,8 @@ class AgentEngine:
             was_context_loaded = self._project_context_loaded
             self._inject_project_context(project_name)
             if not was_context_loaded:
-                current_phase = self._pipeline.current_phase if self._pipeline else "init"
-                phase_info = {
-                    "init": "项目初始化 - 搭建项目骨架",
-                    "spec": "需求规格 - 编写 EARS 需求文档",
-                    "design": "设计阶段 - UI/API/数据模型设计",
-                    "coding": "编码阶段 - TDD 循环开发",
-                    "testing": "测试阶段 - 生成测试用例，覆盖率≥80%",
-                    "deploy": "部署阶段 - 部署到云端并验证",
-                    "done": "已完成",
-                }
                 yield StreamEvent.text_delta(
-                    f"\n📋 项目: {project_name}\n📍 当前阶段: {current_phase} "
-                    f"({phase_info.get(current_phase, current_phase)})\n继续开发中...\n\n"
+                    f"\n📋 项目: {project_name}\n继续开发中...\n\n"
                 )
         else:
             init_msg = self._auto_init_harness()
@@ -1117,9 +1083,6 @@ class AgentEngine:
             self.context.load_from_session(session.messages)
             return True
         return False
-
-    def advance_pipeline(self) -> Optional[str]:
-        return self._pipeline.advance_phase()
 
     def get_session(self) -> Optional[AgentSession]:
         return self._session

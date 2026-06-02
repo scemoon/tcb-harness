@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import fnmatch
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -30,17 +32,31 @@ class AgentConfig:
     description: str = ""
     mode: AgentMode = AgentMode.PRIMARY
     temperature: float = 0.3
+    top_p: Optional[float] = None
     model: Optional[str] = None
     max_turns: int = 0
+    steps: int = 0
     hidden: bool = False
+    color: str = ""
     permission_edit: AgentPermission = AgentPermission.ALLOW
     permission_bash: AgentPermission = AgentPermission.ALLOW
     permission_read: AgentPermission = AgentPermission.ALLOW
     permission_webfetch: AgentPermission = AgentPermission.ALLOW
     permission_websearch: AgentPermission = AgentPermission.DENY
     permission_task: AgentPermission = AgentPermission.ALLOW
+    permission_doom_loop: AgentPermission = AgentPermission.ASK
+    permission_skill: AgentPermission = AgentPermission.ALLOW
+    permission_lsp: AgentPermission = AgentPermission.ALLOW
+    permission_question: AgentPermission = AgentPermission.ALLOW
+    permission_external_directory: AgentPermission = AgentPermission.DENY
+    permission_glob: AgentPermission = AgentPermission.ALLOW
+    permission_grep: AgentPermission = AgentPermission.ALLOW
+    permission_list: AgentPermission = AgentPermission.ALLOW
+    permission_todowrite: AgentPermission = AgentPermission.ALLOW
     tools: list[str] = field(default_factory=list)
     disallowed_tools: list[str] = field(default_factory=list)
+    prompt_file: str = ""
+    bash_permissions: dict[str, str] = field(default_factory=dict)
 
     def get_tools_config(self) -> dict[str, AgentPermission]:
         return {
@@ -50,6 +66,15 @@ class AgentConfig:
             "webfetch": self.permission_webfetch,
             "websearch": self.permission_websearch,
             "task": self.permission_task,
+            "lsp": self.permission_lsp,
+            "skill": self.permission_skill,
+            "question": self.permission_question,
+            "glob": self.permission_glob,
+            "grep": self.permission_grep,
+            "list": self.permission_list,
+            "todowrite": self.permission_todowrite,
+            "external_directory": self.permission_external_directory,
+            "doom_loop": self.permission_doom_loop,
         }
 
     def should_ask_for_edit(self) -> bool:
@@ -65,6 +90,25 @@ class AgentConfig:
             return tool_name not in self.disallowed_tools
         return True
 
+    def get_bash_permission(self, command: str) -> AgentPermission:
+        for pattern, action in self.bash_permissions.items():
+            if fnmatch.fnmatch(command, pattern) or fnmatch.fnmatch(command.split()[0] if command.split() else "", pattern):
+                if action == "allow":
+                    return AgentPermission.ALLOW
+                elif action == "ask":
+                    return AgentPermission.ASK
+                elif action == "deny":
+                    return AgentPermission.DENY
+        return self.permission_bash
+
+    def get_effective_max_turns(self) -> int:
+        if self.steps > 0:
+            return min(self.steps, self.max_turns) if self.max_turns > 0 else self.steps
+        return self.max_turns
+
+    def is_hidden(self) -> bool:
+        return self.hidden
+
 
 class BuildAgent(AgentConfig):
     def __init__(self):
@@ -78,6 +122,7 @@ class BuildAgent(AgentConfig):
             permission_webfetch=AgentPermission.ALLOW,
             permission_websearch=AgentPermission.ALLOW,
             max_turns=10,
+            steps=0,
             tools=[],
         )
 
@@ -125,6 +170,7 @@ class GeneralAgent(AgentConfig):
             permission_edit=AgentPermission.ALLOW,
             permission_bash=AgentPermission.ALLOW,
             permission_read=AgentPermission.ALLOW,
+            permission_todowrite=AgentPermission.DENY,
             tools=[],
         )
 
@@ -159,6 +205,65 @@ class ScoutAgent(AgentConfig):
         )
 
 
+class CompactionAgent(AgentConfig):
+    def __init__(self):
+        super().__init__(
+            name="compaction",
+            description="System agent that compacts long context into a smaller summary",
+            mode=AgentMode.PRIMARY,
+            permission_edit=AgentPermission.DENY,
+            permission_bash=AgentPermission.DENY,
+            permission_read=AgentPermission.ALLOW,
+            permission_webfetch=AgentPermission.DENY,
+            permission_websearch=AgentPermission.DENY,
+            permission_task=AgentPermission.DENY,
+            permission_skill=AgentPermission.DENY,
+            hidden=True,
+            temperature=0.1,
+            tools=["read"],
+        )
+
+
+class TitleAgent(AgentConfig):
+    def __init__(self):
+        super().__init__(
+            name="title",
+            description="System agent that generates short session titles",
+            mode=AgentMode.PRIMARY,
+            permission_edit=AgentPermission.DENY,
+            permission_bash=AgentPermission.DENY,
+            permission_read=AgentPermission.ALLOW,
+            permission_webfetch=AgentPermission.DENY,
+            permission_websearch=AgentPermission.DENY,
+            permission_task=AgentPermission.DENY,
+            permission_skill=AgentPermission.DENY,
+            hidden=True,
+            temperature=0.1,
+            max_turns=1,
+            tools=["read"],
+        )
+
+
+class SummaryAgent(AgentConfig):
+    def __init__(self):
+        super().__init__(
+            name="summary",
+            description="System agent that creates session summaries",
+            mode=AgentMode.PRIMARY,
+            permission_edit=AgentPermission.DENY,
+            permission_bash=AgentPermission.DENY,
+            permission_read=AgentPermission.ALLOW,
+            permission_webfetch=AgentPermission.DENY,
+            permission_websearch=AgentPermission.DENY,
+            permission_task=AgentPermission.DENY,
+            permission_skill=AgentPermission.DENY,
+            hidden=True,
+            temperature=0.1,
+            max_turns=2,
+            tools=["read"],
+        )
+
+
 BUILT_IN_AGENTS = {
     "build": BuildAgent,
     "plan": PlanAgent,
@@ -166,6 +271,9 @@ BUILT_IN_AGENTS = {
     "general": GeneralAgent,
     "explore": ExploreAgent,
     "scout": ScoutAgent,
+    "compaction": CompactionAgent,
+    "title": TitleAgent,
+    "summary": SummaryAgent,
 }
 
 
@@ -174,6 +282,13 @@ def create_agent(agent_type: str) -> AgentConfig:
     if agent_cls:
         return agent_cls()
     return BuildAgent()
+
+
+def get_agent_by_name(name: str) -> Optional[AgentConfig]:
+    agent_cls = BUILT_IN_AGENTS.get(name)
+    if agent_cls:
+        return agent_cls()
+    return None
 
 
 def get_system_prompt(agent_type: str) -> str:
@@ -203,6 +318,7 @@ TOOL_DESCRIPTIONS = """
 - **Glob**: glob(pattern) - Find files matching glob pattern (e.g., "**/*.py").
 - **Grep**: grep(pattern, include=None) - Search for regex pattern in files.
 - **List**: list(path=".") - List directory contents.
+- **ApplyPatch**: apply_patch(patch) - Apply a patch file. Supports Add/Update/Move/Delete File markers.
 
 ### Shell
 - **Bash**: bash(command, timeout=60) - Execute shell command. Returns stdout/stderr.
@@ -227,29 +343,29 @@ TOOL_DESCRIPTIONS = """
   - Confirmation before destructive operations
   - Any time you need human input to continue
 
-### Skills (Clawd-Code)
+### Skills (CDH)
 - **Skill**: skill(name, arguments=[]) - Run a registered skill by name. Skills are markdown-based instruction sets with YAML frontmatter.
 
-### MCP (Clawd-Code)
+### MCP (CDH)
 - **MCPTool**: mcp_tool(server, tool, arguments) - Call a tool on a connected MCP server.
 - **MCPResources**: mcp_resources(server, action, uri) - List or read resources on an MCP server.
 
-### LSP (Clawd-Code)
-- **LSP**: lsp(command, file_path, action) - Get code diagnostics from a Language Server server.
+### LSP (CDH)
+- **LSP**: lsp(command, file_path, action, line, character, query) - Get code intelligence from a Language Server. Supported actions: diagnostics, gotoDefinition, findReferences, hover, documentSymbol, workspaceSymbol, gotoImplementation, callHierarchy, incomingCalls, outgoingCalls.
 
-### Cron (Clawd-Code)
+### Cron (CDH)
 - **CronCreate**: cron_create(name, interval_seconds, command) - Create a scheduled cron job.
 - **CronList**: cron_list() - List all cron jobs.
 - **CronRemove**: cron_remove(name) - Remove a cron job.
 
-### Git (Clawd-Code)
+### Git (CDH)
 - **Worktree**: worktree(action, path, branch) - Manage git worktrees: create, list, prune.
 
-### Config (Clawd-Code)
+### Config (CDH)
 - **ConfigRead**: config_read(key) - Read configuration values.
 - **ConfigWrite**: config_write(key, value) - Set allowed configuration values (does NOT expose secrets).
 
-### Tasks & Planning (V2 with dependency tracking)
+### Tasks & Planning (CDH)
 - **TaskCreate**: task_create(subject, description, activeForm="", metadata={}) - Create a task. Returns task id.
 - **TaskGet**: task_get(taskId) - Retrieve a task by ID.
 - **TaskList**: task_list() - List all tasks with status, owner, and blockers.
@@ -272,4 +388,34 @@ When given a goal or task, ALWAYS follow this workflow:
 5. **Complete** todos as you finish them with todo_complete()
 
 For plan/solo mode, always start by creating a plan with tasks before taking action.
+"""
+
+COMPACTION_INSTRUCTIONS = """
+## Context Compaction
+
+You are a compaction agent. Your job is to summarize the conversation history into a concise format that preserves key information while minimizing token usage.
+
+Output a summary with these sections:
+- **Summary**: Brief overview of what has been discussed/accomplished
+- **Key Decisions**: Important choices made and their rationale
+- **Remaining Tasks**: What still needs to be done
+- **Context Needed**: Information required to continue the work
+
+Keep each section concise. Use bullet points where possible.
+"""
+
+TITLE_INSTRUCTIONS = """
+Generate a short, descriptive title (max 5 words) for this conversation. 
+The title should capture the main topic or task being worked on.
+Only output the title, nothing else.
+"""
+
+SUMMARY_INSTRUCTIONS = """
+Create a summary of this conversation session. Include:
+- What was the user trying to accomplish
+- What was done
+- What was the outcome
+- Any important notes for future sessions
+
+Keep it concise but informative.
 """

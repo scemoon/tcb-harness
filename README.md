@@ -1,16 +1,16 @@
 # Cloud Dev Harness
 
-AI-powered terminal-based development framework for cloud-native applications, featuring a Textual TUI, multi-provider LLM support, pipeline-driven development lifecycle, and MCP integration.
+AI-powered terminal-based development framework for cloud-native applications, featuring a Textual TUI, multi-provider LLM support, MCP integration, and sandboxed execution.
 
 ## Features
 
 - **TUI Chat Interface** — Stream AI responses with rich markdown rendering, thinking blocks, tool use visualization, command autocomplete, and file attachment
 - **8 LLM Providers** — MiniMaxi (default), OpenAI, Anthropic, DeepSeek, MiniMax, GLM (Zhipu), Ollama (local) with auto-model selection by task complexity
-- **Pipeline Lifecycle** — Structured Init → Spec → Design → Coding (TDD) → Testing → Deploy with quality gates
+- **Sandboxed Execution** — Bubblewrap/Docker container isolation with resource limits (CPU, memory, processes, network)
 - **MCP Client** — Connect to external Model Context Protocol servers (SSE and stdio transports)
-- **Skill System** — Domain-specific knowledge injection with built-in git and shell skills
+- **Skill System** — Domain-specific knowledge injection with multi-path discovery (`.opencode/skills/`, `.claude/skills/`, `.agents/skills/`)
 - **Session Management** — SQLite-backed persistence with create/load/resume/delete/export
-- **Multi-Mode Agent** — Build (full tools), Plan (read-only), Solo (independent) modes
+- **Multi-Mode Agent** — Build (full tools), Plan (read-only), Solo (independent) modes with hidden system agents (compaction, title, summary)
 - **Subagents** — General, Explore (read-only codebase), Scout (web research)
 - **Observability** — Distributed tracing with local JSON export or OTLP
 - **Task Management** — Task dependency tracking, cron scheduling
@@ -33,7 +33,7 @@ Downloads and installs the latest GitHub release via pip. Adds `cdh` shim to `~/
 ```bash
 npm install -g cdh
 ```
-Installs via [npm registry](https://www.npmjs.com/package/cdh). Requires Node.js >= 16.
+Installs via [npm registry](https://www.npmjs.com/npm.com/package/cdh). Requires Node.js >= 16.
 
 Or install from a local `.tgz` built in this repo:
 ```bash
@@ -90,10 +90,10 @@ cdh config                   # Open configuration editor
 cdh config set provider openai
 cdh config list              # Show full config
 cdh logs                     # View logs (last 20 lines)
-cdh logs --tail 100          # View last 100 log lines
+cdh logs --tail 100         # View last 100 log lines
 cdh logs --follow            # Follow log output
-cdh project                 # List projects
-cdh project show <name>     # Show project details
+cdh project                  # List projects
+cdh project show <name>      # Show project details
 cdh version                  # Show version
 ```
 
@@ -141,6 +141,13 @@ tui:
 agent:
   max_iterations: 20
   timeout_seconds: 300
+
+sandbox:
+  mode: auto  # auto, bwrap, docker, none
+  cpu_time: 30
+  memory_mb: 512
+  max_procs: 10
+  network_enabled: false
 ```
 
 Environment variables are interpolated with `${VAR}` syntax in config values.
@@ -149,29 +156,156 @@ Environment variables are interpolated with `${VAR}` syntax in config values.
 
 ```
 ├── cdha/                  # Main Python package (CDH Agent)
-│   ├── agent/             # Agent engine, tools, pipeline, sessions
+│   ├── agent/             # Agent engine, tools, sessions
+│   │   ├── agents/       # Agent types (build, plan, solo, explore, scout, etc.)
+│   │   └── tools/        # Tools (file, bash, web, lsp, mcp, sandbox, etc.)
 │   ├── models/           # LLM provider abstraction + 8 providers
-│   ├── lifecycle/         # Spec/Design/Testing/Deploy stages
-│   ├── mcp/               # Model Context Protocol client
-│   ├── skills/            # Skill system and loader
+│   ├── mcp/              # Model Context Protocol client
+│   ├── skills/           # Skill system with multi-path discovery
 │   ├── storage/           # SQLite session store
-│   ├── trace/             # Distributed tracing (JSON + OTLP)
-│   ├── tasks/             # Task management with dependencies
-│   ├── memory/            # Memory systems (pyramid, recall, symbolic)
+│   ├── trace/            # Distributed tracing (JSON + OTLP)
+│   ├── tasks/            # Task management with dependencies
+│   ├── memory/           # Memory systems (pyramid, recall, symbolic)
 │   └── server/            # HTTP/SSE agent server
-├── tui/                   # Textual TUI (A2TUI)
-│   ├── screens/           # Main, store, settings, sessions screens
-│   ├── widgets/           # TUI widgets
-│   └── acp/               # ACP protocol implementation
-├── cloud-spec-skill/       # CloudSpec specification framework
-│   ├── rules/             # Development standards
-│   ├── providers/         # Cloud abstractions (TCB, Aliyun, AWS)
-│   └── templates/         # Project scaffolding
-├── builtin_skills/         # Built-in skills (git, shell)
-├── tests/                 # pytest test suite
-├── install.sh             # GitHub release installer
+├── tui/                  # Textual TUI (A2TUI)
+│   ├── screens/          # Main, store, settings, sessions screens
+│   ├── widgets/          # TUI widgets
+│   └── acp/              # ACP protocol implementation
+├── cloud-spec-skill/     # CloudSpec specification framework
+│   ├── rules/            # Development standards
+│   ├── providers/        # Cloud abstractions (TCB, Aliyun, AWS)
+│   └── templates/        # Project scaffolding
+├── tests/                # pytest test suite
+├── install.sh            # GitHub release installer
 └── pyproject.toml
 ```
+
+## Agents
+
+CDH provides specialized agents with different capabilities:
+
+| Agent | Type | Description |
+|-------|------|-------------|
+| `build` | primary | Full development agent with all tools enabled |
+| `plan` | primary | Read-only planning agent, requires approval for edits/bash |
+| `solo` | primary | Independent agent, plans first then executes |
+| `general` | subagent | Multi-step tasks with full tool access |
+| `explore` | subagent | Fast read-only codebase exploration (hidden) |
+| `scout` | subagent | External docs research with web access (hidden) |
+| `compaction` | system | Context compression for long conversations (hidden) |
+| `title` | system | Session title generation (hidden) |
+| `summary` | system | Session summary generation (hidden) |
+
+### Agent Configuration
+
+```yaml
+agent:
+  build:
+    steps: 50              # Max iterations (0 = unlimited)
+    temperature: 0.3
+    top_p: 0.9             # Alternative to temperature
+    color: "#4A90D9"       # UI color
+    bash_permissions:       # Command-level bash permissions
+      "git *": ask
+      "git push": allow
+      "rm *": deny
+```
+
+## Tools
+
+### Built-in Tools
+
+| Tool | Description |
+|------|-------------|
+| `read`, `write`, `edit`, `insert`, `undo_edit` | File operations |
+| `glob`, `grep`, `list` | Search operations |
+| `apply_patch` | Apply patch files (Add/Update/Move/Delete) |
+| `bash` | Shell execution with sandbox isolation |
+| `webfetch`, `websearch` | Web access |
+| `task`, `agent` | Subagent spawning |
+| `skill` | Load skills by name |
+| `lsp` | Language server intelligence (gotoDefinition, findReferences, hover, etc.) |
+| `mcp_tool`, `mcp_resources` | MCP server tools |
+| `cron_create/list/remove` | Cron scheduling |
+| `worktree` | Git worktree management |
+| `config_read`, `config_write` | Configuration |
+| `task_create/get/list/update/output/stop` | Task management |
+| `todo_create/list/complete` | Todo management |
+| `send_message`, `ask_user` | Communication |
+
+### LSP Actions
+
+The `lsp` tool supports:
+- `diagnostics` — Get code diagnostics
+- `gotoDefinition` — Jump to symbol definition
+- `findReferences` — Find symbol references
+- `hover` — Get hover information
+- `documentSymbol` — List document symbols
+- `workspaceSymbol` — Search workspace symbols
+- `gotoImplementation` — Jump to implementation
+- `callHierarchy` — Analyze call hierarchy
+- `incomingCalls` / `outgoingCalls` — Call relationships
+
+## Skills
+
+Skills are markdown-based instruction sets with YAML frontmatter.
+
+### Discovery Paths
+
+CDH searches for skills in:
+- `~/.cdh/skills/<name>/SKILL.md` — User skills
+- `.opencode/skills/<name>/SKILL.md` — OpenCode compatible
+- `.claude/skills/<name>/SKILL.md` — Claude compatible
+- `.agents/skills/<name>/SKILL.md` — Agent compatible
+
+### Skill Frontmatter
+
+```yaml
+---
+name: git-release
+description: Create consistent releases and changelogs
+license: MIT
+compatibility: opencode
+metadata:
+  audience: maintainers
+  workflow: github
+---
+```
+
+### Skill Name Validation
+
+- 1-64 characters
+- Lowercase alphanumeric with single hyphens
+- Cannot start/end with hyphen or have consecutive hyphens
+
+## Sandboxing
+
+CDH provides three levels of execution isolation:
+
+### Mode: `none` (default fallback)
+Direct execution with resource limits via Python's `resource` module:
+- CPU time limit
+- Memory limit (RLIMIT_AS)
+- Process count limit (RLIMIT_NPROC)
+- File descriptor limit (RLIMIT_NOFILE)
+
+### Mode: `bwrap` (recommended)
+[Bubblewrap](https://github.com/containers/bubblewrap) Linux namespace isolation:
+- `/dev` and `/proc` access
+- Read-only bind mounts for system directories
+- Writable `/workspace` mount
+- Network isolation (`--unshare-net`)
+- User/Group isolation
+- `/tmp` as tmpfs
+
+### Mode: `docker`
+Docker container isolation:
+- Memory limit
+- CPU quota
+- Network disabled by default
+- Volume mounts for workspace
+- User namespace isolation
+- Auto-cleanup on exit
 
 ## Supported Providers
 
