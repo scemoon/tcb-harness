@@ -335,8 +335,32 @@ class A2TUIApp(App, inherit_bindings=False):
                 self.project_dir = Path(cfg.current_project_path).expanduser().resolve()
             else:
                 self.project_dir = Path("./").expanduser().resolve()
+        self._exit_metrics: dict[str, object] | None = None
         self.start_time = monotonic()
         """Time app was started."""
+
+    def _capture_exit_metrics(self) -> None:
+        from tui.widgets.conversation import Conversation
+
+        screen = self.screen
+        try:
+            conv = screen.query_one(Conversation)
+        except Exception:
+            return
+        if conv._agent_data is None or conv.session_start_time is None:
+            return
+        session_time = monotonic() - conv.session_start_time
+        session_id = getattr(conv.agent, "session_id", None) or conv._agent_session_id or ""
+        self._exit_metrics = {
+            "session_id": session_id,
+            "tool_call_total": conv._tool_call_total,
+            "tool_call_success": conv._tool_call_success,
+            "tool_call_failed": conv._tool_call_failed,
+            "turn_count": conv._turn_count,
+            "shell_count": conv._shell_count,
+            "wall_time": session_time,
+            "agent_title": conv.agent_title or "Agent",
+        }
 
     @property
     def config_path(self) -> Path:
@@ -806,23 +830,7 @@ class A2TUIApp(App, inherit_bindings=False):
                 )
 
     def run_on_exit(self):
-        if self.update_required and self.version_meta is not None:
-            version_meta = self.version_meta
-            from rich.console import Console
-            from rich.panel import Panel
-
-            console = Console()
-            console.print(
-                Panel(
-                    version_meta.upgrade_message,
-                    style="magenta",
-                    border_style="dim green",
-                    title=" [bold green not dim]Update available![/] ",
-                    expand=False,
-                    padding=(1, 2),
-                )
-            )
-            console.print(f"Please visit {version_meta.visit_url}")
+        pass
 
     @work(exit_on_error=False)
     async def run_version_check(self) -> None:
@@ -857,19 +865,25 @@ class A2TUIApp(App, inherit_bindings=False):
         await self.push_screen_wait("settings")
         await self.save_settings()
 
-    async def action_quit(self) -> None:
+    def action_quit(self) -> None:
         """An [action](/guide/actions) to quit the app as soon as possible."""
 
         self.screen.set_focus(None)
-
-        async def save_settings_and_exit():
-            await self.save_settings()
-            self.exit()
-
-        # TODO: Can we avoid the timer?
-        # If the user presses ctrl+q while on the settings page, we want to make sure the blur event is handled,
-        # which will update the setting the user is editing.
-        self.set_timer(0.05, save_settings_and_exit)
+        self._capture_exit_metrics()
+        try:
+            driver = self._driver
+            if driver is not None:
+                driver.stop_application_mode()
+        except Exception:
+            pass
+        sid = (self._exit_metrics.get("session_id", "") or "")[:36] if self._exit_metrics else ""
+        try:
+            with open("/dev/tty", "w") as tty:
+                tty.write(f"\n  CDH powering down. Goodbye!\n  Session ID: {sid or '-'}\n")
+        except Exception:
+            pass
+        import os
+        os._exit(0)
 
     def action_help_quit(self) -> None:
         if (time := monotonic()) - self.last_ctrl_c_time <= 5.0:

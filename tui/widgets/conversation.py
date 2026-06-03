@@ -397,6 +397,10 @@ class Conversation(containers.Vertical):
 
         self._turn_count = 0
         self._shell_count = 0
+        self._tool_call_total = 0
+        self._tool_call_success = 0
+        self._tool_call_failed = 0
+        self._tool_call_finalized: set[str] = set()
 
         self._directory_changed = False
         self._directory_watcher: DirectoryWatcher | None = None
@@ -756,6 +760,18 @@ class Conversation(containers.Vertical):
                 turn_count=self._turn_count,
             ).wait()
 
+            session_id = getattr(self.agent, "session_id", None) or self._agent_session_id or ""
+            self.app._exit_metrics = {
+                "session_id": session_id,
+                "tool_call_total": self._tool_call_total,
+                "tool_call_success": self._tool_call_success,
+                "tool_call_failed": self._tool_call_failed,
+                "turn_count": self._turn_count,
+                "shell_count": self._shell_count,
+                "wall_time": session_time,
+                "agent_title": self.agent_title or "Agent",
+            }
+
     @on(AgentFail)
     async def on_agent_fail(self, message: AgentFail) -> None:
         self.agent_ready = True
@@ -1030,18 +1046,30 @@ class Conversation(containers.Vertical):
         from tui.widgets.tool_call import ToolCall
 
         tool_call = message.tool_call
-        if self._msg_log is not None and isinstance(message, acp_messages.ToolCall):
-            self._msg_log.tool_call(
-                tool_call.get("title", "unknown"),
-                tool_call.get("toolCallId", ""),
-                self._turn_count,
-            )
+        status = tool_call.get("status", "")
+        tool_id = message.tool_id
 
-        if tool_call.get("status", None) in (None, "completed"):
+        if isinstance(message, acp_messages.ToolCall):
+            if self._msg_log is not None:
+                self._msg_log.tool_call(
+                    tool_call.get("title", "unknown"),
+                    tool_call.get("toolCallId", ""),
+                    self._turn_count,
+                )
+            if tool_id not in self._tool_call_finalized:
+                self._tool_call_total += 1
+
+        if status in ("completed", "failed") and tool_id not in self._tool_call_finalized:
+            self._tool_call_finalized.add(tool_id)
+            if status == "completed":
+                self._tool_call_success += 1
+            else:
+                self._tool_call_failed += 1
+
+        if status in (None, "", "completed"):
             self._agent_thought = None
             self._agent_response = None
 
-        tool_id = message.tool_id
         try:
             existing_tool_call: ToolCall | None = self.contents.get_child_by_id(
                 tool_id, ToolCall
@@ -1364,6 +1392,7 @@ class Conversation(containers.Vertical):
 
     def _build_slash_commands(self) -> list[SlashCommand]:
         slash_commands = [
+            SlashCommand("/exit", "Exit A2TUI"),
             SlashCommand("/tui:about", "About A2TUI"),
             SlashCommand(
                 "/tui:clear",
@@ -1408,11 +1437,9 @@ class Conversation(containers.Vertical):
         )
         self.shell
 
-        platform_commands.clear()
         if self._agent_data is not None:
             commands_prefix = self._agent_data.get("commands_prefix", "")
-            if commands_prefix:
-                platform_commands.set_prefix(commands_prefix)
+            platform_commands.set_prefix(commands_prefix)
             commands_module = self._agent_data.get("commands_module", "")
             if commands_module:
                 import importlib
@@ -1799,7 +1826,6 @@ class Conversation(containers.Vertical):
             MenuItem("Open as S[u]V[/]G", "export_to_svg", "v"),
         ]
 
-        print(repr(block))
         if block.allow_maximize:
             menu_options.append(MenuItem("[u]M[/u]aximize", "maximize_block", "m"))
 
@@ -1813,8 +1839,11 @@ class Conversation(containers.Vertical):
         await self.mount(menu)
         menu.focus()
 
-    def action_copy_to_clipboard(self) -> None:
-        block = self.get_cursor_block()
+    def action_copy_to_clipboard(
+        self, block: Widget | None = None
+    ) -> None:
+        if block is None:
+            block = self.get_cursor_block()
         if isinstance(block, MenuProtocol):
             text = block.get_block_content("clipboard")
         elif isinstance(block, MarkdownFence):
@@ -1939,6 +1968,22 @@ class Conversation(containers.Vertical):
                 )
                 return True
             await self.prune_window(line_count, line_count)
+            return True
+        elif command == "exit":
+            if self.session_start_time is not None:
+                session_time = monotonic() - self.session_start_time
+                session_id = getattr(self.agent, "session_id", None) or self._agent_session_id or ""
+                self.app._exit_metrics = {
+                    "session_id": session_id,
+                    "tool_call_total": self._tool_call_total,
+                    "tool_call_success": self._tool_call_success,
+                    "tool_call_failed": self._tool_call_failed,
+                    "turn_count": self._turn_count,
+                    "shell_count": self._shell_count,
+                    "wall_time": session_time,
+                    "agent_title": self.agent_title or "Agent",
+                }
+            self.app.exit()
             return True
         elif command == "tui:session":
             return await self._handle_session_command(parameters)

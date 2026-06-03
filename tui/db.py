@@ -163,6 +163,15 @@ class DB:
         session = cast(Session, dict(row))
         return session
 
+    async def session_delete(self, id: int) -> bool:
+        try:
+            async with self.open() as db:
+                await db.execute("DELETE FROM sessions WHERE id = ?", (id,))
+                await db.commit()
+                return True
+        except aiosqlite.Error:
+            return False
+
     async def session_get_recent(self, max_results: int = 100) -> list[Session] | None:
         """Get the most recent sessions."""
         try:

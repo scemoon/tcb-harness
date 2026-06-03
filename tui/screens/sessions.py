@@ -1,4 +1,5 @@
 import json
+from time import monotonic
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -11,6 +12,8 @@ from textual import containers
 from textual import on
 
 
+from cdha.config import CLOUD_DEV_HARNESS_DIR
+
 from tui.app import A2TUIApp
 from tui.db import DB
 from tui.widgets.grid_select import GridSelect
@@ -19,15 +22,20 @@ from tui.widgets.session_summary import SessionSummary
 from tui.session_tracker import SessionDetails
 
 
+CONFIRM_TIMEOUT = 5.0
 INSTRUCTIONS_NO_SESSIONS = "Your sessions will be shown here."
 
 
 class SessionsScreen(ModalScreen[str]):
     CSS_PATH = "sessions.tcss"
-    BINDINGS = [Binding("escape", "dismiss", "Dismiss")]
+    BINDINGS = [
+        Binding("escape", "dismiss", "Dismiss"),
+        Binding("d", "delete_session", "Delete"),
+    ]
 
     app: getters.app[A2TUIApp] = getters.app(A2TUIApp)
     session_grid_select = getters.query_one(SessionGridSelect)
+    _delete_confirm_time: float = 0.0
 
     def compose(self) -> ComposeResult:
         with containers.Center(id="title-container"):
@@ -39,6 +47,57 @@ class SessionsScreen(ModalScreen[str]):
     @property
     def focus_chain(self) -> list[Widget]:
         return [self.session_grid_select]
+
+    async def action_delete_session(self) -> None:
+        now = monotonic()
+        if now - self._delete_confirm_time > CONFIRM_TIMEOUT:
+            self._delete_confirm_time = now
+            self.notify(
+                "Press [b]d[/b] again to confirm deletion",
+                title="Delete session",
+                timeout=CONFIRM_TIMEOUT,
+            )
+            return
+
+        self._delete_confirm_time = 0.0
+        highlighted = self.session_grid_select.highlighted
+        if highlighted is None:
+            return
+        try:
+            widget = self.session_grid_select.children[highlighted]
+        except IndexError:
+            return
+        if not isinstance(widget, SessionSummary):
+            return
+        session_details = widget.session_details
+        if session_details is None:
+            return
+        session_pk = session_details.session_pk
+        if session_pk is None:
+            self.notify("Cannot delete unsaved session", severity="error")
+            return
+
+        db = DB()
+        session = await db.session_get(session_pk)
+        if session is None:
+            return
+
+        agent_session_id = session.get("agent_session_id", "")
+        title = session.get("title", "Untitled") or "Untitled"
+
+        await db.session_delete(session_pk)
+
+        if agent_session_id:
+            session_file = CLOUD_DEV_HARNESS_DIR / "sessions" / f"{agent_session_id}.json"
+            if session_file.exists():
+                session_file.unlink()
+
+        mode_name = session_details.mode_name
+        if self.app.session_tracker.get_session(mode_name):
+            self.app.session_tracker.close_session(mode_name)
+
+        await widget.remove()
+        self.notify(f"Deleted session: {title}")
 
     async def _load_historical_sessions(self) -> None:
         db = DB()
