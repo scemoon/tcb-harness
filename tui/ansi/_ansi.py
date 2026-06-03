@@ -64,9 +64,7 @@ class DECInvoke(NamedTuple):
 DEC_SLOTS = {"(": 0, ")": 1, "*": 2, "+": 3, "-": 1, ".": 2, "//": 3}
 
 
-def show(obj: object) -> object:
-    print(obj)
-    return obj
+
 
 
 class FEPattern(Pattern):
@@ -105,7 +103,6 @@ class FEPattern(Pattern):
 
             # DCS
             case "P":
-                print("TODO DCS")
                 last_character = ""
                 DSC_TERMINATORS = self.DSC_TERMINATORS
                 while (character := (yield)) not in DSC_TERMINATORS:
@@ -128,7 +125,6 @@ class FEPattern(Pattern):
 
             # Line attribute
             case "#":
-                print("LINE ATTRIBUTES")
                 store((yield))
                 return ("la", sequence.getvalue())
             # ISO 2022: ESC SP
@@ -568,7 +564,6 @@ class ANSIStream:
                     return ANSICursorPositionRequest()
 
                 case _:
-                    print("Unknown CSI (a)", repr(csi))
                     return None
 
         elif match := re.fullmatch(r"\[([0-9:;<=>?]*)([!-/]*)([@-~])", csi):
@@ -600,7 +595,6 @@ class ANSIStream:
 
                 # \x1b[22;0;0t
                 case [param1, param2, "t"]:
-                    print("TODO", "XTWINOPS", param1, param2)
                     # 't' = XTWINOPS (Window manipulation)
                     return None
                 case _:
@@ -633,10 +627,8 @@ class ANSIStream:
                             alternate_scroll=alternate_scroll,
                         )
                     else:
-                        print("Unknown CSI (b)", repr(csi))
                         return None
 
-        print("Unknown CSI (c)", repr(csi))
         return None
 
     def on_token(self, token: tuple[str, str]) -> Iterable[ANSICommand]:
@@ -690,15 +682,15 @@ class ANSIStream:
                     elif control == "ind":
                         yield ANSICursor(delta_y=+1, auto_scroll=True)
                     else:
-                        print("CONTROL", repr(code), repr(control))
+                        pass
                 else:
-                    print("NOT HANDLED", code)
+                    pass
 
             case ["content", text]:
                 yield ANSIContent(text)
 
             case _:
-                print("UNKNWON TOKEN", repr(token))
+                pass
 
 
 class LineFold(NamedTuple):
@@ -1524,7 +1516,7 @@ class TerminalState:
                 await self.write_stdin(f"\x1b[{row};{column}R")
 
             case _:
-                print("Unhandled", ansi_command)
+                pass
 
     def _line_updated(self, buffer: Buffer, line_no: int) -> None:
         """Mark a line has having been udpated.
