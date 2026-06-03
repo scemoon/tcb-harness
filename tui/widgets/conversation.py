@@ -357,6 +357,7 @@ class Conversation(containers.Vertical):
     column: var[bool] = var(False, toggle_class="-column")
 
     title = var("")
+    _agent_session_title: var[str] = var("")
 
     def __init__(
         self,
@@ -409,12 +410,14 @@ class Conversation(containers.Vertical):
 
     def update_title(self) -> None:
         """Update the screen title."""
-
-        if agent_title := self.agent_title:
+        screen = self.screen
+        if self._agent_session_title:
+            screen.title = self._agent_session_title
+        elif agent_title := self.agent_title:
             project_path = format_path(self.project_path)
-            self.screen.title = f"{agent_title} {project_path}"
+            screen.title = f"{agent_title} {project_path}"
         else:
-            self.screen.title = ""
+            screen.title = ""
 
     @property
     def agent_title(self) -> str | None:
@@ -842,7 +845,6 @@ class Conversation(containers.Vertical):
         name = prompt.strip().split("\n")[0][:60].strip()
         if name:
             await self.agent.set_session_name(name)
-            self.post_message(messages.SessionUpdate(name=name))
 
     @work
     async def send_prompt_to_agent(self, prompt: str) -> None:
@@ -1433,9 +1435,6 @@ class Conversation(containers.Vertical):
                     self._session_pk,
                 )
                 await self.agent.start(self)
-                self.post_message(
-                    messages.SessionUpdate("New Session", self.agent_title)
-                )
 
             self.call_after_refresh(start_agent)
 
@@ -1983,7 +1982,6 @@ class Conversation(containers.Vertical):
             except ValueError:
                 self.notify("Invalid session ID", title="/tui:session load", severity="error")
                 return True
-            from tui import messages
             self.post_message(messages.SessionLoad(session_pk))
             return True
         elif sub_cmd == "new":
@@ -2016,7 +2014,6 @@ class Conversation(containers.Vertical):
                 return True
             if self.agent is not None:
                 await self.agent.set_session_name(name)
-                self.post_message(messages.SessionUpdate(name=name))
                 self.flash(f"Renamed session to [b]'{name}'", style="success")
             return True
         else:

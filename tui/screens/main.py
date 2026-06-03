@@ -26,6 +26,7 @@ from tui.widgets.throbber import Throbber
 from tui.widgets.conversation import Conversation
 from tui.widgets.project_directory_tree import ProjectDirectoryTree
 from tui.widgets.side_bar import SideBar
+from tui.widgets.session_tabs import SessionsTabs, SessionLabel
 
 
 class ModeProvider(Provider):
@@ -133,8 +134,9 @@ class MainScreen(Screen, can_focus=False):
             return FutureText([Content(quote) for quote in quotes])
         return super().get_loading_widget()
 
-    def _on_screen_resume(self, event: ScreenResume) -> None:
-        self.conversation
+    @on(ScreenResume)
+    def on_screen_resume(self, event: ScreenResume) -> None:
+        self.conversation.update_title()
 
     def compose(self) -> ComposeResult:
         with containers.Center():
@@ -202,9 +204,9 @@ class MainScreen(Screen, can_focus=False):
 
     @on(messages.SessionUpdate)
     async def on_session_update(self, event: messages.SessionUpdate) -> None:
-        # TODO: May not be required
         if event.name is not None:
             self._agent_session_title = event.name
+            self.conversation._agent_session_title = event.name
         if self.id is not None:
             self.app.session_tracker.update_session(
                 self.id,
@@ -213,6 +215,8 @@ class MainScreen(Screen, can_focus=False):
                 path=event.path,
                 state=event.state,
             )
+        if event.name is not None:
+            self.conversation.update_title()
 
     @on(messages.SessionClose)
     async def on_session_close(self, event: messages.SessionClose) -> None:
@@ -222,13 +226,23 @@ class MainScreen(Screen, can_focus=False):
         current_mode = self.id
         session_tracker = self.app.session_tracker
 
-        session_count = session_tracker.session_count
-
-        if session_count <= 1:
-
+        if session_tracker.session_count <= 1:
             session_tracker.close_session(current_mode)
             self.app.exit()
+            return
 
+        next_mode = session_tracker.session_cursor_move(current_mode, +1)
+        session_tracker.close_session(current_mode)
+        if next_mode:
+            self.app.switch_mode(next_mode)
+            # Directly remove the closed tab from the visible screen's SessionsTabs
+            if sessions_tabs := self.app.screen.query_one_optional(
+                SessionsTabs
+            ):
+                if current_tab := sessions_tabs.query_one_optional(
+                    f"#{current_mode}", SessionLabel
+                ):
+                    await current_tab.remove()
         self.app.call_later(self.app.remove_mode, current_mode)
 
     def on_mount(self) -> None:

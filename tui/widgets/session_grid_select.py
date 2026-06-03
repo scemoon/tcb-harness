@@ -46,16 +46,19 @@ class SessionGridSelect(GridSelect):
         self, update: tuple[str, SessionDetails | None]
     ) -> None:
         mode_name, details = update
-        session_summary = self.query_one_optional(f"#{mode_name}", SessionSummary)
         if details is None:
-            if session_summary is not None:
+            if session_summary := self.query_one_optional(
+                f"#{mode_name}", SessionSummary
+            ):
                 await session_summary.remove()
             return
 
-        if session_summary is None:
-            await self.mount(SessionSummary(details, id=details.mode_name))
-        else:
+        if session_summary := self.query_one_optional(
+            f"#{mode_name}", SessionSummary
+        ):
             session_summary.session_details = details
+        else:
+            await self.mount(SessionSummary(details, id=details.mode_name))
 
     def compose(self) -> ComposeResult:
         for session in self.session_tracker.ordered_sessions:

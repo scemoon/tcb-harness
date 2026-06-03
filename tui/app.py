@@ -705,9 +705,9 @@ class A2TUIApp(App, inherit_bindings=False):
         self._load_cdh_config()
 
     async def new_session_screen(
-        self, get_screen: Callable[[], Screen]
+        self, get_screen: Callable[[], Screen], session_pk: int | None = None
     ) -> SessionDetails:
-        session_details = self._session_tracker.new_session()
+        session_details = self._session_tracker.new_session(session_pk=session_pk)
         self.update_show_sessions()
         self.session_update_signal.publish((session_details.mode_name, session_details))
 
@@ -752,7 +752,7 @@ class A2TUIApp(App, inherit_bindings=False):
             self.launch_agent(agent_identity, project_path=Path(self.project_dir))
         else:
             db = DB()
-            recent_sessions = await db.session_get_recent(max_results=10)
+            recent_sessions = await db.session_get_recent(max_results=20)
             session_to_resume = None
             if recent_sessions:
                 import json as json_module
@@ -893,14 +893,24 @@ class A2TUIApp(App, inherit_bindings=False):
     @on(messages.SessionNavigate)
     def on_session_navigate(self, event: messages.SessionNavigate) -> None:
         new_mode = self._session_tracker.session_cursor_move(
-            event.mode_name, event.direction
+            event.mode_name, event.direction, set(self._modes.keys())
         )
         if new_mode is not None:
             self.switch_mode(new_mode)
 
     @on(messages.SessionSwitch)
     def on_session_switch(self, event: messages.SessionSwitch) -> None:
-        self.switch_mode(event.mode_name)
+        mode_name = event.mode_name
+        if mode_name in self._modes:
+            self.switch_mode(mode_name)
+        elif mode_name.startswith("session-"):
+            parts = mode_name.split("-")
+            session_pk = int(parts[1])
+            existing_mode = self._find_mode_for_session_pk(session_pk)
+            if existing_mode is not None and existing_mode in self._modes:
+                self.switch_mode(existing_mode)
+            else:
+                self._load_session(session_pk)
 
     @on(messages.SessionNew)
     def on_session_new(self, event: messages.SessionNew) -> None:
@@ -918,6 +928,10 @@ class A2TUIApp(App, inherit_bindings=False):
 
     @work
     async def _load_session(self, session_pk: int) -> None:
+        existing_mode = self._find_mode_for_session_pk(session_pk)
+        if existing_mode is not None:
+            self.switch_mode(existing_mode)
+            return
         db = DB()
         session = await db.session_get(session_pk)
         if session is None:
@@ -934,10 +948,19 @@ class A2TUIApp(App, inherit_bindings=False):
     @work
     async def action_sessions(self) -> None:
         if (session_screen_name := await self.push_screen_wait("sessions")) is not None:
-            try:
-                self.app.switch_mode(session_screen_name)
-            except KeyError:
-                pass
+            if session_screen_name.startswith("session-"):
+                parts = session_screen_name.split("-")
+                session_pk = int(parts[1])
+                existing_mode = self._find_mode_for_session_pk(session_pk)
+                if existing_mode is not None and existing_mode in self._modes:
+                    self.switch_mode(existing_mode)
+                else:
+                    self._load_session(session_pk)
+            else:
+                try:
+                    self.app.switch_mode(session_screen_name)
+                except KeyError:
+                    pass
 
     @work
     async def action_projects(self) -> None:
@@ -1033,4 +1056,10 @@ class A2TUIApp(App, inherit_bindings=False):
 
             return screen
 
-        await self.new_session_screen(get_screen)
+        await self.new_session_screen(get_screen, session_pk=session_pk)
+
+    def _find_mode_for_session_pk(self, session_pk: int) -> str | None:
+        """Find an existing mode name for a given DB session_pk."""
+        if existing := self._session_tracker.get_session_by_pk(session_pk):
+            return existing.mode_name
+        return None

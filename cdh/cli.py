@@ -272,7 +272,7 @@ def session(action, session_id):
                 title = s.get("title", "Untitled") or "Untitled"
                 aid = s.get("agent_identity", "unknown")
                 sid = s.get("agent_session_id", "")[:8]
-                click.echo(f"  [{s['id']}] {title} ({aid[:30]}... {sid})")
+                click.echo(f"  session-{s['id']}: {title} ({aid[:30]}... {sid})")
         elif action == "load":
             if session_id is None:
                 click.echo("Usage: cdh session load <id>")

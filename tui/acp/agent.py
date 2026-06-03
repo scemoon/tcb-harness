@@ -25,6 +25,7 @@ from tui.acp import api
 from tui.acp.api import API
 from tui.acp import messages
 from tui.acp.prompt import build as build_prompt
+from tui import messages as tui_messages
 from tui.db import DB
 from tui import paths
 from tui import constants
@@ -594,14 +595,11 @@ class Agent(AgentBase):
         """The main logic of the Agent."""
         if constants.ACP_INITIALIZE:
             try:
-                # Boilerplate to initialize comms
                 await self.acp_initialize()
 
                 if self.session_id is None:
-                    # Create a new session
                     await self.acp_new_session()
                 else:
-                    # Load existing session
                     if not self.agent_capabilities.get("loadSession", False):
                         self.post_message(
                             AgentFail(
@@ -627,6 +625,11 @@ class Agent(AgentBase):
                     reason = "Failed to initialize agent"
                     details = ""
                 self.post_message(AgentFail(reason, details))
+        elif self.session_id is None:
+            await self.acp_new_session()
+            if self.session_pk is not None:
+                db = DB()
+                await db.session_update_last_used(self.session_pk)
 
         self.post_message(AgentReady())
 
@@ -712,9 +715,11 @@ class Agent(AgentBase):
     async def acp_load_session(self) -> None:
         assert self.session_id is not None, "Session id must be set"
         cwd = str(self.project_root_path)
+        session_title = None
         if self.session_pk is not None:
             db = DB()
             if (session := await db.session_get(self.session_pk)) is not None:
+                session_title = session.get("title") or "Untitled"
                 if session["meta_json"]:
                     meta = json.loads(session["meta_json"])
                     if session_cwd := meta.get("cwd", None):
@@ -736,6 +741,9 @@ class Agent(AgentBase):
                 for mode in available_modes
             }
             self.post_message(messages.SetModes(current_mode, modes_update))
+
+        if session_title:
+            self.post_message(tui_messages.SessionUpdate(name=session_title))
 
     async def acp_session_prompt(
         self, prompt: list[protocol.ContentBlock]
@@ -801,6 +809,7 @@ class Agent(AgentBase):
             return
         db = DB()
         await db.session_update_title(self.session_pk, name)
+        self.post_message(tui_messages.SessionUpdate(name=name))
 
     async def acp_session_cancel(self) -> bool:
         with self.request():

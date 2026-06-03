@@ -1,3 +1,5 @@
+import json
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.events import ScreenResume
@@ -10,9 +12,11 @@ from textual import on
 
 
 from tui.app import A2TUIApp
+from tui.db import DB
 from tui.widgets.grid_select import GridSelect
 from tui.widgets.session_grid_select import SessionGridSelect
 from tui.widgets.session_summary import SessionSummary
+from tui.session_tracker import SessionDetails
 
 
 INSTRUCTIONS_NO_SESSIONS = "Your sessions will be shown here."
@@ -36,7 +40,39 @@ class SessionsScreen(ModalScreen[str]):
     def focus_chain(self) -> list[Widget]:
         return [self.session_grid_select]
 
-    def _on_screen_resume(self, event: ScreenResume) -> None:
+    async def _load_historical_sessions(self) -> None:
+        db = DB()
+        sessions = await db.session_get_recent(max_results=20)
+        if not sessions:
+            return
+        for session in sessions:
+            session_id = session["id"]
+            mode_name = f"session-{session_id}"
+            if self.app.session_tracker.get_session(mode_name):
+                continue
+            cwd = ""
+            if meta_json := session.get("meta_json"):
+                try:
+                    cwd = json.loads(meta_json).get("cwd", "")
+                except Exception:
+                    pass
+            session_details = SessionDetails(
+                index=session_id,
+                mode_name=mode_name,
+                session_pk=session_id,
+                title=session.get("title", "Untitled") or "Untitled",
+                subtitle=session.get("agent", ""),
+                path=cwd,
+                state="idle",
+            )
+            await self.session_grid_select.mount(
+                SessionSummary(session_details, id=mode_name)
+            )
+
+    def on_mount(self) -> None:
+        self.run_worker(self._load_historical_sessions())
+
+    async def _on_screen_resume(self, event: ScreenResume) -> None:
         current_mode = self.app.screen_stack[0].id
         for instructions in self.query(".instructions"):
             instructions.display = not self.session_grid_select.children
@@ -54,4 +90,5 @@ class SessionsScreen(ModalScreen[str]):
             isinstance(event.widget, SessionSummary)
             and event.widget.session_details is not None
         ):
-            self.dismiss(event.widget.session_details.mode_name)
+            mode_name = event.widget.session_details.mode_name
+            self.dismiss(mode_name)

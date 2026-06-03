@@ -15,6 +15,8 @@ class SessionDetails:
     """Index of session, used in sorting."""
     mode_name: str
     """The screen mode name."""
+    session_pk: int | None = None
+    """The DB session primary key, for deduplication when reloading."""
     title: str = ""
     """The title of the conversation."""
     subtitle: str = ""
@@ -42,11 +44,14 @@ class SessionTracker:
     def session_count(self) -> int:
         return len(self.sessions)
 
-    def new_session(self) -> SessionDetails:
+    def new_session(self, session_pk: int | None = None) -> SessionDetails:
         self._session_index += 1
         mode_name = f"session-{self._session_index}"
         session_meta = SessionDetails(
-            index=self._session_index, mode_name=mode_name, title="New Session"
+            index=self._session_index,
+            mode_name=mode_name,
+            session_pk=session_pk,
+            title="New Session",
         )
         self.sessions[mode_name] = session_meta
         return session_meta
@@ -58,6 +63,12 @@ class SessionTracker:
 
     def get_session(self, mode_name: str) -> SessionDetails | None:
         return self.sessions.get(mode_name, None)
+
+    def get_session_by_pk(self, session_pk: int) -> SessionDetails | None:
+        for session in self.sessions.values():
+            if session.session_pk == session_pk:
+                return session
+        return None
 
     def update_session(
         self,
@@ -87,9 +98,19 @@ class SessionTracker:
         return iter(self.ordered_sessions)
 
     def session_cursor_move(
-        self, mode_name: str, direction: Literal[-1, +1]
+        self, mode_name: str, direction: Literal[-1, +1], valid_modes: set[str] | None = None
     ) -> str | None:
-        mode_names = [session.mode_name for session in self.ordered_sessions]
+        if valid_modes is None:
+            valid_modes = {s.mode_name for s in self.ordered_sessions}
+        else:
+            valid_modes = valid_modes & {s.mode_name for s in self.ordered_sessions}
+        if not valid_modes:
+            return None
+        ordered_valid = sorted(
+            [s for s in self.ordered_sessions if s.mode_name in valid_modes],
+            key=attrgetter("index")
+        )
+        mode_names = [s.mode_name for s in ordered_valid]
         try:
             mode_index = mode_names.index(mode_name)
         except ValueError:

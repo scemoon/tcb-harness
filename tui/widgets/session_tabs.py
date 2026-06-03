@@ -93,7 +93,7 @@ class SessionsTabs(Widget):
         self.current_session = self.app.current_mode
         self.app.mode_change_signal.subscribe(self, self.handle_mode_change)
         self.app.session_update_signal.subscribe(
-            self, self.handle_session_update_signal
+            self, self.handle_session_update_signal, immediate=True
         )
         self.update_underline(self.current_session, animate=False)
         self.call_after_refresh(self.update_underline, self.current_session)
@@ -155,13 +155,21 @@ class SessionsTabs(Widget):
                 )
         yield Underline()
 
-    @work
+    @work(exit_on_error=False)
     async def handle_session_update_signal(
         self, update: tuple[str, SessionDetails | None]
     ) -> None:
         mode, details = update
         if details is None:
+            removed_mode = mode
             await self.query(f"#{mode}").remove()
+            if self.current_session == removed_mode:
+                remaining = list(self.query(SessionLabel))
+                if remaining:
+                    new_current = remaining[0].id or ""
+                else:
+                    new_current = ""
+                self.current_session = new_current
         else:
             if tab_label := self.query_one_optional(f"#{mode}", SessionLabel):
                 tab_label.update(self.render_session_label(details))
