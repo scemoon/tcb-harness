@@ -748,8 +748,10 @@ class A2TUIApp(App, inherit_bindings=False):
 
         if mode := self._initial_mode:
             self.switch_mode(mode)
-        elif agent_identity := self._resolve_launch_agent():
-            self.launch_agent(agent_identity, project_path=Path(self.project_dir))
+        elif self._launch_agent_identity:
+            self.launch_agent(
+                self._launch_agent_identity, project_path=Path(self.project_dir)
+            )
         else:
             db = DB()
             recent_sessions = await db.session_get_recent(max_results=20)
@@ -774,6 +776,8 @@ class A2TUIApp(App, inherit_bindings=False):
                     agent_session_id=session_to_resume["agent_session_id"],
                     session_pk=session_to_resume["id"],
                 )
+            elif agent_identity := self._resolve_launch_agent():
+                self.launch_agent(agent_identity, project_path=Path(self.project_dir))
             else:
                 self.push_screen("store")
 
