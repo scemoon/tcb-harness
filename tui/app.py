@@ -278,7 +278,7 @@ class A2TUIApp(App, inherit_bindings=False):
 
     _settings = var(dict)
     column: reactive[bool] = reactive(False)
-    column_width: reactive[int] = reactive(100)
+    column_width: reactive[int] = reactive(80)
     scrollbar: reactive[str] = reactive("normal")
     last_ctrl_c_time = reactive(0.0)
     update_required: reactive[bool] = reactive(False)

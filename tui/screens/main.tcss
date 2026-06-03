@@ -83,7 +83,7 @@ Conversation {
 
     
     &.-column {
-        max-width: 100;             
+        max-width: 80%;             
         background: black 7%;   
         
         #info-container {            

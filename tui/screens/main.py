@@ -97,7 +97,7 @@ class MainScreen(Screen, can_focus=False):
     project_directory_tree = getters.query_one("#project_directory_tree")
 
     column = reactive(False)
-    column_width = reactive(100)
+    column_width = reactive(80)
     scrollbar = reactive("")
     project_path: var[Path] = var(Path("./").expanduser().absolute())
 
@@ -282,12 +282,12 @@ class MainScreen(Screen, can_focus=False):
 
     def watch_column(self, column: bool) -> None:
         self.conversation.styles.max_width = (
-            max(10, self.column_width) if column else None
+            f"{max(40, self.column_width)}%" if column else None
         )
 
     def watch_column_width(self, column_width: int) -> None:
         self.conversation.styles.max_width = (
-            max(10, column_width) if self.column else None
+            f"{max(40, column_width)}%" if self.column else None
         )
 
     def watch_scrollbar(self, old_scrollbar: str, scrollbar: str) -> None:
