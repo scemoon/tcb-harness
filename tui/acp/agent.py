@@ -295,8 +295,26 @@ class Agent(AgentBase):
             }:
                 self.post_message(messages.AvailableCommandsUpdate(available_commands))
 
-            case {"sessionUpdate": "current_mode_update", "currentModeId": mode_id}:
-                self.post_message(messages.ModeUpdate(mode_id))
+            case {
+                "sessionUpdate": "subagent_start",
+                "subagentId": subagent_id,
+                "agentType": agent_type,
+            }:
+                self.post_message(messages.SubAgentStart(subagent_id, agent_type))
+
+            case {
+                "sessionUpdate": "subagent_chunk",
+                "subagentId": subagent_id,
+                "text": text,
+            }:
+                self.post_message(messages.SubAgentChunk(subagent_id, text))
+
+            case {
+                "sessionUpdate": "subagent_end",
+                "subagentId": subagent_id,
+                "agentType": agent_type,
+            }:
+                self.post_message(messages.SubAgentEnd(subagent_id, agent_type))
 
         if status_line is not None:
             self.post_message(messages.UpdateStatusLine(status_line))

@@ -817,7 +817,17 @@ class AgentEngine:
 
             for tu in tool_uses:
                 logger.info(f"Executing tool: {tu['name']} (id={tu['id']})")
+
+                # Emit subagent lifecycle events for Task tool
+                if tu["name"] == "Task":
+                    yield StreamEvent.subagent_start(
+                        tu["input"].get("agent_type", "general"), tu["id"]
+                    )
+
                 result = await self._execute_tool(tu)
+
+                if tu["name"] == "Task":
+                    yield StreamEvent.subagent_end(tu["id"])
                 result_str = str(result.get("content", ""))
                 is_error = result.get("is_error", False)
                 category = result.get("category", "unknown")

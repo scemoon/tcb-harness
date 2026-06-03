@@ -1066,7 +1066,7 @@ class Conversation(containers.Vertical):
             else:
                 self._tool_call_failed += 1
 
-        if status in (None, "", "completed"):
+        if status == "completed":
             self._agent_thought = None
             self._agent_response = None
 
@@ -1079,6 +1079,44 @@ class Conversation(containers.Vertical):
         else:
             if existing_tool_call is not None:
                 await existing_tool_call.update_tool_call(tool_call)
+
+    @on(acp_messages.SubAgentStart)
+    async def on_acp_subagent_start(self, message: acp_messages.SubAgentStart):
+        from tui.widgets.subagent import SubAgent
+
+        message.stop()
+        sa = SubAgent(message.agent_type, tool_id=message.subagent_id)
+        await self.post(sa, new_block=True)
+
+    @on(acp_messages.SubAgentChunk)
+    async def on_acp_subagent_chunk(self, message: acp_messages.SubAgentChunk):
+        from tui.widgets.subagent import SubAgent
+
+        message.stop()
+        try:
+            sa: SubAgent | None = self.contents.get_child_by_id(
+                message.subagent_id, SubAgent
+            )
+        except NoMatches:
+            return
+        else:
+            if sa is not None:
+                sa.append_chunk(message.text)
+
+    @on(acp_messages.SubAgentEnd)
+    async def on_acp_subagent_end(self, message: acp_messages.SubAgentEnd):
+        from tui.widgets.subagent import SubAgent
+
+        message.stop()
+        try:
+            sa: SubAgent | None = self.contents.get_child_by_id(
+                message.subagent_id, SubAgent
+            )
+        except NoMatches:
+            return
+        else:
+            if sa is not None:
+                sa.complete()
 
     @on(acp_messages.AvailableCommandsUpdate)
     async def on_acp_available_commands_update(

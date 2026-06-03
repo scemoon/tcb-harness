@@ -117,7 +117,11 @@ class ToolCall(containers.VerticalGroup):
         assert tool_call is not None
         content: list[protocol.ToolCallContent] = tool_call.get("content", None) or []
 
+        kind = tool_call.get("kind", "other")
+        self.set_class(True, f"-kind-{kind}")
         self.set_class(tool_call.get("status") == "failed", "-failed")
+        if kind == "think":
+            self.set_class(tool_call.get("status") == "pending", "-status-pending")
 
         self.has_content = False
         content_update = list(self._compose_content(content))
@@ -138,8 +142,12 @@ class ToolCall(containers.VerticalGroup):
             return
         tool_call = self.tool_call
         assert tool_call is not None
-        if tool_call.get("kind", "") == "read":
+        kind = tool_call.get("kind", "")
+        if kind == "read":
             # Don't auto expand reads, as it can generate a lot of noise
+            return
+        if kind == "think":
+            self.expanded = True
             return
         tool_call_expand = self.app.settings.get("tools.expand", str, expand=False)
         status = tool_call.get("status")
@@ -157,7 +165,7 @@ class ToolCall(containers.VerticalGroup):
     def tool_call_header_content(self) -> Content:
         tool_call = self.tool_call
         assert tool_call is not None
-        _kind = tool_call.get("kind", "tool")
+        kind = tool_call.get("kind", "tool")
         title = tool_call.get("title", "title")
         status = tool_call.get("status", "pending")
 
@@ -173,7 +181,21 @@ class ToolCall(containers.VerticalGroup):
                 else "[$text-secondary 30%]▶ "
             )
 
-        header = Content.assemble(expand_icon, "🔧 ", title)
+        icon_map = {
+            "think": "💭 ",
+            "read": "📖 ",
+            "edit": "✏️ ",
+            "search": "🔍 ",
+            "execute": "⚡ ",
+            "fetch": "🌐 ",
+            "delete": "🗑️ ",
+            "move": "📦 ",
+            "switch_mode": "🔀 ",
+            "task": "📋 ",
+            "task_mgmt": "📌 ",
+        }
+        icon = icon_map.get(kind, "🔧 ")
+        header = Content.assemble(expand_icon, icon, title)
 
         if status == "pending":
             header += Content.assemble(" ⌛")
@@ -256,6 +278,15 @@ class ToolCall(containers.VerticalGroup):
 
                 case {"type": "terminal", "terminalId": terminal_id}:
                     pass
+
+                case _:
+                    # Fallback: render unrecognized content as plain text
+                    self.has_content = True
+                    try:
+                        text = str(content)
+                        yield TextContent(text, markup=False)
+                    except Exception:
+                        pass
 
 
 if __name__ == "__main__":

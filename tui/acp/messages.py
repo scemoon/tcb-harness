@@ -142,3 +142,27 @@ class ModeUpdate(AgentMessage):
     """Agent informed us about a mode change."""
 
     current_mode: str
+
+
+@dataclass
+class SubAgentStart(AgentMessage):
+    """Sub-agent task started."""
+
+    subagent_id: str
+    agent_type: str
+
+
+@dataclass
+class SubAgentChunk(AgentMessage):
+    """Sub-agent streaming text chunk."""
+
+    subagent_id: str
+    text: str
+
+
+@dataclass
+class SubAgentEnd(AgentMessage):
+    """Sub-agent task completed."""
+
+    subagent_id: str
+    agent_type: str

@@ -278,6 +278,9 @@ class StreamEventType(str, Enum):
     ASK_USER = "ask_user"
     ERROR = "error"
     PLAN = "plan"
+    SUBAGENT_START = "subagent_start"
+    SUBAGENT_CHUNK = "subagent_chunk"
+    SUBAGENT_END = "subagent_end"
 
 
 @dataclass
@@ -313,6 +316,10 @@ class StreamEvent:
     error_message: str = ""
     # PLAN fields
     plan_entries: list[dict] = field(default_factory=list)
+    # SUBAGENT fields
+    subagent_id: str = ""
+    subagent_type: str = ""
+    subagent_text: str = ""
 
     @classmethod
     def text_delta(cls, text: str) -> "StreamEvent":
@@ -389,6 +396,26 @@ class StreamEvent:
         """
         return cls(type=StreamEventType.PLAN, plan_entries=entries)
 
+    @classmethod
+    def subagent_start(cls, agent_type: str, call_id: str) -> "StreamEvent":
+        return cls(
+            type=StreamEventType.SUBAGENT_START,
+            subagent_id=call_id,
+            subagent_type=agent_type,
+        )
+
+    @classmethod
+    def subagent_chunk(cls, call_id: str, text: str) -> "StreamEvent":
+        return cls(
+            type=StreamEventType.SUBAGENT_CHUNK,
+            subagent_id=call_id,
+            subagent_text=text,
+        )
+
+    @classmethod
+    def subagent_end(cls, call_id: str) -> "StreamEvent":
+        return cls(type=StreamEventType.SUBAGENT_END, subagent_id=call_id)
+
     @staticmethod
     def is_text(event: "StreamEvent") -> bool:
         return event.type == StreamEventType.TEXT_DELTA
@@ -437,6 +464,31 @@ class StreamEvent:
             }
         elif self.type == StreamEventType.ERROR:
             return TextBlock(content=f"[Error: {self.error_message}]").to_dict()
+        elif self.type == StreamEventType.SUBAGENT_START:
+            return {
+                "type": "subagent_start",
+                "subagent": {
+                    "id": self.subagent_id,
+                    "agent_type": self.subagent_type,
+                    "status": "running",
+                }
+            }
+        elif self.type == StreamEventType.SUBAGENT_CHUNK:
+            return {
+                "type": "subagent_chunk",
+                "subagent": {
+                    "id": self.subagent_id,
+                    "text": self.subagent_text,
+                }
+            }
+        elif self.type == StreamEventType.SUBAGENT_END:
+            return {
+                "type": "subagent_end",
+                "subagent": {
+                    "id": self.subagent_id,
+                    "status": "completed",
+                }
+            }
         return TextBlock(content="").to_dict()
 
 

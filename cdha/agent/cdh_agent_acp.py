@@ -7,6 +7,7 @@ into CDH AgentEngine calls.
 
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from cdha.models.messages import (
     ToolCall as MsgToolCall,
     ToolResult,
     SubAgentBlock,
+    LifecycleStatus,
 )
 
 from cdha.models.providers.minimaxi_provider import MiniMaxiProvider
@@ -60,6 +62,26 @@ _DEFAULT_MODES = {
     ],
 }
 
+TOOL_CALL_TEXT_RE = re.compile(
+    r'\[/?TOOL_CALL\](?:\s*\{.*?tool\s*=>\s*"(?P<name>\w+)".*?args\s*=>\s*\{(?P<args>.+)\}\})?',
+    re.DOTALL,
+)
+
+
+def _filter_tool_call_text(text: str) -> str:
+    """Remove [TOOL_CALL] {...} patterns from text, return filtered text."""
+    filtered_parts = []
+    last_end = 0
+    for match in TOOL_CALL_TEXT_RE.finditer(text):
+        before = text[last_end:match.start()]
+        if before.strip():
+            filtered_parts.append(before)
+        last_end = match.end()
+    remaining = text[last_end:]
+    if remaining.strip():
+        filtered_parts.append(remaining)
+    return "".join(filtered_parts)
+
 
 def _create_engine(cwd: str) -> AgentEngine:
     cfg = load_config()
@@ -91,8 +113,7 @@ class CDHACPAdapter:
         """Convert old-format message content to list of AgentBlock objects."""
         blocks: list = []
         if isinstance(content, str):
-            if content.strip():
-                blocks.append(TextBlock(content=content))
+            blocks = CDHACPAdapter._text_to_blocks(content)
         elif isinstance(content, list):
             for item in content:
                 if not isinstance(item, dict):
@@ -106,8 +127,8 @@ class CDHACPAdapter:
                     blocks.append(MsgToolCall(
                         id=item.get("id", ""),
                         name=item.get("name", ""),
-                        input=item.get("input", {}),
-                        status=item.get("status", "completed"),
+                        arguments=item.get("input", {}),
+                        status=LifecycleStatus(item.get("status", "complete")),
                     ))
                 elif item_type == "tool_result":
                     blocks.append(ToolResult(
@@ -121,8 +142,77 @@ class CDHACPAdapter:
                         agent_type=item.get("agent_type", "default"),
                         prompt=item.get("prompt", ""),
                         result=item.get("result", ""),
-                        status=item.get("status", "completed"),
+                        status=item.get("status", "complete"),
                     ))
+        return blocks
+
+    @staticmethod
+    def _text_to_blocks(text: str) -> list:
+        """Convert text containing [TOOL_CALL] patterns to blocks.
+
+        Parses text that may contain:
+        - [TOOL_CALL] {tool => "Name", args => {...}} patterns
+        - <thinking>...</thinking> tags
+        Returns a list of TextBlock, ThinkBlock, and MsgToolCall blocks.
+        """
+        import re
+
+        TOOL_CALL_RE = re.compile(
+            r'\[/?TOOL_CALL\](?:\s*\{.*?tool\s*=>\s*"(?P<name>\w+)".*?args\s*=>\s*\{(?P<args>[^}]*)\}\})?',
+            re.DOTALL,
+        )
+        THINKING_RE = re.compile(r'<thinking>(.*?)</thinking>', re.DOTALL)
+
+        blocks = []
+        remaining_text = text
+
+        while remaining_text:
+            tool_match = TOOL_CALL_RE.search(remaining_text)
+            think_match = THINKING_RE.search(remaining_text)
+
+            next_match = None
+            match_type = None
+            if tool_match and think_match:
+                next_match = min(tool_match, think_match, key=lambda m: m.start())
+                match_type = "tool" if next_match == tool_match else "think"
+            elif tool_match:
+                next_match = tool_match
+                match_type = "tool"
+            elif think_match:
+                next_match = think_match
+                match_type = "think"
+
+            if next_match is None:
+                break
+
+            before = remaining_text[:next_match.start()]
+            if before.strip():
+                blocks.append(TextBlock(content=before))
+
+            if match_type == "tool":
+                tool_name = next_match.group("name")
+                if tool_name:
+                    args_str = next_match.group("args") or ""
+                    args_dict = {}
+                    for arg_match in re.finditer(r'--(\w+)\s+"([^"]*)"', args_str):
+                        args_dict[arg_match.group(1)] = arg_match.group(2)
+                    blocks.append(MsgToolCall(
+                        id=f"legacy-{len(blocks)}",
+                        name=tool_name,
+                        arguments=args_dict,
+                        status=LifecycleStatus.COMPLETE,
+                    ))
+                remaining_text = remaining_text[next_match.end():]
+                continue
+            elif match_type == "think":
+                think_content = next_match.group(1)
+                blocks.append(ThinkBlock(content=think_content))
+
+            remaining_text = remaining_text[next_match.end():]
+
+        if remaining_text.strip():
+            blocks.append(TextBlock(content=remaining_text))
+
         return blocks
 
     def send_notification(self, method: str, params: dict):
@@ -162,6 +252,15 @@ class CDHACPAdapter:
             },
         }
 
+    def _send_available_commands(self) -> None:
+        """Send slash commands available in the current agent mode."""
+        self.send_session_update({
+            "sessionUpdate": "available_commands_update",
+            "availableCommands": [
+                {"name": "exit", "description": "Exit A2TUI", "input": None},
+            ],
+        })
+
     async def session_new(self, cwd: str, mcp_servers: list):
         """Create new session."""
         cfg = load_config()
@@ -177,6 +276,8 @@ class CDHACPAdapter:
         session.save()
         self.agent.attach_session(session)
         self.session_id = session.id
+
+        self._send_available_commands()
 
         return {
             "sessionId": self.session_id,
@@ -194,6 +295,7 @@ class CDHACPAdapter:
         loaded = self.agent.load_session(session_id)
         cfg = load_config()
         self.agent.set_agent(cfg.default_mode)
+        self._send_available_commands()
         if not loaded:
             return {"modes": _DEFAULT_MODES}
 
@@ -216,23 +318,33 @@ class CDHACPAdapter:
 
                 for block in blocks:
                     if isinstance(block, TextBlock):
-                        self.send_session_update({
-                            "sessionUpdate": "agent_message_chunk",
-                            "content": {"type": "text", "text": block.content},
-                        })
+                        filtered_text = _filter_tool_call_text(block.content)
+                        if filtered_text.strip():
+                            self.send_session_update({
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": filtered_text},
+                            })
                     elif isinstance(block, ThinkBlock):
-                        self.send_session_update({
-                            "sessionUpdate": "agent_thought_chunk",
-                            "content": {"type": "text", "text": f"```thinking\n{block.content}\n```"},
-                        })
+                        filtered_thought = _filter_tool_call_text(block.content)
+                        if filtered_thought.strip():
+                            self.send_session_update({
+                                "sessionUpdate": "agent_thought_chunk",
+                                "content": {"type": "text", "text": f"```thinking\n{filtered_thought}\n```"},
+                            })
                     elif isinstance(block, MsgToolCall):
                         tool_kind = _TOOL_KIND_MAP.get(block.name, "other")
+                        args_text = json.dumps(block.arguments, indent=2, ensure_ascii=False) if block.arguments else ""
+                        content = [{
+                            "type": "content",
+                            "content": {"type": "text", "text": f"```json\n{args_text}\n```"},
+                        }] if args_text else []
                         self.send_session_update({
                             "sessionUpdate": "tool_call",
                             "toolCallId": block.id,
                             "title": block.name,
                             "kind": tool_kind,
                             "status": block.status.value,
+                            "content": content,
                         })
                     elif isinstance(block, ToolResult):
                         content_block = [{
@@ -242,7 +354,7 @@ class CDHACPAdapter:
                         self.send_session_update({
                             "sessionUpdate": "tool_call_update",
                             "toolCallId": block.tool_use_id,
-                            "status": "failed" if block.is_error else "completed",
+                            "status": "failed" if block.is_error else "complete",
                             "content": content_block,
                         })
                     elif isinstance(block, SubAgentBlock):
@@ -274,6 +386,11 @@ class CDHACPAdapter:
         """
         text_buffer = ""
         in_thinking = False
+
+        TOOL_CALL_TEXT_RE = re.compile(
+            r'\[/?TOOL_CALL\](?:\s*\{.*?tool\s*=>\s*"(?P<name>\w+)".*?args\s*=>\s*\{(?P<args>.+)\}\})?',
+            re.DOTALL,
+        )
 
         def _safe_start(s: str) -> str:
             """Return text before any partial <thinking tag at buffer end."""
@@ -312,6 +429,17 @@ class CDHACPAdapter:
                             })
                         text_buffer = text_buffer[idx + len("<thinking>"):]
                         in_thinking = True
+                    elif (match := TOOL_CALL_TEXT_RE.search(text_buffer)) is not None:
+                        # [TOOL_CALL] text found — discard it (tool info
+                        # arrives via TOOL_CALL_START/COMPLETE events)
+                        before = text_buffer[:match.start()]
+                        after = text_buffer[match.end():]
+                        if before.strip():
+                            self.send_session_update({
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": before},
+                            })
+                        text_buffer = after
                     else:
                         safe = _safe_start(text_buffer)
                         if safe:
@@ -374,26 +502,42 @@ class CDHACPAdapter:
                 self.send_session_update(self.tool_calls[event.tool_id])
             elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
                 if event.tool_id in self.tool_calls:
-                    # Show input args but keep status as in_progress so
-                    # frontend doesn't clear agent_thought/agent_response streams
-                    args_text = json.dumps(event.tool_args, indent=2, ensure_ascii=False) if event.tool_args else ""
-                    content = [{
-                        "type": "content",
-                        "content": {"type": "text", "text": args_text},
-                    }] if args_text else []
+                    # Show input args — use "pending" so that the frontend
+                    # doesn't count it as complete yet or clear streams.
+                    # Wrap JSON in ```json fence so TUI's MarkdownContent
+                    # renders it (else it falls through to TextContent).
+                    if event.tool_args:
+                        args_text = json.dumps(event.tool_args, indent=2, ensure_ascii=False)
+                        content = [{
+                            "type": "content",
+                            "content": {"type": "text", "text": f"```json\n{args_text}\n```"},
+                        }]
+                    else:
+                        content = []
                     self.tool_calls[event.tool_id].update({
                         "sessionUpdate": "tool_call_update",
                         "toolCallId": event.tool_id,
-                        "status": "in_progress",
+                        "status": "pending",
                         "content": content,
                     })
                     self.send_session_update(self.tool_calls[event.tool_id])
             elif event.type == StreamEventType.TOOL_RESULT:
-                status = "failed" if event.result_is_error else "completed"
+                status = "failed" if event.result_is_error else "complete"
+                result_text = event.result_content or ""
+                # Wrap multi-line results in a fenced code block so the TUI
+                # renders them as a code block (MarkdownContent) rather than
+                # raw text. Skip if it already contains markdown markers.
+                if result_text and "\n" in result_text:
+                    has_markdown = (
+                        "```" in result_text
+                        or re.search(r"^#{1,6}\s.*$", result_text, re.MULTILINE) is not None
+                    )
+                    if not has_markdown:
+                        result_text = f"```\n{result_text}\n```"
                 content_block = [{
                     "type": "content",
-                    "content": {"type": "text", "text": event.result_content},
-                }] if event.result_content else []
+                    "content": {"type": "text", "text": result_text},
+                }] if result_text else []
                 update = {
                     "sessionUpdate": "tool_call_update",
                     "toolCallId": event.tool_id,
@@ -419,10 +563,39 @@ class CDHACPAdapter:
                 })
                 self.agent.save_session()
                 return {"stopReason": "error", "message": event.error_message}
+            elif event.type == StreamEventType.SUBAGENT_START:
+                self.send_session_update({
+                    "sessionUpdate": "subagent_start",
+                    "subagentId": event.subagent_id,
+                    "agentType": event.subagent_type,
+                })
+            elif event.type == StreamEventType.SUBAGENT_CHUNK:
+                self.send_session_update({
+                    "sessionUpdate": "subagent_chunk",
+                    "subagentId": event.subagent_id,
+                    "text": event.subagent_text,
+                })
+            elif event.type == StreamEventType.SUBAGENT_END:
+                self.send_session_update({
+                    "sessionUpdate": "subagent_end",
+                    "subagentId": event.subagent_id,
+                    "agentType": event.subagent_type,
+                })
             elif event.type == StreamEventType.PLAN:
                 self.send_session_update({
                     "sessionUpdate": "plan",
                     "entries": event.plan_entries,
+                })
+            elif event.type == StreamEventType.ASK_USER:
+                # Auto-approve tool permission requests in ACP mode.
+                # The agent's permission config (ASK/DENY) is already enforced
+                # by the engine; this event is a side-effect for direct-UI mode.
+                self.send_session_update({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {
+                        "type": "text",
+                        "text": f"⚡ Auto-approved: {event.ask_action} — {event.ask_question}",
+                    },
                 })
 
         self.agent.save_session()
@@ -443,7 +616,27 @@ class CDHACPAdapter:
                 "sessionUpdate": "current_mode_update",
                 "currentModeId": mode_id,
             })
+            self._send_available_commands()
         return {"modeId": mode_id}
+
+    # ── Terminal RPC stubs ──────────────────────────────────────────
+    async def terminal_create(
+        self, session_id: str, terminal_id: str, command: str, args: list[str] | None = None,
+        cwd: str | None = None, env: dict | None = None, output_byte_limit: int | None = None,
+    ) -> dict:
+        return {"terminalId": terminal_id}
+
+    async def terminal_kill(self, session_id: str, terminal_id: str) -> dict:
+        return {}
+
+    async def terminal_output(self, session_id: str, terminal_id: str) -> dict:
+        return {"output": "", "truncated": False, "exitStatus": None}
+
+    async def terminal_release(self, session_id: str, terminal_id: str) -> dict:
+        return {}
+
+    async def terminal_wait_for_exit(self, session_id: str, terminal_id: str) -> dict:
+        return {"exitCode": 0, "signal": None}
 
 
 class JSONRPCServer:
@@ -456,6 +649,11 @@ class JSONRPCServer:
             "session/prompt": self._handle_session_prompt,
             "session/cancel": self._handle_session_cancel,
             "session/set_mode": self._handle_session_set_mode,
+            "terminal/create": self._handle_terminal_create,
+            "terminal/kill": self._handle_terminal_kill,
+            "terminal/output": self._handle_terminal_output,
+            "terminal/release": self._handle_terminal_release,
+            "terminal/wait_for_exit": self._handle_terminal_wait_for_exit,
         }
 
     async def handle_request(self, request: dict):
@@ -510,6 +708,41 @@ class JSONRPCServer:
         return await self.adapter.session_set_mode(
             params.get("sessionId"),
             params.get("modeId"),
+        )
+
+    async def _handle_terminal_create(self, params: dict):
+        return await self.adapter.terminal_create(
+            params.get("sessionId"),
+            params.get("terminalId"),
+            params.get("command"),
+            params.get("args"),
+            params.get("cwd"),
+            params.get("env"),
+            params.get("outputByteLimit"),
+        )
+
+    async def _handle_terminal_kill(self, params: dict):
+        return await self.adapter.terminal_kill(
+            params.get("sessionId"),
+            params.get("terminalId"),
+        )
+
+    async def _handle_terminal_output(self, params: dict):
+        return await self.adapter.terminal_output(
+            params.get("sessionId"),
+            params.get("terminalId"),
+        )
+
+    async def _handle_terminal_release(self, params: dict):
+        return await self.adapter.terminal_release(
+            params.get("sessionId"),
+            params.get("terminalId"),
+        )
+
+    async def _handle_terminal_wait_for_exit(self, params: dict):
+        return await self.adapter.terminal_wait_for_exit(
+            params.get("sessionId"),
+            params.get("terminalId"),
         )
 
 
