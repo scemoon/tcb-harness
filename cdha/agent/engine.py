@@ -261,6 +261,10 @@ class AgentEngine:
         # Event callbacks
         self.on_event: ToolEventHandler | None = None
         self.on_text_chunk: Callable[[str], None] | None = None
+        self._streaming_used: bool = False
+
+        # Cancellation support
+        self._cancelled: bool = False
 
     def _build_tool_registry(self) -> ToolRegistry:
         from cdha.agent.tools.registry import ToolRegistry
@@ -638,6 +642,10 @@ class AgentEngine:
         except (TypeError, ValueError):
             return str(output)
 
+    async def cancel(self):
+        """Cancel the current chat_stream turn."""
+        self._cancelled = True
+
     async def chat_stream(self, user_input: str) -> AsyncIterator[StreamEvent | str]:
         self._load_skills()
         logger.info(f"chat_stream() called with user_input='{user_input[:100]}...'")
@@ -688,10 +696,17 @@ class AgentEngine:
         # Reset per-turn usage tracking
         self._turn_usages = []
 
+        # Reset cancellation flag (adapter also resets it before calling)
+        self._cancelled = False
+
         # ── Agent loop (Clawd-Code style) ──
         is_anthropic = provider.is_anthropic_style()
         max_turns = self.current_agent.max_turns or 10
         for turn in range(max_turns):
+            if self._cancelled:
+                yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
+                return
+
             if self.context.should_compact():
                 self.context.compact()
 
@@ -702,10 +717,19 @@ class AgentEngine:
             try:
                 context_messages = self.context.get_context()
                 logger.info(f"Calling provider.chat_stream_response (turn {turn+1})")
+                self._streaming_used = False
+                if self.on_text_chunk is not None:
+                    _original_cb = self.on_text_chunk
+                    def _stream_wrapper(text: str) -> None:
+                        self._streaming_used = True
+                        _original_cb(text)
+                    stream_cb = _stream_wrapper
+                else:
+                    stream_cb = None
                 chat_response = await provider.chat_stream_response(
                     context_messages,
                     model=model_name,
-                    on_text_chunk=None,
+                    on_text_chunk=stream_cb,
                 )
                 response_text = chat_response.content
                 tool_uses = chat_response.tool_uses
@@ -750,8 +774,9 @@ class AgentEngine:
                 thinking_blocks.append(match.group(1))
             if thinking_blocks:
                 clean_text = THINKING_RE.sub('', response_text).strip()
-                for tb in thinking_blocks:
-                    yield StreamEvent.text_delta(f"\n```thinking\n{tb}\n```\n")
+                if not self._streaming_used:
+                    for tb in thinking_blocks:
+                        yield StreamEvent.text_delta(f"\n```thinking\n{tb}\n```\n")
 
             # Add assistant response to context with proper content blocks
             if tool_uses:
@@ -770,11 +795,12 @@ class AgentEngine:
             self.iterations += 1
 
             if not tool_uses:
-                if clean_text.strip():
-                    for i in range(0, len(clean_text), 12):
-                        yield StreamEvent.text_delta(clean_text[i:i + 12])
-                elif self._last_user_msg:
-                    yield StreamEvent.text_delta(self._last_user_msg)
+                if not self._streaming_used:
+                    if clean_text.strip():
+                        for i in range(0, len(clean_text), 12):
+                            yield StreamEvent.text_delta(clean_text[i:i + 12])
+                    elif self._last_user_msg:
+                        yield StreamEvent.text_delta(self._last_user_msg)
                 break
 
             # Emit ToolEvents (Clawd-Code pattern) and StreamEvents for TUI
@@ -872,6 +898,10 @@ class AgentEngine:
                     if tu["name"] in ("TaskCreate", "TaskUpdate", "TaskStop", "TodoCreate", "TodoComplete", "TodoList"):
                         for event in self._emit_plan_update():
                             yield event
+
+            if self._cancelled:
+                yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
+                return
 
         usage_summary = ", ".join(
             f"turn {i+1}: {u.get('total_tokens', '?')} tokens"

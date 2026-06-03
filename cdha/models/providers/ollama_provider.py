@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import AsyncIterator
+import json
+from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
-from cdha.models.provider import Message, ModelResponse, Provider, ProviderRegistry
+from cdha.models.provider import ChatResponse, Message, ModelResponse, Provider, ProviderRegistry
 
 
 class OllamaProvider(Provider):
@@ -56,6 +57,39 @@ class OllamaProvider(Provider):
                         yield chunk.get("message", {}).get("content", "")
                         if chunk.get("done"):
                             break
+
+    async def chat_stream_response(
+        self,
+        messages: list[Message],
+        model: str,
+        on_text_chunk: Optional[Callable[[str], None]] = None,
+        **kwargs,
+    ) -> ChatResponse:
+        content_parts: list[str] = []
+        try:
+            async with httpx.AsyncClient(timeout=300) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.endpoint}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": self.prepare_messages(messages),
+                        "stream": True,
+                    },
+                ) as resp:
+                    async for line in resp.aiter_lines():
+                        if line.strip():
+                            chunk = json.loads(line)
+                            text = chunk.get("message", {}).get("content", "")
+                            if text:
+                                content_parts.append(text)
+                                if on_text_chunk:
+                                    on_text_chunk(text)
+                            if chunk.get("done"):
+                                break
+        except Exception as e:
+            return ChatResponse(content=f"Error: {e}")
+        return ChatResponse(content="".join(content_parts))
 
 
 ProviderRegistry.register("ollama", OllamaProvider)

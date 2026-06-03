@@ -667,7 +667,7 @@ class Prompt(containers.VerticalGroup):
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         text = event.text_area.text
 
-        self.multi_line = "\n" in text or "```" in text
+        self.multi_line = "```" in text
 
         if not self.multi_line and self.likely_shell:
             self.shell_mode = True

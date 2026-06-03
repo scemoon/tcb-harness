@@ -5,11 +5,11 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
-from cdha.models.provider import Message, ModelResponse, Provider, ProviderRegistry
+from cdha.models.provider import ChatResponse, Message, ModelResponse, Provider, ProviderRegistry
 
 logger = logging.getLogger("cdha.provider.minimaxi")
 
@@ -104,6 +104,75 @@ class MiniMaxiProvider(Provider):
             logger.exception(f"[{req_id}] {error_msg}")
             _log_request(model, messages, error=error_msg)
             return ModelResponse(content=[{"type": "text", "text": f"Error: {e}"}], model=model)
+
+    async def chat_stream_response(
+        self,
+        messages: list[Message],
+        model: str,
+        on_text_chunk: Optional[Callable[[str], None]] = None,
+        **kwargs,
+    ) -> ChatResponse:
+        self._request_count += 1
+        req_id = f"req_{self._request_count}_{int(time.time())}"
+        logger.info(f"[{req_id}] chat_stream_response() called with model={model}, messages={len(messages)}")
+
+        key = self.resolve_api_key(self.api_key)
+        if not key:
+            return ChatResponse(content="API key not configured.")
+
+        start_time = time.time()
+        content_parts: list[str] = []
+
+        try:
+            async with httpx.AsyncClient(timeout=300) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self._endpoint}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": self.prepare_messages(messages),
+                        "stream": True,
+                        **kwargs,
+                    },
+                ) as resp:
+                    if resp.status_code != 200:
+                        error_body = await resp.aread()
+                        error_text = error_body.decode("utf-8", errors="replace")
+                        logger.error(f"[{req_id}] Stream error HTTP {resp.status_code}: {error_text[:500]}")
+                        return ChatResponse(content=f"API Error {resp.status_code}: {error_text[:200]}")
+
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: ") and line[6:] != "[DONE]":
+                            try:
+                                chunk = json.loads(line[6:])
+                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    content_parts.append(content)
+                                    if on_text_chunk:
+                                        on_text_chunk(content)
+                            except json.JSONDecodeError:
+                                continue
+                        elif line.startswith("data: [DONE]"):
+                            pass
+
+            elapsed = time.time() - start_time
+            logger.info(f"[{req_id}] Stream complete, elapsed: {elapsed:.2f}s, chars: {sum(len(p) for p in content_parts)}")
+        except httpx.ConnectError as e:
+            error_msg = f"Connection error: {e}"
+            logger.error(f"[{req_id}] {error_msg}")
+            return ChatResponse(content=error_msg)
+        except Exception as e:
+            error_msg = f"Error: {e}"
+            logger.exception(f"[{req_id}] {error_msg}")
+            return ChatResponse(content=error_msg)
+
+        _log_request(model, messages, response_data={"stream": True})
+        return ChatResponse(content="".join(content_parts))
 
     async def chat_stream(
         self, messages: list[Message], model: str = "MiniMax-M2.7", **kwargs

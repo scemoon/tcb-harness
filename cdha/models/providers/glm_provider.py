@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import AsyncIterator
+import json
+from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
-from cdha.models.provider import Message, ModelResponse, Provider, ProviderRegistry
+from cdha.models.provider import ChatResponse, Message, ModelResponse, Provider, ProviderRegistry
 
 
 class GLMProvider(Provider):
@@ -76,6 +77,46 @@ class GLMProvider(Provider):
                         chunk = json.loads(line[6:])
                         delta = chunk.get("choices", [{}])[0].get("delta", {})
                         yield delta.get("content", "")
+
+    async def chat_stream_response(
+        self,
+        messages: list[Message],
+        model: str,
+        on_text_chunk: Optional[Callable[[str], None]] = None,
+        **kwargs,
+    ) -> ChatResponse:
+        key = self.resolve_api_key(self.api_key)
+        if not key:
+            return ChatResponse(content="API key not configured.")
+        content_parts: list[str] = []
+        try:
+            async with httpx.AsyncClient(timeout=300) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self._endpoint}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {key}",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": self.prepare_messages(messages),
+                        "stream": True,
+                        **kwargs,
+                    },
+                ) as resp:
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: ") and line[6:] != "[DONE]":
+                            chunk = json.loads(line[6:])
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            text = delta.get("content", "")
+                            if text:
+                                content_parts.append(text)
+                                if on_text_chunk:
+                                    on_text_chunk(text)
+        except Exception as e:
+            return ChatResponse(content=f"Error: {e}")
+        return ChatResponse(content="".join(content_parts))
 
 
 ProviderRegistry.register("glm", GLMProvider)
