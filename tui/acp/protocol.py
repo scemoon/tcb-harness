@@ -389,16 +389,7 @@ class LoadSessionResponse(SchemaDict, total=False, extra_items=Any):
     modes: SessionModeState | None
 
 
-class Usage(TypedDict, total=False, extra_items=Any):
-    total_tokens: Required[int]
-    input_tokens: Required[int]
-    output_tokens: Required[int]
-    thought_tokens: int
-    cached_read_tokens: int
-    cached_write_tokens: int
-
-
-class SessionPromptResponse(SchemaDict, total=False, extra_items=Any):
+class SessionPromptResponse(SchemaDict, total=False, extra_items=object):
     sessionId: Required[str]
     stopReason: Required[
         Literal[
@@ -455,3 +446,13 @@ class SetSessionModeResponse(TypedDict, total=False, extra_items=Any):
 
 
 # ---------------------------------------------------------------------------------------
+
+
+# https://agentclientprotocol.com/rfds/session-usage#usage-fields
+class Usage(TypedDict, total=False, extra_items=Any):
+    total_tokens: Required[int]
+    input_tokens: Required[int]
+    output_tokens: Required[int]
+    thought_tokens: int
+    cached_read_tokens: int
+    cached_write_tokens: int
