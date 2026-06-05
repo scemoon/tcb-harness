@@ -119,7 +119,11 @@ class ToolRegistry:
                 )
 
             # 3. Tool-level permissions check (Clawd-Code pattern)
-            perm_result = tool.check_permissions(call.input, permission_context or ToolPermissionContext())
+            perm_check = getattr(tool, "check_permissions", None)
+            if perm_check is None:
+                perm_result = PermissionResult.ALLOW
+            else:
+                perm_result = perm_check(call.input, permission_context or ToolPermissionContext())
             if perm_result == PermissionResult.DENY:
                 return ToolResult(
                     name=call.name,

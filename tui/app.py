@@ -273,6 +273,7 @@ class A2TUIApp(App, inherit_bindings=False):
             "Settings",
             tooltip="Settings screen",
         ),
+        Binding("f4", "logs", "Logs"),
     ]
     ALLOW_IN_MAXIMIZED_VIEW = ""
 
@@ -864,6 +865,16 @@ class A2TUIApp(App, inherit_bindings=False):
     async def action_settings(self) -> None:
         await self.push_screen_wait("settings")
         await self.save_settings()
+
+    def action_logs(self) -> None:
+        """Toggle the real-time log screen (F4)."""
+        from tui.screens.log import LogScreen
+        # Re-focus the existing one if it's already on the stack
+        for screen in self.screen_stack:
+            if isinstance(screen, LogScreen):
+                screen.dismiss()
+                return
+        self.push_screen(LogScreen())
 
     def action_quit(self) -> None:
         """An [action](/guide/actions) to quit the app as soon as possible."""

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from asyncio import Future
+
+logger = logging.getLogger("tui.conversation")
 import asyncio
 
 from contextlib import suppress
@@ -1048,6 +1051,12 @@ class Conversation(containers.Vertical):
         tool_call = message.tool_call
         status = tool_call.get("status", "")
         tool_id = message.tool_id
+        content = tool_call.get("content", None) or []
+
+        logger.debug(
+            "on_acp_tool_call_update: type=%s id=%s status=%s content_blocks=%d",
+            type(message).__name__, tool_id, status, len(content),
+        )
 
         if isinstance(message, acp_messages.ToolCall):
             if self._msg_log is not None:
@@ -1061,6 +1070,13 @@ class Conversation(containers.Vertical):
 
         if status in ("completed", "failed") and tool_id not in self._tool_call_finalized:
             self._tool_call_finalized.add(tool_id)
+            if self._msg_log is not None:
+                self._msg_log.tool_result(
+                    tool_call.get("title", "unknown"),
+                    tool_call.get("toolCallId", ""),
+                    self._turn_count,
+                    status=status,
+                )
             if status == "completed":
                 self._tool_call_success += 1
             else:
@@ -1075,7 +1091,12 @@ class Conversation(containers.Vertical):
                 tool_id, ToolCall
             )
         except NoMatches:
-            await self.post(ToolCall(tool_call, id=message.tool_id), new_block=True)
+            widget = await self.post(ToolCall(tool_call, id=message.tool_id), new_block=True)
+            await widget.update_tool_call(tool_call)
+            logger.debug(
+                "  => created new ToolCall widget, mounted %d content blocks",
+                len(content),
+            )
         else:
             if existing_tool_call is not None:
                 await existing_tool_call.update_tool_call(tool_call)
@@ -1346,7 +1367,7 @@ class Conversation(containers.Vertical):
                 result_future.set_result(result)
                 return
 
-        from tui.widgets.acp_content import ACPToolCallContent
+        from tui.widgets.acp_content import ACPToolCallContent, _header_path
 
         def answer_callback(answer: Answer) -> None:
             try:
@@ -1359,9 +1380,15 @@ class Conversation(containers.Vertical):
                 self.post_message(messages.SessionUpdate(state="busy"))
 
         tool_call_content = tool_call_update.get("content", None) or []
+        fname = _header_path(tool_call_content)
+        question_title = f"{title} — {fname}" if fname else title
+        if kind == "edit":
+            question_title = question_title or "Apply changes to file"
+        else:
+            question_title = question_title or f"Execute {kind} operation?"
         self.ask(
             options,
-            title or "",
+            question_title,
             (
                 partial(ACPToolCallContent, tool_call_content)
                 if tool_call_content

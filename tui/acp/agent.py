@@ -1,5 +1,8 @@
 import asyncio
+import logging
 import sys
+
+logger = logging.getLogger("tui.acp.agent")
 
 from contextlib import suppress
 from datetime import datetime
@@ -256,8 +259,13 @@ class Agent(AgentBase):
                 "sessionUpdate": "tool_call",
                 "toolCallId": tool_call_id,
             }:
-                self.tool_calls[tool_call_id] = update
-                self.post_message(messages.ToolCall(update))
+                self.log(
+                    f"session/update: tool_call id={tool_call_id} "
+                    f"title={update.get('title','?')} kind={update.get('kind','?')} "
+                    f"status={update.get('status','?')} content_blocks={len(update.get('content',[]) or [])}"
+                )
+                self.tool_calls[tool_call_id] = deepcopy(update)
+                self.post_message(messages.ToolCall(deepcopy(update)))
 
             case {"sessionUpdate": "plan", "entries": entries}:
                 self.post_message(messages.Plan(entries))
@@ -272,11 +280,20 @@ class Agent(AgentBase):
                         if value is not None:
                             current_tool_call[key] = value
 
+                    self.log(
+                        f"session/update: tool_call_update id={tool_call_id} "
+                        f"status={update.get('status','?')} "
+                        f"content_blocks={len(update.get('content',[]) or [])}"
+                    )
+
                     self.post_message(
                         messages.ToolCallUpdate(deepcopy(current_tool_call), update)
                     )
                 else:
-                    # The agent can send a tool call update, without previously sending the tool call *rolls eyes*
+                    self.log(
+                        f"session/update: tool_call_update ORPHAN id={tool_call_id} "
+                        f"(no prior tool_call, creating widget from update)"
+                    )
                     current_tool_call: protocol.ToolCall = {
                         "sessionUpdate": "tool_call",
                         "toolCallId": tool_call_id,
@@ -287,7 +304,7 @@ class Agent(AgentBase):
                             current_tool_call[key] = value
 
                     self.tool_calls[tool_call_id] = current_tool_call
-                    self.post_message(messages.ToolCall(current_tool_call))
+                    self.post_message(messages.ToolCall(deepcopy(current_tool_call)))
 
             case {
                 "sessionUpdate": "available_commands_update",
@@ -349,9 +366,12 @@ class Agent(AgentBase):
         else:
             self.tool_calls[tool_call_id] = deepcopy(tool_call)
 
-        tool_call = deepcopy(self.tool_calls[tool_call_id])
+        # Forward content to the ToolCall widget so the user can see what
+        # the agent is requesting permission for (e.g. the bash command).
+        merged = deepcopy(self.tool_calls[tool_call_id])
+        self.post_message(messages.ToolCallUpdate(merged, tool_call))
 
-        message = messages.RequestPermission(options, tool_call, result_future)
+        message = messages.RequestPermission(options, merged, result_future)
         self.post_message(message)
         await result_future
         ask_result = result_future.result()

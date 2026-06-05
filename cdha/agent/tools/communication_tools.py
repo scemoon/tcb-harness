@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from cdha.agent.tools.permissions import PermissionResult, ToolPermissionContext
 from cdha.agent.tools.protocol import ToolResult
 from cdha.agent.tools.registry import ToolRegistry, ToolSpec
 
@@ -36,6 +37,13 @@ class SendMessageTool:
         self.last_message = message
         return ToolResult(name="SendMessage", output={"message": message, "attachments": attachments})
 
+    def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        permission_context: ToolPermissionContext,
+    ) -> PermissionResult:
+        return PermissionResult.ALLOW
+
 
 class AskUserTool:
     def spec(self) -> ToolSpec:
@@ -57,6 +65,13 @@ class AskUserTool:
         question = tool_input.get("question", "")
         context = tool_input.get("context", "")
         return ToolResult(name="AskUser", output={"question": question, "context": context})
+
+    def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        permission_context: ToolPermissionContext,
+    ) -> PermissionResult:
+        return PermissionResult.ALLOW
 
 
 class ToolSearchTool:
@@ -87,3 +102,10 @@ class ToolSearchTool:
         if not matches:
             matches = [{"name": s.name, "description": s.description[:80]} for s in specs[:10]]
         return ToolResult(name="ToolSearch", output={"matches": matches[:20]})
+
+    def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        permission_context: ToolPermissionContext,
+    ) -> PermissionResult:
+        return PermissionResult.ALLOW

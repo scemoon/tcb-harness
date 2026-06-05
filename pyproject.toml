@@ -47,5 +47,14 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["cdha*", "cdh*", "tui*"]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
 [dependency-groups]
-dev = ["mypy>=1.19.1", "pyinstrument>=5.1.1", "textual-dev>=1.8.0"]
+dev = [
+    "mypy>=1.19.1",
+    "pyinstrument>=5.1.1",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+    "textual-dev>=1.8.0",
+]

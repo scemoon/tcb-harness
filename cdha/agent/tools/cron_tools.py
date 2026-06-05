@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
+from cdha.agent.tools.permissions import PermissionResult, ToolPermissionContext
 from cdha.agent.tools.protocol import ToolResult
 from cdha.agent.tools.registry import ToolSpec
 
@@ -129,6 +130,13 @@ class CronCreateTool:
         )
         return ToolResult(name="CronCreate", output={"name": name, "status": "created"})
 
+    def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        permission_context: ToolPermissionContext,
+    ) -> PermissionResult:
+        return PermissionResult.ALLOW
+
 
 class CronListTool:
     """List all cron jobs."""
@@ -148,6 +156,13 @@ class CronListTool:
 
     def run(self, tool_input: dict[str, Any]) -> ToolResult:
         return ToolResult(name="CronList", output={"jobs": self._scheduler.list()})
+
+    def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        permission_context: ToolPermissionContext,
+    ) -> PermissionResult:
+        return PermissionResult.ALLOW
 
 
 class CronRemoveTool:
@@ -174,3 +189,10 @@ class CronRemoveTool:
         if self._scheduler.remove(name):
             return ToolResult(name="CronRemove", output={"name": name, "status": "removed"})
         return ToolResult(name="CronRemove", output={"error": f"job '{name}' not found"}, is_error=True)
+
+    def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        permission_context: ToolPermissionContext,
+    ) -> PermissionResult:
+        return PermissionResult.ALLOW

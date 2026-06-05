@@ -44,6 +44,98 @@ THINKING_RE = re.compile(
     re.DOTALL,
 )
 
+_LEGACY_OPEN = "[TOOL_CALL]"
+_LEGACY_CLOSE = "[/TOOL_CALL]"
+
+
+def _scan_balanced_braces(text: str, open_pos: int) -> int | None:
+    if open_pos < 0 or open_pos >= len(text) or text[open_pos] != "{":
+        return None
+    depth = 0
+    i = open_pos
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "{":
+            depth += 1
+            i += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+            i += 1
+        elif c in ('"', "'"):
+            quote = c
+            i += 1
+            while i < n and text[i] != quote:
+                if text[i] == "\\" and i + 1 < n:
+                    i += 2
+                else:
+                    i += 1
+            i += 1
+        elif c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+        else:
+            i += 1
+    return None
+
+
+def _parse_legacy_tool_body(body: str) -> dict:
+    body = body.strip()
+    if not body or not body.startswith("{"):
+        return {"name": None, "arguments": {}}
+    body_close = _scan_balanced_braces(body, 0)
+    if body_close is None:
+        return {"name": None, "arguments": {}}
+    inner = body[1:body_close]
+    name_match = re.search(r'tool\s*=>\s*"([^"]+)"', inner)
+    name = name_match.group(1) if name_match else None
+    arguments: dict = {}
+    args_match = re.search(r'args\s*=>\s*\{', inner)
+    if args_match:
+        args_outer = _scan_balanced_braces(inner, args_match.end() - 1)
+        if args_outer is not None:
+            args_body = inner[args_match.end():args_outer]
+            for am in re.finditer(
+                r'--(\w+)\s+"((?:[^"\\]|\\.)*)"', args_body, re.DOTALL
+            ):
+                arguments[am.group(1)] = am.group(2)
+    return {"name": name, "arguments": arguments}
+
+
+def _extract_legacy_tool_uses(text: str) -> tuple[list[dict], str]:
+    """Extract all [TOOL_CALL]...[/TOOL_CALL] blocks from text.
+
+    Returns (tool_uses, cleaned_text) where tool_uses has
+    [{id, name, input}, ...] and cleaned_text has all markers removed.
+    """
+    tool_uses: list[dict] = []
+    cleaned = text
+    tool_id_counter = 0
+    while True:
+        open_idx = cleaned.find(_LEGACY_OPEN)
+        if open_idx < 0:
+            break
+        body_start = open_idx + len(_LEGACY_OPEN)
+        close_idx = cleaned.find(_LEGACY_CLOSE, body_start)
+        if close_idx < 0:
+            # Unclosed marker — stop looking
+            break
+        body = cleaned[body_start:close_idx]
+        span_end = close_idx + len(_LEGACY_CLOSE)
+        parsed = _parse_legacy_tool_body(body)
+        name = parsed.get("name")
+        if name:
+            tool_id_counter += 1
+            tool_uses.append({
+                "id": f"legacy-{tool_id_counter}",
+                "name": name,
+                "input": parsed.get("arguments", {}),
+            })
+        cleaned = cleaned[:open_idx] + cleaned[span_end:]
+    return tool_uses, cleaned
+
 
 _TASK_STATUSES = {"pending", "in_progress", "completed"}
 
@@ -733,6 +825,14 @@ class AgentEngine:
                 )
                 response_text = chat_response.content
                 tool_uses = chat_response.tool_uses
+                if not tool_uses and _LEGACY_OPEN in response_text:
+                    parsed_uses, response_text = _extract_legacy_tool_uses(response_text)
+                    if parsed_uses:
+                        tool_uses = parsed_uses
+                        logger.info(
+                            "Extracted %d legacy [TOOL_CALL] tool uses from response text",
+                            len(tool_uses),
+                        )
                 if chat_response.usage:
                     turn_usage = chat_response.usage
             except NotImplementedError:
@@ -751,6 +851,14 @@ class AgentEngine:
                         if cb.type == ContentBlockType.TOOL_USE and cb.tool_use
                         for tu in [cb.tool_use]
                     ]
+                    if not tool_uses and _LEGACY_OPEN in response_text:
+                        parsed_uses, response_text = _extract_legacy_tool_uses(response_text)
+                        if parsed_uses:
+                            tool_uses = parsed_uses
+                            logger.info(
+                                "Extracted %d legacy [TOOL_CALL] tool uses from chat() fallback",
+                                len(tool_uses),
+                            )
                     if model_response.usage:
                         turn_usage = model_response.usage
                 except Exception as e:

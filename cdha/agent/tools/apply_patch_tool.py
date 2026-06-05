@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from cdha.agent.tools.file_ops import FileOps
+from cdha.agent.tools.permissions import PermissionResult, ToolPermissionContext
 from cdha.agent.tools.protocol import ToolResult
 from cdha.agent.tools.registry import ToolSpec
 
@@ -141,3 +142,10 @@ class ApplyPatchTool:
             return {"success": True, "operation": "delete", "path": path}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        permission_context: ToolPermissionContext,
+    ) -> PermissionResult:
+        return PermissionResult.ALLOW

@@ -4,12 +4,18 @@
 This adapter runs as a subprocess and translates JSONRPC calls from A2TUI
 into CDH AgentEngine calls.
 """
+from __future__ import annotations
 
 import asyncio
 import json
 import re
 import sys
 from pathlib import Path
+
+
+def debug_log(*args, **kwargs):
+    """Debug log to stderr (safe for JSON-RPC on stdout)."""
+    print("[cdha]", *args, file=sys.stderr, flush=True)
 
 from cdha.agent.engine import AgentEngine
 from cdha.agent.session import AgentSession
@@ -62,25 +68,265 @@ _DEFAULT_MODES = {
     ],
 }
 
-TOOL_CALL_TEXT_RE = re.compile(
-    r'\[/?TOOL_CALL\](?:\s*\{.*?tool\s*=>\s*"(?P<name>\w+)".*?args\s*=>\s*\{(?P<args>.+)\}\})?',
+_OPEN_MARKER = "[TOOL_CALL]"
+_CLOSE_MARKER = "[/TOOL_CALL]"
+
+
+def _scan_balanced_braces(text: str, open_pos: int) -> int | None:
+    """Return position of the matching '}' for the '{' at open_pos.
+
+    Handles nested braces, single/double-quoted strings, and
+    single-line comments. Returns None if no matching brace is found.
+    """
+    if open_pos < 0 or open_pos >= len(text) or text[open_pos] != "{":
+        return None
+    depth = 0
+    i = open_pos
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "{":
+            depth += 1
+            i += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+            i += 1
+        elif c == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                if text[i] == "\\" and i + 1 < n:
+                    i += 2
+                else:
+                    i += 1
+            i += 1
+        elif c == "'":
+            i += 1
+            while i < n and text[i] != "'":
+                if text[i] == "\\" and i + 1 < n:
+                    i += 2
+                else:
+                    i += 1
+            i += 1
+        elif c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+        else:
+            i += 1
+    return None
+
+
+def _parse_tool_call_body(body: str) -> dict:
+    """Parse the body of a [TOOL_CALL]...[/TOOL_CALL] block.
+
+    Returns a dict with 'name' (str | None) and 'arguments' (dict).
+    """
+    body = body.strip()
+    if not body or not body.startswith("{"):
+        return {"name": None, "arguments": {}}
+
+    body_close = _scan_balanced_braces(body, 0)
+    if body_close is None:
+        return {"name": None, "arguments": {}}
+    inner = body[1:body_close]
+
+    name_match = re.search(r'tool\s*=>\s*"([^"]+)"', inner)
+    name = name_match.group(1) if name_match else None
+
+    arguments: dict = {}
+    args_match = re.search(r'args\s*=>\s*\{', inner)
+    if args_match:
+        args_outer = _scan_balanced_braces(inner, args_match.end() - 1)
+        if args_outer is not None:
+            args_body = inner[args_match.end():args_outer]
+            for am in re.finditer(
+                r'--(\w+)\s+"((?:[^"\\]|\\.)*)"', args_body, re.DOTALL
+            ):
+                arguments[am.group(1)] = am.group(2)
+
+    return {"name": name, "arguments": arguments}
+
+
+def _extract_legacy_tool_call(text: str) -> dict | None:
+    """Parse a complete [TOOL_CALL]...[/TOOL_CALL] block from text.
+
+    Returns a dict with:
+        - name: tool name
+        - arguments: dict of argument name -> value
+        - span: (start, end) of the full [TOOL_CALL]...[/TOOL_CALL]
+    Returns None if no complete block is found.
+    """
+    open_idx = text.find(_OPEN_MARKER)
+    if open_idx < 0:
+        return None
+    body_start = open_idx + len(_OPEN_MARKER)
+    close_idx = text.find(_CLOSE_MARKER, body_start)
+    if close_idx < 0:
+        return None
+    body = text[body_start:close_idx]
+    span_end = close_idx + len(_CLOSE_MARKER)
+
+    parsed = _parse_tool_call_body(body)
+    parsed["span"] = (open_idx, span_end)
+    return parsed
+
+
+_LANG_BY_EXT: dict[str, str] = {
+    ".py": "python", ".js": "javascript", ".ts": "typescript",
+    ".jsx": "jsx", ".tsx": "tsx", ".json": "json", ".yml": "yaml",
+    ".yaml": "yaml", ".toml": "toml", ".md": "markdown", ".sh": "bash",
+    ".html": "html", ".css": "css", ".rs": "rust", ".go": "go",
+    ".java": "java", ".kt": "kotlin", ".swift": "swift", ".rb": "ruby",
+    ".c": "c", ".h": "c", ".cpp": "cpp", ".hpp": "cpp", ".sql": "sql",
+}
+
+
+def _language_for_path(path: str) -> str:
+    """Return a Markdown code-fence language hint based on file extension."""
+    if not path:
+        return ""
+    dot = path.rfind(".")
+    slash = max(path.rfind("/"), path.rfind("\\"))
+    if dot > slash and dot >= 0:
+        return _LANG_BY_EXT.get(path[dot:].lower(), "")
+    return ""
+
+
+def _try_pretty_print_json(text: str) -> str:
+    """If *text* looks like JSON, pretty-print it; otherwise return as-is.
+
+    Handles both raw JSON and JSON that was embedded as a string inside
+    another JSON value (i.e. with ``\\n``, ``\\"`` etc. as literal escapes).
+    """
+    stripped = text.strip()
+    if not (stripped.startswith("{") or stripped.startswith("[")):
+        return text
+
+    # Direct parse
+    try:
+        obj = json.loads(stripped)
+        return json.dumps(obj, indent=2, ensure_ascii=False)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # The text may contain literal escape sequences (e.g. ``\n``, ``\"``)
+    # from being nested inside another JSON string.  Unescape and retry.
+    try:
+        unescaped = stripped.encode("utf-8").decode("unicode_escape")
+        obj = json.loads(unescaped)
+        return json.dumps(obj, indent=2, ensure_ascii=False)
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        return text
+
+
+def _build_tool_call_content(name: str | None, arguments: dict) -> list:
+    """Convert a tool's args into the ACP content blocks the TUI expects.
+
+    The TUI has dedicated widgets for `diff` (DiffView) and structured text
+    (Markdown / Static). JSON-fence fallbacks only kick in for tools we
+    don't recognise, so known tools render as their intended visual.
+
+    Write emits a Markdown block (`path` header + code fence) so the
+    content reads as code rather than a noisy all-additions diff.
+    Edit keeps the diff block because there are real before/after changes.
+    """
+    if not arguments:
+        return []
+
+    if name == "Write":
+        path = str(arguments.get("path", ""))
+        content = str(arguments.get("content", ""))
+        if path:
+            lang = _language_for_path(path)
+            return [{
+                "type": "content",
+                "content": {
+                    "type": "text",
+                    "text": f"📄 {path}\n```{lang}\n{content}\n```",
+                },
+            }]
+
+    if name == "Edit":
+        path = str(arguments.get("path", ""))
+        old = str(arguments.get("old_string", arguments.get("oldText", "")))
+        new = str(arguments.get("new_string", arguments.get("newText", "")))
+        if path:
+            return [{
+                "type": "diff",
+                "path": path,
+                "oldText": old,
+                "newText": new,
+            }]
+
+    if name == "Bash":
+        cmd = str(arguments.get("command", arguments.get("cmd", "")))
+        if cmd:
+            return [{
+                "type": "content",
+                "content": {
+                    "type": "text",
+                    "text": f"```bash\n$ {cmd}\n```",
+                },
+            }]
+
+    if name == "Read":
+        path = str(arguments.get("path", ""))
+        if path:
+            return [{
+                "type": "content",
+                "content": {"type": "text", "text": f"📄 {path}"},
+            }]
+
+    args_text = json.dumps(arguments, indent=2, ensure_ascii=False)
+    return [{
+        "type": "content",
+        "content": {"type": "text", "text": f"```json\n{args_text}\n```"},
+    }]
+
+
+_BARE_LEGACY_RE = re.compile(
+    r"\{[^{}]*tool\s*=>\s*\"(?P<name>\w+)\"[^{}]*args\s*=>\s*\{",
     re.DOTALL,
 )
 
 
+def _find_bare_legacy_tool_call(text: str) -> int | None:
+    """Find the start of a bare `{tool => "X", args => { ... }}` body.
+
+    Unlike `[TOOL_CALL]...[/TOOL_CALL]`, this pattern has no enclosing
+    markers — we have to scan to the matching `}` ourselves.
+    """
+    m = _BARE_LEGACY_RE.search(text)
+    if m is None:
+        return None
+    # Reject matches that look like the inside of a fenced code block.
+    if "```" in text[: m.start()]:
+        last_fence = text.rfind("```", 0, m.start())
+        if last_fence >= 0 and text.count("```", last_fence, m.start()) == 1:
+            return None
+    return m.start()
+
+
 def _filter_tool_call_text(text: str) -> str:
-    """Remove [TOOL_CALL] {...} patterns from text, return filtered text."""
-    filtered_parts = []
-    last_end = 0
-    for match in TOOL_CALL_TEXT_RE.finditer(text):
-        before = text[last_end:match.start()]
-        if before.strip():
-            filtered_parts.append(before)
-        last_end = match.end()
-    remaining = text[last_end:]
-    if remaining.strip():
-        filtered_parts.append(remaining)
-    return "".join(filtered_parts)
+    """Remove complete [TOOL_CALL]...[/TOOL_CALL] blocks from text.
+
+    Incomplete blocks (no closing marker) are left in place so the caller
+    can hold the buffer and wait for more input.
+    """
+    out: list[str] = []
+    pos = 0
+    while pos < len(text):
+        parsed = _extract_legacy_tool_call(text[pos:])
+        if parsed is None:
+            out.append(text[pos:])
+            break
+        start, end = parsed["span"]
+        before = text[pos:pos + start]
+        if before:
+            out.append(before)
+        pos = pos + end
+    return "".join(out)
 
 
 def _create_engine(cwd: str) -> AgentEngine:
@@ -107,6 +353,8 @@ class CDHACPAdapter:
         self.session_id = None
         self.tool_calls = {}
         self.in_thinking = False
+        self._pending_requests: dict[str, asyncio.Future[dict]] = {}
+        self._request_seq = 0
 
     @staticmethod
     def _content_to_blocks(content: str | list) -> list:
@@ -148,70 +396,60 @@ class CDHACPAdapter:
 
     @staticmethod
     def _text_to_blocks(text: str) -> list:
-        """Convert text containing [TOOL_CALL] patterns to blocks.
+        """Convert text containing legacy [TOOL_CALL] / <thinking> patterns to blocks.
 
         Parses text that may contain:
-        - [TOOL_CALL] {tool => "Name", args => {...}} patterns
+        - [TOOL_CALL] {tool => "Name", args => { ... }} [/TOOL_CALL] patterns
         - <thinking>...</thinking> tags
         Returns a list of TextBlock, ThinkBlock, and MsgToolCall blocks.
         """
-        import re
-
-        TOOL_CALL_RE = re.compile(
-            r'\[/?TOOL_CALL\](?:\s*\{.*?tool\s*=>\s*"(?P<name>\w+)".*?args\s*=>\s*\{(?P<args>[^}]*)\}\})?',
-            re.DOTALL,
-        )
         THINKING_RE = re.compile(r'<thinking>(.*?)</thinking>', re.DOTALL)
 
-        blocks = []
-        remaining_text = text
+        blocks: list = []
+        remaining = text
+        legacy_id = 0
 
-        while remaining_text:
-            tool_match = TOOL_CALL_RE.search(remaining_text)
-            think_match = THINKING_RE.search(remaining_text)
+        while remaining:
+            parsed_tool = _extract_legacy_tool_call(remaining)
+            tool_start = parsed_tool["span"][0] if parsed_tool else -1
+            think_match = THINKING_RE.search(remaining)
 
-            next_match = None
-            match_type = None
-            if tool_match and think_match:
-                next_match = min(tool_match, think_match, key=lambda m: m.start())
-                match_type = "tool" if next_match == tool_match else "think"
-            elif tool_match:
-                next_match = tool_match
-                match_type = "tool"
-            elif think_match:
-                next_match = think_match
-                match_type = "think"
+            candidates: list[tuple[int, str]] = []
+            if parsed_tool is not None:
+                candidates.append((tool_start, "tool"))
+            if think_match is not None:
+                candidates.append((think_match.start(), "think"))
 
-            if next_match is None:
+            if not candidates:
                 break
 
-            before = remaining_text[:next_match.start()]
+            candidates.sort()
+            next_start, match_type = candidates[0]
+
+            before = remaining[:next_start]
             if before.strip():
                 blocks.append(TextBlock(content=before))
 
             if match_type == "tool":
-                tool_name = next_match.group("name")
+                assert parsed_tool is not None
+                tool_name = parsed_tool["name"]
+                span_end = parsed_tool["span"][1]
                 if tool_name:
-                    args_str = next_match.group("args") or ""
-                    args_dict = {}
-                    for arg_match in re.finditer(r'--(\w+)\s+"([^"]*)"', args_str):
-                        args_dict[arg_match.group(1)] = arg_match.group(2)
                     blocks.append(MsgToolCall(
-                        id=f"legacy-{len(blocks)}",
+                        id=f"legacy-{legacy_id}",
                         name=tool_name,
-                        arguments=args_dict,
+                        arguments=parsed_tool["arguments"],
                         status=LifecycleStatus.COMPLETE,
                     ))
-                remaining_text = remaining_text[next_match.end():]
-                continue
-            elif match_type == "think":
-                think_content = next_match.group(1)
-                blocks.append(ThinkBlock(content=think_content))
+                    legacy_id += 1
+                remaining = remaining[span_end:]
+            else:
+                assert think_match is not None
+                blocks.append(ThinkBlock(content=think_match.group(1)))
+                remaining = remaining[think_match.end():]
 
-            remaining_text = remaining_text[next_match.end():]
-
-        if remaining_text.strip():
-            blocks.append(TextBlock(content=remaining_text))
+        if remaining.strip():
+            blocks.append(TextBlock(content=remaining))
 
         return blocks
 
@@ -219,6 +457,24 @@ class CDHACPAdapter:
         """Send a JSONRPC notification to A2TUI."""
         notification = {"jsonrpc": "2.0", "method": method, "params": params}
         print(json.dumps(notification), flush=True)
+
+    def send_request(self, method: str, params: dict) -> asyncio.Future[dict]:
+        """Send a JSONRPC request to A2TUI and return a Future for the response."""
+        self._request_seq += 1
+        req_id = f"svr_{self._request_seq}"
+        future: asyncio.Future[dict] = asyncio.Future()
+        self._pending_requests[req_id] = future
+        request = {"jsonrpc": "2.0", "method": method, "params": params, "id": req_id}
+        print(json.dumps(request), flush=True)
+        return future
+
+    def resolve_pending_request(self, req_id: str, result: dict) -> bool:
+        """Resolve a pending request with the given result. Returns True if found."""
+        future = self._pending_requests.pop(req_id, None)
+        if future is not None and not future.done():
+            future.set_result(result)
+            return True
+        return False
 
     def cancel_prompt(self):
         """Synchronously cancel the current prompt (called from main loop)."""
@@ -231,6 +487,31 @@ class CDHACPAdapter:
             "sessionId": self.session_id,
             "update": update,
         })
+
+    def _emit_tool_result(self, block: ToolResult) -> None:
+        """Send a tool_result as a tool_call_update, accumulating with existing content."""
+        content_block = [{
+            "type": "content",
+            "content": {"type": "text", "text": block.content},
+        }] if block.content else []
+        existing = self.tool_calls.get(block.tool_use_id, {}).get("content", [])
+        update = {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": block.tool_use_id,
+            "status": "failed" if block.is_error else "complete",
+            "content": existing + content_block,
+        }
+        if block.tool_use_id in self.tool_calls:
+            self.tool_calls[block.tool_use_id].update(update)
+        else:
+            self.tool_calls[block.tool_use_id] = {
+                "sessionUpdate": "tool_call",
+                "toolCallId": block.tool_use_id,
+                "title": "Tool call",
+                "kind": "other",
+                **update,
+            }
+        self.send_session_update(self.tool_calls[block.tool_use_id])
 
     async def initialize(self, protocol_version: int, client_capabilities: dict, client_info: dict):
         """Handle ACP initialize."""
@@ -333,30 +614,20 @@ class CDHACPAdapter:
                             })
                     elif isinstance(block, MsgToolCall):
                         tool_kind = _TOOL_KIND_MAP.get(block.name, "other")
-                        args_text = json.dumps(block.arguments, indent=2, ensure_ascii=False) if block.arguments else ""
-                        content = [{
-                            "type": "content",
-                            "content": {"type": "text", "text": f"```json\n{args_text}\n```"},
-                        }] if args_text else []
-                        self.send_session_update({
+                        content = _build_tool_call_content(
+                            block.name, block.arguments or {}
+                        )
+                        self.tool_calls[block.id] = {
                             "sessionUpdate": "tool_call",
                             "toolCallId": block.id,
                             "title": block.name,
                             "kind": tool_kind,
                             "status": block.status.value,
                             "content": content,
-                        })
+                        }
+                        self.send_session_update(self.tool_calls[block.id])
                     elif isinstance(block, ToolResult):
-                        content_block = [{
-                            "type": "content",
-                            "content": {"type": "text", "text": block.content},
-                        }] if block.content else []
-                        self.send_session_update({
-                            "sessionUpdate": "tool_call_update",
-                            "toolCallId": block.tool_use_id,
-                            "status": "failed" if block.is_error else "complete",
-                            "content": content_block,
-                        })
+                        self._emit_tool_result(block)
                     elif isinstance(block, SubAgentBlock):
                         content_block = [{
                             "type": "content",
@@ -370,6 +641,18 @@ class CDHACPAdapter:
                             "status": block.status.value,
                             "content": content_block,
                         })
+            elif role == "tool":
+                # Tool results are stored as separate "tool" role messages
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "tool_result":
+                            tr = ToolResult(
+                                tool_use_id=item.get("tool_use_id", ""),
+                                content=item.get("content", ""),
+                                is_error=item.get("is_error", False),
+                            )
+                            self._emit_tool_result(tr)
 
         return {
             "modes": {
@@ -381,27 +664,43 @@ class CDHACPAdapter:
     def _make_stream_callback(self):
         """Create a thinking-aware streaming callback for real-time token output.
 
-        Buffers text deltas from the provider, detects <thinking>...</thinking>
-        boundaries, and routes content to the appropriate ACP session update type.
+        Buffers text deltas from the provider, detects <thinking>...</thinking>,
+        [TOOL_CALL]...[/TOOL_CALL] and bare `{tool => "X", args => { ... }}`
+        boundaries (all cross-chunk tolerant), strips them from the text
+        buffer so they don't appear as raw agent messages, and routes
+        remaining content to the appropriate ACP session update type.
+
+        Tool call notifications are sent by TOOL_CALL_START/TOOL_CALL_COMPLETE
+        events from the engine, not from text parsing here.
         """
         text_buffer = ""
         in_thinking = False
+        in_tool_call = False
+        in_bare_tool_call = False
+        bare_tool_start = 0
 
-        TOOL_CALL_TEXT_RE = re.compile(
-            r'\[/?TOOL_CALL\](?:\s*\{.*?tool\s*=>\s*"(?P<name>\w+)".*?args\s*=>\s*\{(?P<args>.+)\}\})?',
-            re.DOTALL,
-        )
+        def _emit_message(text: str) -> None:
+            if not text:
+                return
+            self.send_session_update({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": text},
+            })
 
         def _safe_start(s: str) -> str:
-            """Return text before any partial <thinking tag at buffer end."""
-            tag = "<thinking>"
-            for i in range(len(tag) - 1, 0, -1):
-                if s.endswith(tag[:i]):
-                    return s[:-i]
-            return s
+            """Return text before any partial <thinking or [TOOL_CALL] tag at buffer end."""
+            tags = ("<thinking>", "[TOOL_CALL]")
+            cut = len(s)
+            for tag in tags:
+                for i in range(len(tag) - 1, 0, -1):
+                    if s.endswith(tag[:i]):
+                        cut = min(cut, len(s) - i)
+                        break
+            return s[:cut]
 
         def on_chunk(text: str):
-            nonlocal text_buffer, in_thinking
+            nonlocal text_buffer, in_thinking, in_tool_call
+            nonlocal in_bare_tool_call, bare_tool_start
             text_buffer += text
 
             while text_buffer:
@@ -418,39 +717,87 @@ class CDHACPAdapter:
                         in_thinking = False
                     else:
                         break
+                elif in_tool_call:
+                    close_idx = text_buffer.find(_CLOSE_MARKER)
+                    if close_idx < 0:
+                        # No close marker yet — hold the whole buffer.
+                        break
+                    # Strip [TOOL_CALL]...[/TOOL_CALL] from text buffer.
+                    # The engine emits TOOL_CALL_START/COMPLETE separately.
+                    text_buffer = text_buffer[close_idx + len(_CLOSE_MARKER):]
+                    in_tool_call = False
+                elif in_bare_tool_call:
+                    m = _BARE_LEGACY_RE.match(text_buffer, bare_tool_start)
+                    if m is None:
+                        # Pattern got invalidated — discard the held span.
+                        text_buffer = text_buffer[bare_tool_start:]
+                        in_bare_tool_call = False
+                        bare_tool_start = 0
+                        break
+                    args_open = text_buffer.find("{", m.end() - 1)
+                    if args_open < 0:
+                        break
+                    args_close = _scan_balanced_braces(text_buffer, args_open)
+                    if args_close is None:
+                        # Need more chunks to close the inner args.
+                        break
+                    outer_close = _scan_balanced_braces(text_buffer, bare_tool_start)
+                    if outer_close is None or outer_close <= args_close:
+                        break
+                    text_buffer = text_buffer[outer_close + 1:]
+                    in_bare_tool_call = False
+                    bare_tool_start = 0
                 else:
-                    idx = text_buffer.find("<thinking>")
-                    if idx >= 0:
-                        before = text_buffer[:idx]
+                    tc_idx = text_buffer.find(_OPEN_MARKER)
+                    think_idx = text_buffer.find("<thinking>")
+                    bare_idx = _find_bare_legacy_tool_call(text_buffer)
+
+                    if bare_idx is not None and (tc_idx < 0 or bare_idx < tc_idx) and \
+                       (think_idx < 0 or bare_idx < think_idx):
+                        if bare_idx > 0:
+                            _emit_message(text_buffer[:bare_idx])
+                        # Peek: is the bare tool call complete in the buffer?
+                        m = _BARE_LEGACY_RE.match(text_buffer, bare_idx)
+                        args_open = text_buffer.find("{", m.end() - 1)
+                        args_close = (
+                            _scan_balanced_braces(text_buffer, args_open)
+                            if args_open >= 0 else None
+                        )
+                        outer_close = (
+                            _scan_balanced_braces(text_buffer, bare_idx)
+                            if args_close is not None else None
+                        )
+                        if (
+                            m is not None and args_open >= 0
+                            and args_close is not None
+                            and outer_close is not None
+                            and outer_close > args_close
+                        ):
+                            # Strip bare tool call from buffer.
+                            # The engine emits TOOL_CALL_START/COMPLETE separately.
+                            text_buffer = text_buffer[outer_close + 1:]
+                        else:
+                            # Hold buffer until the tool call completes.
+                            in_bare_tool_call = True
+                            bare_tool_start = bare_idx
+                            break
+                    elif tc_idx >= 0 and (think_idx < 0 or tc_idx < think_idx):
+                        if tc_idx > 0:
+                            _emit_message(text_buffer[:tc_idx])
+                        text_buffer = text_buffer[tc_idx + len(_OPEN_MARKER):]
+                        in_tool_call = True
+                    elif think_idx >= 0:
+                        before = text_buffer[:think_idx]
                         if before:
-                            self.send_session_update({
-                                "sessionUpdate": "agent_message_chunk",
-                                "content": {"type": "text", "text": before},
-                            })
-                        text_buffer = text_buffer[idx + len("<thinking>"):]
+                            _emit_message(before)
+                        text_buffer = text_buffer[think_idx + len("<thinking>"):]
                         in_thinking = True
-                    elif (match := TOOL_CALL_TEXT_RE.search(text_buffer)) is not None:
-                        # [TOOL_CALL] text found — discard it (tool info
-                        # arrives via TOOL_CALL_START/COMPLETE events)
-                        before = text_buffer[:match.start()]
-                        after = text_buffer[match.end():]
-                        if before.strip():
-                            self.send_session_update({
-                                "sessionUpdate": "agent_message_chunk",
-                                "content": {"type": "text", "text": before},
-                            })
-                        text_buffer = after
                     else:
                         safe = _safe_start(text_buffer)
                         if safe:
-                            self.send_session_update({
-                                "sessionUpdate": "agent_message_chunk",
-                                "content": {"type": "text", "text": safe},
-                            })
+                            _emit_message(safe)
                         text_buffer = text_buffer[len(safe):]
-                        if not text_buffer.endswith("<") and not any(
-                            text_buffer.endswith("<thinking"[:i]) for i in range(1, len("<thinking>"))
-                        ):
+                        if not _safe_start(text_buffer):
                             text_buffer = ""
 
         return on_chunk
@@ -502,18 +849,22 @@ class CDHACPAdapter:
                 self.send_session_update(self.tool_calls[event.tool_id])
             elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
                 if event.tool_id in self.tool_calls:
-                    # Show input args — use "pending" so that the frontend
-                    # doesn't count it as complete yet or clear streams.
-                    # Wrap JSON in ```json fence so TUI's MarkdownContent
-                    # renders it (else it falls through to TextContent).
                     if event.tool_args:
-                        args_text = json.dumps(event.tool_args, indent=2, ensure_ascii=False)
-                        content = [{
-                            "type": "content",
-                            "content": {"type": "text", "text": f"```json\n{args_text}\n```"},
-                        }]
+                        content = _build_tool_call_content(
+                            event.tool_name, event.tool_args
+                        )
+                        debug_log(
+                            "TOOL_CALL_COMPLETE %s id=%s args_keys=%s content_blocks=%d",
+                            event.tool_name, event.tool_id,
+                            list(event.tool_args.keys()),
+                            len(content),
+                        )
                     else:
                         content = []
+                        debug_log(
+                            "TOOL_CALL_COMPLETE %s id=%s NO args",
+                            event.tool_name, event.tool_id,
+                        )
                     self.tool_calls[event.tool_id].update({
                         "sessionUpdate": "tool_call_update",
                         "toolCallId": event.tool_id,
@@ -538,11 +889,20 @@ class CDHACPAdapter:
                     "type": "content",
                     "content": {"type": "text", "text": result_text},
                 }] if result_text else []
+                if event.tool_id in self.tool_calls:
+                    existing_content = self.tool_calls[event.tool_id].get("content", [])
+                else:
+                    existing_content = []
+                debug_log(
+                    "TOOL_RESULT id=%s status=%s result_len=%d existing_blocks=%d new_blocks=%d",
+                    event.tool_id, status, len(result_text),
+                    len(existing_content), len(content_block),
+                )
                 update = {
                     "sessionUpdate": "tool_call_update",
                     "toolCallId": event.tool_id,
                     "status": status,
-                    "content": content_block,
+                    "content": existing_content + content_block,
                 }
                 if event.tool_id in self.tool_calls:
                     self.tool_calls[event.tool_id].update(update)
@@ -587,14 +947,74 @@ class CDHACPAdapter:
                     "entries": event.plan_entries,
                 })
             elif event.type == StreamEventType.ASK_USER:
-                # Auto-approve tool permission requests in ACP mode.
-                # The agent's permission config (ASK/DENY) is already enforced
-                # by the engine; this event is a side-effect for direct-UI mode.
+                # Build tool call content for the permission request
+                tool_kind = _TOOL_KIND_MAP.get(event.ask_action, "other")
+                pending = (self.agent._pending_approval or {}).get("tool_call", {})
+                tool_args = pending.get("input", {}) if pending else {}
+                tool_content = _build_tool_call_content(
+                    event.ask_action, tool_args
+                ) if tool_args else []
+
+                permission_params = {
+                    "sessionId": session_id,
+                    "options": [
+                        {"name": "Allow once", "optionId": "allow_once", "kind": "allow_once"},
+                        {"name": "Allow always", "optionId": "allow_always", "kind": "allow_always"},
+                        {"name": "Reject once", "optionId": "reject_once", "kind": "reject_once"},
+                        {"name": "Reject always", "optionId": "reject_always", "kind": "reject_always"},
+                    ],
+                    "toolCall": {
+                        "toolCallId": event.tool_id,
+                        "title": event.ask_action,
+                        "kind": tool_kind,
+                        "content": tool_content,
+                        "status": "requires_approval",
+                    },
+                    "_meta": {
+                        "question": event.ask_question,
+                        "action": event.ask_action,
+                    },
+                }
+                try:
+                    perm_future = self.send_request(
+                        "session/request_permission", permission_params
+                    )
+                    perm_response = await perm_future
+                    outcome = perm_response.get("outcome", {})
+                    option_id = outcome.get("optionId", "reject_once")
+                    approved = option_id in ("allow_once", "allow_always")
+                except Exception:
+                    approved = False
+
+                result = await self.agent.resolve_approval(approved)
+                if result:
+                    result_str = result.get("content", "") or ""
+                    is_error = result.get("is_error", False)
+                    tid = result.get("tool_use_id", "")
+                    status = "failed" if is_error else "complete"
+                    content_block = [{
+                        "type": "content",
+                        "content": {"type": "text", "text": result_str},
+                    }] if result_str else []
+                    self.send_session_update({
+                        "sessionUpdate": "tool_call_update",
+                        "toolCallId": tid,
+                        "status": status,
+                        "content": content_block,
+                    })
+                    # Add result to LLM context
+                    self.agent.context.add_message(
+                        "tool",
+                        [{"type": "tool_result", "tool_use_id": tid,
+                          "content": result_str, "is_error": is_error}],
+                        name=tid,
+                    )
+                verb = "Approved" if approved else "Rejected"
                 self.send_session_update({
                     "sessionUpdate": "agent_message_chunk",
                     "content": {
                         "type": "text",
-                        "text": f"⚡ Auto-approved: {event.ask_action} — {event.ask_question}",
+                        "text": f"⚡ {verb}: {event.ask_action} — {event.ask_question}",
                     },
                 })
 
@@ -777,6 +1197,14 @@ async def _main():
         for req in requests:
             if not isinstance(req, dict):
                 continue
+
+            # Check if this is a response to a pending server→client request
+            if "id" in req and ("result" in req or "error" in req):
+                req_id = req.get("id")
+                if isinstance(req_id, str) and req_id in adapter._pending_requests:
+                    adapter.resolve_pending_request(req_id, req.get("result", {}))
+                    continue
+
             method = req.get("method", "")
             req_id = req.get("id")
 

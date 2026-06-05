@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import httpx
 
+from cdha.agent.tools.permissions import PermissionResult, ToolPermissionContext
 from cdha.agent.tools.protocol import ToolResult
 from cdha.agent.tools.registry import ToolSpec
 
@@ -144,6 +145,13 @@ class WebFetchTool:
         is_error = str(content).startswith("Error:")
         return ToolResult(name="WebFetch", output=str(content), is_error=is_error)
 
+    def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        permission_context: ToolPermissionContext,
+    ) -> PermissionResult:
+        return PermissionResult.ALLOW
+
 
 class WebSearchTool:
     def spec(self) -> ToolSpec:
@@ -167,3 +175,10 @@ class WebSearchTool:
         content = websearch(query, num_results)
         is_error = "Error" in str(content) and str(content).startswith("Error")
         return ToolResult(name="WebSearch", output=str(content), is_error=is_error)
+
+    def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        permission_context: ToolPermissionContext,
+    ) -> PermissionResult:
+        return PermissionResult.ALLOW
