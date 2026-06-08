@@ -516,7 +516,7 @@ class Agent(AgentBase):
 
         PIPE = asyncio.subprocess.PIPE
         env = os.environ.copy()
-        env["TOAD_CWD"] = str(Path("./").absolute())
+        env["TOAD_CWD"] = str(self.project_root_path)
         python_bin = str(Path(sys.executable).parent)
         env["PATH"] = f"{python_bin}:{env.get('PATH', '')}"
 

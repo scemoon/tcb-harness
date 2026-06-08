@@ -65,6 +65,31 @@ class SideBar(containers.Vertical):
     def action_dismiss(self) -> None:
         self.post_message(self.Dismiss())
 
+    def has_panel(self, panel_id: str) -> bool:
+        return self.query_one_optional(f"#{panel_id}") is not None
+
+    async def add_panel(self, panel: Panel) -> SideBarCollapsible:
+        collapsible = SideBarCollapsible(
+            panel.widget,
+            title=panel.title,
+            collapsed=panel.collapsed,
+            classes="-flex" if panel.flex else "-fixed",
+            id=panel.id,
+        )
+        await self.mount(collapsible)
+        self.panels.append(panel)
+        return collapsible
+
+    def remove_panel(self, panel_id: str) -> bool:
+        for i, p in enumerate(self.panels):
+            if p.id == panel_id:
+                widget = self.query_one_optional(f"#{panel_id}")
+                if widget is not None:
+                    widget.remove()
+                self.panels.pop(i)
+                return True
+        return False
+
 
 if __name__ == "__main__":
     from textual.app import App, ComposeResult

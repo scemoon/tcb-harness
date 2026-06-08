@@ -12,6 +12,9 @@ from cdha.agent.tools.registry import ToolSpec
 class WorktreeTool:
     """Manage git worktrees (Clawd-Code pattern)."""
 
+    def __init__(self, workspace_root: Path | None = None):
+        self._workspace_root = (workspace_root or Path.cwd()).resolve()
+
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="Worktree",
@@ -39,6 +42,7 @@ class WorktreeTool:
                 result = subprocess.run(
                     ["git", "worktree", "list"],
                     capture_output=True, text=True, timeout=30,
+                    cwd=str(self._workspace_root),
                 )
                 if result.returncode != 0:
                     return ToolResult(name="Worktree", output={"error": result.stderr.strip()}, is_error=True)
@@ -60,7 +64,7 @@ class WorktreeTool:
                     cmd.extend(["-b", branch])
                 if commitish:
                     cmd.append(commitish)
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=str(self._workspace_root))
                 if result.returncode != 0:
                     return ToolResult(name="Worktree", output={"error": result.stderr.strip()}, is_error=True)
                 return ToolResult(name="Worktree", output={"path": wt_path, "status": "created", "output": result.stdout.strip()})
@@ -69,6 +73,7 @@ class WorktreeTool:
                 result = subprocess.run(
                     ["git", "worktree", "prune"],
                     capture_output=True, text=True, timeout=30,
+                    cwd=str(self._workspace_root),
                 )
                 if result.returncode != 0:
                     return ToolResult(name="Worktree", output={"error": result.stderr.strip()}, is_error=True)

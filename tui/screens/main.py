@@ -27,6 +27,7 @@ from tui.widgets.conversation import Conversation
 from tui.widgets.project_directory_tree import ProjectDirectoryTree
 from tui.widgets.side_bar import SideBar
 from tui.widgets.session_tabs import SessionsTabs, SessionLabel
+from cdha.agent.cdh_loader import CdhProjectLoader
 
 
 class ModeProvider(Provider):
@@ -139,9 +140,9 @@ class MainScreen(Screen, can_focus=False):
         self.conversation.update_title()
 
     def compose(self) -> ComposeResult:
-        with containers.Center():
-            yield SideBar(
-                SideBar.Panel("Plan", Plan([])),
+        panels: list[SideBar.Panel] = [SideBar.Panel("Plan", Plan([]))]
+        if CdhProjectLoader.find_cdh_dir(self.project_path) is not None:
+            panels.append(
                 SideBar.Panel(
                     "Project",
                     ProjectDirectoryTree(
@@ -149,8 +150,11 @@ class MainScreen(Screen, can_focus=False):
                         id="project_directory_tree",
                     ),
                     flex=True,
+                    id="project-panel",
                 ),
             )
+        with containers.Center():
+            yield SideBar(*panels)
             yield Conversation(
                 self.project_path,
                 self._agent,
@@ -182,7 +186,30 @@ class MainScreen(Screen, can_focus=False):
     @on(messages.ProjectDirectoryUpdated)
     async def on_project_directory_update(self) -> None:
         self.project_path = self.app.project_dir
-        await self.query_one(ProjectDirectoryTree).reload()
+        sidebar = self.query_one(SideBar)
+        cdh_dir = CdhProjectLoader.find_cdh_dir(self.project_path)
+        if cdh_dir is not None:
+            if not sidebar.has_panel("project-panel"):
+                collapsible = await sidebar.add_panel(
+                    SideBar.Panel(
+                        "Project",
+                        ProjectDirectoryTree(
+                            self.project_path,
+                            id="project_directory_tree",
+                        ),
+                        flex=True,
+                        id="project-panel",
+                    ),
+                )
+                tree = collapsible.query_one(ProjectDirectoryTree)
+                tree.data_bind(path=MainScreen.project_path)
+                tree.guide_depth = 3
+            else:
+                tree = sidebar.query_one(ProjectDirectoryTree)
+                tree.path = self.project_path
+                await tree.reload()
+        else:
+            sidebar.remove_panel("project-panel")
 
     @on(DirectoryTree.FileSelected, "ProjectDirectoryTree")
     def on_project_directory_tree_selected(self, event: Tree.NodeSelected):
@@ -249,10 +276,11 @@ class MainScreen(Screen, can_focus=False):
         import gc
 
         gc.freeze()
-        for tree in self.query("#project_directory_tree").results(DirectoryTree):
-            tree.data_bind(path=MainScreen.project_path)
-        for tree in self.query(DirectoryTree):
-            tree.guide_depth = 3
+        if self.query_one(SideBar).has_panel("project-panel"):
+            for tree in self.query("#project_directory_tree").results(DirectoryTree):
+                tree.data_bind(path=MainScreen.project_path)
+            for tree in self.query(DirectoryTree):
+                tree.guide_depth = 3
 
     @on(OptionList.OptionHighlighted)
     def on_option_list_option_highlighted(

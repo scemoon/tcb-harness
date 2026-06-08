@@ -812,30 +812,7 @@ class A2TUIApp(App, inherit_bindings=False):
                         )
                         return
 
-            db = DB()
-            recent_sessions = await db.session_get_recent(max_results=20)
-            session_to_resume = None
-            if recent_sessions:
-                import json as json_module
-                from cdha.config import CLOUD_DEV_HARNESS_DIR
-                sessions_dir = CLOUD_DEV_HARNESS_DIR / "sessions"
-                for session in recent_sessions:
-                    session_file = sessions_dir / f"{session['agent_session_id']}.json"
-                    if session_file.exists():
-                        try:
-                            data = json_module.loads(session_file.read_text())
-                            if data.get("messages"):
-                                session_to_resume = session
-                                break
-                        except Exception:
-                            pass
-            if session_to_resume:
-                self.launch_agent(
-                    session_to_resume["agent_identity"],
-                    agent_session_id=session_to_resume["agent_session_id"],
-                    session_pk=session_to_resume["id"],
-                )
-            elif agent_identity := self._resolve_launch_agent():
+            if agent_identity := self._resolve_launch_agent():
                 self.launch_agent(agent_identity, project_path=project_path)
             else:
                 self.push_screen("store")
@@ -1029,16 +1006,25 @@ class A2TUIApp(App, inherit_bindings=False):
     async def action_projects(self) -> None:
         from pathlib import Path
         from cdha.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
+        from cdha.config_screen import EditFieldScreen
         import yaml
 
         result = await self.push_screen_wait("projects")
         if result is not None:
             if result == "__new__":
-                from cdha.agent.cdh_loader import CdhProjectLoader
-                path = str(self.project_dir or Path.cwd())
-                # Use current directory name as project name
-                project_path = Path(path).resolve()
+                default_path = str((self.project_dir or Path.cwd()).resolve())
+                path_str = await self.push_screen_wait(
+                    EditFieldScreen("Project path", default_path)
+                )
+                if not path_str:
+                    return
+                try:
+                    project_path = Path(path_str).expanduser().resolve()
+                except Exception:
+                    self.notify("Invalid path", severity="error")
+                    return
                 name = project_path.name
+                from cdha.agent.cdh_loader import CdhProjectLoader
                 CdhProjectLoader.init_project(project_path, name)
                 projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
                 projects_dir.mkdir(parents=True, exist_ok=True)
@@ -1049,7 +1035,7 @@ class A2TUIApp(App, inherit_bindings=False):
                 cfg.current_project_path = str(project_path)
                 save_config(cfg)
                 self.project_dir = project_path
-                self.post_message(messages.ProjectDirectoryUpdated())
+                self.screen.post_message(messages.ProjectDirectoryUpdated())
                 self.notify(f"Created project '{name}' at {project_path}")
                 return
 
@@ -1071,7 +1057,7 @@ class A2TUIApp(App, inherit_bindings=False):
 
                     new_project_dir = Path(project_path) if project_path else Path.cwd()
                     self.project_dir = new_project_dir
-                    self.post_message(messages.ProjectDirectoryUpdated())
+                    self.screen.post_message(messages.ProjectDirectoryUpdated())
                     self.notify(f"Switched to project: {project_name}")
 
     @on(messages.LaunchAgent)

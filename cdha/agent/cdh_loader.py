@@ -151,6 +151,12 @@ class CdhProjectLoader:
         if skill:
             parts.append(f"\n--- .cdh/SKILL.md ---\n{skill}")
 
+        parts.append(
+            "\n**Important**: Work directly in the project root directory shown above. "
+            "Do NOT create a subdirectory named after the project — all files go "
+            "directly under the project root."
+        )
+
         return "\n".join(parts)
 
     # ── scaffolding ────────────────────────────────────────────
@@ -166,9 +172,26 @@ class CdhProjectLoader:
 
         Creates ``.cdh/config.yaml``, ``.cdh/state.json``, and a
         stub ``.cdh/SKILL.md``.
+
+        If *workspace_root* is inside a directory that is already a
+        ``.cdh/`` project, a warning is printed and the existing project
+        root is returned (auto-correct) instead of raising an error.
         """
-        cdh_dir = workspace_root / CdhProjectLoader.CDH_DIRNAME
-        cdh_dir.mkdir(parents=True, exist_ok=True)
+        workspace_root = workspace_root.resolve()
+        existing = CdhProjectLoader.find_cdh_dir(workspace_root)
+        if existing is not None:
+            if existing.parent != workspace_root:
+                import sys as _sys
+                print(
+                    f"⚠ {workspace_root} is inside an existing project at "
+                    f"{existing.parent}. Auto-correcting to use that project.",
+                    file=_sys.stderr,
+                )
+                return existing
+            cdh_dir = existing
+        else:
+            cdh_dir = workspace_root / CdhProjectLoader.CDH_DIRNAME
+            cdh_dir.mkdir(parents=True, exist_ok=True)
 
         config = {"name": name}
         if platform:

@@ -537,7 +537,7 @@ class AgentEngine:
         registry.register(CronRemoveTool(self._cron_scheduler))
 
         # Git worktree tool (Clawd-Code pattern)
-        registry.register(WorktreeTool())
+        registry.register(WorktreeTool(workspace_root=self._project_dir))
 
         # Config tools (Clawd-Code pattern)
         if self._config_tool_read:
@@ -731,7 +731,7 @@ class AgentEngine:
         if env_id:
             context_parts.append(f"TCB EnvId: {env_id}")
 
-        agents_md_path = Path.cwd() / "AGENTS.md"
+        agents_md_path = self._workspace / "AGENTS.md"
         if agents_md_path.exists():
             try:
                 content = agents_md_path.read_text(encoding="utf-8")
@@ -1346,7 +1346,7 @@ class AgentEngine:
         Inherits project context, harness mode, and skills from the parent
         engine so the subagent does not start from a blank slate.
         """
-        sub_engine = AgentEngine(self.app)
+        sub_engine = AgentEngine(self.app, project_dir=self._project_dir)
 
         # Inherit parent context: project info, harness mode, skills
         sub_engine._project_context_loaded = self._project_context_loaded

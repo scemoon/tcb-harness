@@ -194,14 +194,17 @@ def project(action, name, path):
         if not name:
             click.echo("Usage: cdh project new <name> [path]")
             return
-        proj_data = {"name": name, "path": path, "description": ""}
+        from cdha.agent.cdh_loader import CdhProjectLoader
+        ws = Path(path).expanduser().resolve()
+        CdhProjectLoader.init_project(ws, name)
+        proj_data = {"name": name, "path": str(ws), "description": ""}
         project_file = projects_dir / f"{name}.yaml"
         project_file.write_text(yaml.dump(proj_data))
         cfg = load_config()
         cfg.current_project = name
-        cfg.current_project_path = path
+        cfg.current_project_path = str(ws)
         save_config(cfg)
-        click.echo(f"Created project '{name}' at {path}")
+        click.echo(f"Created project '{name}' at {ws}")
     elif action == "load":
         if not name:
             click.echo("Usage: cdh project load <name>")
