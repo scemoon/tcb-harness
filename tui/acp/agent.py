@@ -110,6 +110,7 @@ class Agent(AgentBase):
         }
         self.auth_methods: list[protocol.AuthMethod] = []
         self.session_pk: int | None = session_pk
+        self._pending_session_data: dict | None = None
         self.tool_calls: dict[str, protocol.ToolCall] = {}
         self._message_target: MessagePump | None = None
 
@@ -674,6 +675,47 @@ class Agent(AgentBase):
 
         self.post_message(AgentReady())
 
+    async def _ensure_db_session(self) -> None:
+        if self.session_pk is not None:
+            return
+        if not self.supports_load_session:
+            return
+        data = getattr(self, "_pending_session_data", None)
+        if data is None:
+            return
+
+        db = DB()
+        self.session_pk = await db.session_new(
+            data["session_name"],
+            data["agent_name"],
+            data["agent_identity"],
+            data["session_id"],
+            protocol=data["protocol"],
+            meta=data["meta"],
+        )
+        self._pending_session_data = None
+        await self._save_last_session_to_cdh()
+
+    async def _save_last_session_to_cdh(self) -> None:
+        if self.session_pk is None:
+            return
+        try:
+            from cdha.agent.cdh_loader import CdhProjectLoader
+
+            cdh_dir = CdhProjectLoader.find_cdh_dir(self.project_root_path)
+            if cdh_dir is None:
+                return
+            CdhProjectLoader.save_last_session(
+                cdh_dir,
+                {
+                    "agent_session_id": self.session_id,
+                    "session_pk": self.session_pk,
+                    "agent_identity": self._agent_data["identity"],
+                },
+            )
+        except Exception:
+            pass
+
     async def send_prompt(self, prompt: str) -> str | None:
         """Send a prompt to the agent.
 
@@ -683,6 +725,7 @@ class Agent(AgentBase):
         Args:
             prompt: Prompt text.
         """
+        await self._ensure_db_session()
         prompt_content_blocks = await asyncio.to_thread(
             build_prompt, self.project_root_path, prompt
         )
@@ -741,19 +784,17 @@ class Agent(AgentBase):
                     self._log_file_path = new_log_path
 
         if self.supports_load_session:
-            db = DB()
-            session_name = "New Session"
-            self.session_pk = await db.session_new(
-                session_name,
-                self._agent_data["name"],
-                self._agent_data["identity"],
-                self.session_id,
-                protocol="acp",
-                meta={
+            self._pending_session_data = {
+                "session_name": "New Session",
+                "agent_name": self._agent_data["name"],
+                "agent_identity": self._agent_data["identity"],
+                "session_id": self.session_id,
+                "protocol": "acp",
+                "meta": {
                     "cwd": str(self.project_root_path),
                     "agent_data": self._agent_data,
                 },
-            )
+            }
 
         if (modes := response.get("modes", None)) is not None:
             current_mode = modes["currentModeId"]
@@ -798,6 +839,8 @@ class Agent(AgentBase):
 
         if session_title:
             self.post_message(tui_messages.SessionUpdate(name=session_title))
+
+        await self._save_last_session_to_cdh()
 
     async def acp_session_prompt(
         self, prompt: list[protocol.ContentBlock]

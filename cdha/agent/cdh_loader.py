@@ -41,6 +41,7 @@ class CdhProjectLoader:
     """
 
     CDH_DIRNAME = ".cdh"
+    LAST_SESSION_FILENAME = "last_session.json"
 
     # ── discovery ──────────────────────────────────────────────
 
@@ -97,6 +98,28 @@ class CdhProjectLoader:
             except Exception:
                 pass
         return ""
+
+    # ── last-session persistence ───────────────────────────────
+
+    @staticmethod
+    def save_last_session(cdh_dir: Path, session_data: dict) -> None:
+        """Save last session info to ``.cdh/last_session.json``."""
+        path = cdh_dir / CdhProjectLoader.LAST_SESSION_FILENAME
+        path.write_text(
+            json.dumps(session_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def load_last_session(cdh_dir: Path) -> dict:
+        """Load last session info from ``.cdh/last_session.json``."""
+        path = cdh_dir / CdhProjectLoader.LAST_SESSION_FILENAME
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {}
 
     # ── public API ─────────────────────────────────────────────
 

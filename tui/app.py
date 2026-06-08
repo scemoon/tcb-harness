@@ -330,10 +330,17 @@ class A2TUIApp(App, inherit_bindings=False):
         if project_dir:
             self.project_dir = Path(project_dir).expanduser().resolve()
         else:
-            from cdha.config import load_config
+            from cdha.config import load_config, save_config
             cfg = load_config()
             if cfg.current_project_path:
-                self.project_dir = Path(cfg.current_project_path).expanduser().resolve()
+                project_path = Path(cfg.current_project_path).expanduser().resolve()
+                if project_path.is_dir():
+                    self.project_dir = project_path
+                else:
+                    cfg.current_project = ""
+                    cfg.current_project_path = ""
+                    save_config(cfg)
+                    self.project_dir = Path("./").expanduser().resolve()
             else:
                 self.project_dir = Path("./").expanduser().resolve()
         self._exit_metrics: dict[str, object] | None = None
@@ -778,6 +785,33 @@ class A2TUIApp(App, inherit_bindings=False):
                 self._launch_agent_identity, project_path=Path(self.project_dir)
             )
         else:
+            project_path = Path(self.project_dir)
+            # Check project-level .cdh/last_session.json
+            from cdha.agent.cdh_loader import CdhProjectLoader
+            cdh_dir = CdhProjectLoader.find_cdh_dir(project_path)
+            if cdh_dir:
+                last_session = CdhProjectLoader.load_last_session(cdh_dir)
+                if last_session and last_session.get("agent_session_id"):
+                    agent_session_id = last_session["agent_session_id"]
+                    session_pk = last_session.get("session_pk")
+                    agent_identity = last_session.get("agent_identity")
+                    if agent_identity and session_pk:
+                        db = DB()
+                        session = await db.session_get(session_pk)
+                        if session:
+                            self.launch_agent(
+                                session["agent_identity"],
+                                agent_session_id=session["agent_session_id"],
+                                session_pk=session["id"],
+                            )
+                            return
+                    if agent_identity:
+                        self.launch_agent(
+                            agent_identity,
+                            agent_session_id=agent_session_id,
+                        )
+                        return
+
             db = DB()
             recent_sessions = await db.session_get_recent(max_results=20)
             session_to_resume = None
@@ -802,7 +836,7 @@ class A2TUIApp(App, inherit_bindings=False):
                     session_pk=session_to_resume["id"],
                 )
             elif agent_identity := self._resolve_launch_agent():
-                self.launch_agent(agent_identity, project_path=Path(self.project_dir))
+                self.launch_agent(agent_identity, project_path=project_path)
             else:
                 self.push_screen("store")
 
