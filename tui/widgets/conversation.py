@@ -1049,10 +1049,12 @@ class Conversation(containers.Vertical):
             for entry in message.entries
         ]
 
-        if self.contents.children and isinstance(
-            (current_plan := self.contents.children[-1]), Plan
-        ):
-            current_plan.entries = entries
+        # Look up any existing Plan widget anywhere in the conversation
+        # tree — checking only ``children[-1]`` would create duplicates if
+        # a ToolCall/SubAgent was posted after the Plan.
+        existing_plan = self.query(Plan).first() if entries else None
+        if existing_plan is not None:
+            existing_plan.entries = entries
         else:
             await self.post(Plan(entries))
 

@@ -249,11 +249,16 @@ class TaskManager:
     Supports dependency tracking for multi-agent coordination.
     """
 
-    def __init__(self):
+    def __init__(self, on_change: Callable[[], None] | None = None):
         self._tasks: dict[str, dict] = {}  # id -> task dict
         self._todos: list[dict] = []
         self._plan: list[str] = []
         self._id_counter = 0
+        self._on_change = on_change
+
+    def _mark_dirty(self) -> None:
+        if self._on_change:
+            self._on_change()
 
     def _next_id(self) -> str:
         return uuid.uuid4().hex[:12]
@@ -282,6 +287,7 @@ class TaskManager:
             "output": "",
         }
         self._tasks[task_id] = task
+        self._mark_dirty()
         return task
 
     def get_task(self, task_id: str) -> dict | None:
@@ -313,6 +319,7 @@ class TaskManager:
             status = fields["status"]
             if status == "deleted":
                 self._tasks.pop(task_id, None)
+                self._mark_dirty()
                 return {"id": task_id, "deleted": True}
             if status in _TASK_STATUSES and status != task.get("status"):
                 task["status"] = status
@@ -351,6 +358,7 @@ class TaskManager:
                 task["output"] = v
                 updated.append("output")
 
+        self._mark_dirty()
         return task
 
     def get_task_output(self, task_id: str) -> dict:
@@ -372,34 +380,41 @@ class TaskManager:
 
     def clear_tasks(self) -> None:
         self._tasks.clear()
+        self._mark_dirty()
 
     # ── Todo Management (unchanged API) ──
 
     def add_todo(self, text: str) -> str:
         tid = self._next_id()
         self._todos.append({"text": text, "done": False, "id": tid})
+        self._mark_dirty()
         return tid
 
     def complete_todo(self, todo_id: str) -> bool:
         for t in self._todos:
             if t["id"] == todo_id:
                 t["done"] = True
+                self._mark_dirty()
                 return True
         return False
 
     def remove_todo(self, todo_id: str) -> bool:
         before = len(self._todos)
         self._todos = [t for t in self._todos if t["id"] != todo_id]
-        return len(self._todos) < before
+        result = len(self._todos) < before
+        self._mark_dirty()
+        return result
 
     def list_todos(self) -> list[dict]:
         return self._todos
 
     def clear_todos(self) -> None:
         self._todos = []
+        self._mark_dirty()
 
     def set_plan(self, plan: list[str]) -> None:
         self._plan = plan
+        self._mark_dirty()
 
     def get_plan(self) -> list[str]:
         return self._plan
@@ -429,7 +444,8 @@ class AgentEngine:
         self._session: Optional[AgentSession] = None
         self._hooks = HookManager()
         self._permissions = PermissionChecker(create_safe_permission_set())
-        self._task_manager = TaskManager()
+        self._task_manager = TaskManager(on_change=self._on_task_change)
+        self._plan_dirty: bool = False
         self._project_config: dict = {}
         self._harness_mode = False
         self._project_context_loaded = False
@@ -586,6 +602,16 @@ class AgentEngine:
             })
         return [StreamEvent.plan(entries)]
 
+    def _on_task_change(self) -> None:
+        """Callback invoked by TaskManager whenever tasks/todos mutate.
+
+        Sets a dirty flag so the next opportunity in ``chat_stream`` will
+        emit a fresh plan event.  Decoupling the callback from the emit
+        keeps the public API synchronous and avoids re-entrancy when
+        subagents mutate the same TaskManager concurrently.
+        """
+        self._plan_dirty = True
+
     @property
     def _workspace(self) -> Path:
         return self._project_dir
@@ -635,7 +661,13 @@ class AgentEngine:
         return ""
 
     def set_agent(self, agent_type: str) -> None:
-        from cdha.agent.agents.types import create_agent, PLAN_INSTRUCTIONS, TOOL_DESCRIPTIONS, filter_tool_descriptions
+        from cdha.agent.agents.types import (
+            AgentPermission,
+            create_agent,
+            PLAN_INSTRUCTIONS,
+            TOOL_DESCRIPTIONS,
+            filter_tool_descriptions,
+        )
         self.current_agent = create_agent(agent_type)
         system_parts = [self.current_agent.description]
 
@@ -649,7 +681,7 @@ class AgentEngine:
                 restrictions.append("- Shell commands require user approval")
             system_parts.append("\n".join(restrictions))
 
-        if agent_type in ("plan", "solo"):
+        if self.current_agent.permission_task != AgentPermission.DENY:
             system_parts.append(PLAN_INSTRUCTIONS)
 
         if self._harness_mode:
@@ -906,6 +938,15 @@ class AgentEngine:
             if init_msg:
                 logger.info(f"Harness auto-init: {init_msg}")
                 yield StreamEvent.text_delta(f"\n{init_msg}\n\n")
+
+        # Emit initial plan so the TUI Plan widget is mounted (or refreshed
+        # to the current snapshot) at the start of every turn.  This is
+        # required because the Plan widget only renders when an ``entries``
+        # value arrives — without this, the widget never appears until the
+        # agent happens to call a task tool.
+        for event in self._emit_plan_update():
+            yield event
+        self._plan_dirty = False
 
         self.context.add_user(user_input)
 
@@ -1204,10 +1245,14 @@ class AgentEngine:
                             [{"type": "tool_result", "tool_use_id": tu["id"], "content": result_str, "is_error": is_error}],
                             name=tu["id"],
                         )
-                    # Emit plan update after task-manipulating tools
-                    if tu["name"] in ("TaskCreate", "TaskUpdate", "TaskStop", "TodoCreate", "TodoComplete", "TodoList"):
+                    # Emit plan update when tasks/todos changed.  Any
+                    # mutating path through TaskManager flips
+                    # ``_plan_dirty`` via the ``on_change`` callback, so we
+                    # do not need to enumerate tool names here.
+                    if self._plan_dirty:
                         for event in self._emit_plan_update():
                             yield event
+                        self._plan_dirty = False
 
             if self._cancelled:
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
