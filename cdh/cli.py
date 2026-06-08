@@ -1,6 +1,4 @@
-import sys
 from pathlib import Path
-from typing import Optional
 
 import click
 
@@ -53,8 +51,7 @@ def cli(ctx):
         cfg = load_config()
         setup_logging(cfg.log_level)
         from tui.app import A2TUIApp
-        app = A2TUIApp()
-        app.run()
+        A2TUIApp().run()
 
 
 # --- config group ---
@@ -134,13 +131,7 @@ def _interactive_select_project():
     click.echo("Projects:")
     for i, pf in enumerate(project_files, 1):
         click.echo(f"  {i}) {pf.stem}")
-    click.echo("  n) Create new project")
-    click.echo("  q) Quit")
-    choice = click.prompt("Select project", type=str, default="q").strip().lower()
-    if choice == "q":
-        return None
-    if choice == "n":
-        return ("new", None)
+    choice = click.prompt("Select project", type=str, default="").strip().lower()
     try:
         idx = int(choice) - 1
         if 0 <= idx < len(project_files):
@@ -150,7 +141,7 @@ def _interactive_select_project():
     return None
 
 
-@cli.command(short_help="Project management")
+@cli.command(short_help="Project management (TUI)")
 @click.argument("action", type=click.Choice(["list", "show", "new", "load", "select"]), default="select")
 @click.argument("name", required=False)
 @click.argument("path", required=False, default=".")
@@ -158,41 +149,31 @@ def project(action, name, path):
     """Manage CDH projects.
 
     \b
+    Without arguments, opens the project management TUI.
+    Use subcommands for quick CLI operations.
+
+    \b
     Actions:
-      select         Interactive project selection (default)
+      select         Open project management TUI (default)
       list           List all projects
       show <name>    Show project details
       new <name> [path]   Create a new project
       load <name>    Load a project (set as current)
-
-    \b
-    Examples:
-      cdh project          Interactive project selection
-      cdh project select   Interactive project selection
-      cdh project list     List projects
-      cdh project show my-project   Show project details
-      cdh project new my-project /path/to/project   Create new project
-      cdh project load my-project    Load project
     """
     import yaml
     projects_dir = _CDH_DIR / "projects"
     projects_dir.mkdir(parents=True, exist_ok=True)
 
     if action == "select":
-        result = _interactive_select_project()
-        if result is None:
-            return
-        action, name = result
-        if action == "new":
-            path = click.prompt("Project path", type=str, default=".").strip()
-            name = click.prompt("Project name", type=str).strip()
-            action = "new"
-        elif action == "load":
-            if name is None:
-                return
+        from tui.screens.projects_app import main as projects_main
+        result = projects_main()
+        if result == "loaded":
+            from tui.app import A2TUIApp
+            A2TUIApp().run()
+        return
 
     if action == "list":
-        project_files = _get_projects()
+        project_files = sorted(list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json")))
         if not project_files:
             click.echo("No projects found.")
             return
@@ -307,45 +288,7 @@ def tui(ctx, project_dir, agent_identity):
     cfg = load_config()
     setup_logging(cfg.log_level)
 
-    # Resolve workspace directory
     ws = Path(project_dir).expanduser().resolve()
-
-    # ── .cdh/ onboarding ──────────────────────────────────────
-    from cdha.agent.cdh_loader import CdhProjectLoader
-
-    cdh_dir = CdhProjectLoader.find_cdh_dir(ws)
-    if cdh_dir is None:
-        click.echo("")
-        click.echo("⚠  No .cdh project found in this directory.")
-        click.echo("   What would you like to do?\n")
-        click.echo("   1) Create .cdh/ in current directory")
-        click.echo("   2) Select an existing project from ~/.cdh/projects/")
-        click.echo("   3) Continue without .cdh (temporary mode)")
-        click.echo("")
-        choice = click.prompt("Choice", type=click.Choice(["1", "2", "3"]), default="1")
-
-        if choice == "1":
-            name = click.prompt("Project name", default=ws.name)
-            CdhProjectLoader.init_project(ws, name)
-            click.echo(f"✓  Created .cdh project '{name}' at {ws}")
-        elif choice == "2":
-            result = _interactive_select_project()
-            if result is None:
-                click.echo("No project selected. Continuing without .cdh.")
-            elif result[0] == "load":
-                _, name = result
-                proj_info = _load_project_by_name(name)
-                if proj_info:
-                    ws = Path(proj_info[1]).resolve()
-                    click.echo(f"✓  Switched to project '{name}' at {ws}")
-            elif result[0] == "new":
-                path = click.prompt("Project path", type=str, default=".").strip()
-                name = click.prompt("Project name", type=str).strip()
-                ws = Path(path).expanduser().resolve()
-                CdhProjectLoader.init_project(ws, name)
-                click.echo(f"✓  Created .cdh project '{name}' at {ws}")
-        # choice == "3": continue without .cdh
-    # ── end .cdh/ onboarding ──────────────────────────────────
 
     from tui.app import A2TUIApp
     app = A2TUIApp(

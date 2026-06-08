@@ -999,6 +999,26 @@ class A2TUIApp(App, inherit_bindings=False):
 
         result = await self.push_screen_wait("projects")
         if result is not None:
+            if result == "__new__":
+                from cdha.agent.cdh_loader import CdhProjectLoader
+                path = str(self.project_dir or Path.cwd())
+                # Use current directory name as project name
+                project_path = Path(path).resolve()
+                name = project_path.name
+                CdhProjectLoader.init_project(project_path, name)
+                projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+                projects_dir.mkdir(parents=True, exist_ok=True)
+                proj_data = {"name": name, "path": str(project_path), "description": ""}
+                (projects_dir / f"{name}.yaml").write_text(yaml.dump(proj_data))
+                cfg = load_config()
+                cfg.current_project = name
+                cfg.current_project_path = str(project_path)
+                save_config(cfg)
+                self.project_dir = project_path
+                self.post_message(messages.ProjectDirectoryUpdated())
+                self.notify(f"Created project '{name}' at {project_path}")
+                return
+
             project_name = result if isinstance(result, str) else getattr(result, 'name', None)
             if project_name:
                 projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"

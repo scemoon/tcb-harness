@@ -39,6 +39,8 @@ class ProjectsScreen(ModalScreen[str]):
             yield widgets.Label("Projects")
         yield widgets.Static(INSTRUCTIONS_NO_PROJECTS, classes="instructions")
         yield ProjectGridSelect()
+        with containers.Center():
+            yield widgets.Button("+ New Project", id="new-project", variant="primary")
         yield widgets.Footer()
 
     @property
@@ -89,3 +91,7 @@ class ProjectsScreen(ModalScreen[str]):
             isinstance(event.widget, ProjectSummary)
         ):
             self.dismiss(event.widget.id)
+
+    @on(widgets.Button.Pressed, "#new-project")
+    def on_new_project(self) -> None:
+        self.dismiss("__new__")
