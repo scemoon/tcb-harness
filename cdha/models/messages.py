@@ -271,6 +271,7 @@ class TextBlock:
 
 class StreamEventType(str, Enum):
     TEXT_DELTA = "text_delta"
+    THINKING = "thinking"
     TOOL_CALL_START = "tool_call_start"
     TOOL_CALL_ARGS = "tool_call_args"
     TOOL_CALL_COMPLETE = "tool_call_complete"
@@ -294,6 +295,8 @@ class StreamEvent:
     type: StreamEventType
     # TEXT_DELTA fields
     text: str = ""
+    # THINKING fields
+    thinking: str = ""
     # TOOL_CALL_START fields
     tool_name: str = ""
     tool_id: str = ""
@@ -324,6 +327,10 @@ class StreamEvent:
     @classmethod
     def text_delta(cls, text: str) -> "StreamEvent":
         return cls(type=StreamEventType.TEXT_DELTA, text=text)
+
+    @classmethod
+    def thinking(cls, thought: str) -> "StreamEvent":
+        return cls(type=StreamEventType.THINKING, thinking=thought)
 
     @classmethod
     def tool_call_start(cls, name: str, call_id: str) -> "StreamEvent":
@@ -418,12 +425,14 @@ class StreamEvent:
 
     @staticmethod
     def is_text(event: "StreamEvent") -> bool:
-        return event.type == StreamEventType.TEXT_DELTA
+        return event.type in (StreamEventType.TEXT_DELTA, StreamEventType.THINKING)
 
     def to_block_dict(self) -> dict:
         """Convert this stream event to a block dict for TUI rendering."""
         if self.type == StreamEventType.TEXT_DELTA:
             return TextBlock(content=self.text).to_dict()
+        elif self.type == StreamEventType.THINKING:
+            return ThinkBlock(content=self.thinking).to_dict()
         elif self.type == StreamEventType.TOOL_CALL_START:
             return {
                 "type": "tool_use_start",

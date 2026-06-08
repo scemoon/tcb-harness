@@ -76,6 +76,11 @@ class AgentTool:
 
 
 class TaskTool:
+    VALID_AGENT_TYPES: tuple[str, ...] = (
+        "general", "explore", "scout",
+        "build", "plan", "solo",
+    )
+
     def __init__(self, spawn_fn):
         self._spawn = spawn_fn
 
@@ -86,7 +91,11 @@ class TaskTool:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "agent_type": {"type": "string", "description": "Subagent type (general|explore|scout)"},
+                    "agent_type": {
+                        "type": "string",
+                        "enum": list(self.VALID_AGENT_TYPES),
+                        "description": "Subagent type. Valid: general, explore, scout, build, plan, solo.",
+                    },
                     "prompt": {"type": "string", "description": "Task description for the subagent"},
                 },
                 "required": ["prompt"],
@@ -96,6 +105,17 @@ class TaskTool:
     def run(self, tool_input: dict[str, Any]) -> ToolResult:
         agent_type = tool_input.get("agent_type", "general")
         prompt = tool_input.get("prompt", "")
+        if agent_type not in self.VALID_AGENT_TYPES:
+            return ToolResult(
+                name="Task",
+                output={
+                    "error": (
+                        f"Unknown agent_type '{agent_type}'. "
+                        f"Valid types: {', '.join(self.VALID_AGENT_TYPES)}"
+                    ),
+                },
+                is_error=True,
+            )
         import asyncio
         import concurrent.futures
         try:

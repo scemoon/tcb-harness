@@ -309,13 +309,45 @@ def get_system_prompt(agent_type: str) -> str:
 TOOL_DESCRIPTIONS = """
 ## Available Tools
 
+### Tool Call Format (REQUIRED)
+
+To call one or more tools in a single assistant turn, emit the structured
+``<minimax:tool_call>`` block.  Each tool call goes inside an
+``<invoke name="ToolName">`` element with one or more
+``<parameter name="arg">value</parameter>`` children.  You may put multiple
+``<invoke>`` blocks inside a single ``<minimax:tool_call>`` to run them in
+parallel.
+
+```xml
+<minimax:tool_call>
+<invoke name="Read">
+<parameter name="path">SPEC.md</parameter>
+</invoke>
+<invoke name="Bash">
+<parameter name="command">ls -la</parameter>
+<parameter name="timeout">30</parameter>
+</invoke>
+</minimax:tool_call>
+```
+
+Rules:
+- The outer wrapper is **always** ``<minimax:tool_call>...</minimax:tool_call>``.
+- Parameter values are written **inline** (no JSON encoding).
+- Escape only the five XML predefined entities: ``&lt;`` ``&gt;`` ``&amp;``
+  ``&quot;`` ``&apos;`` — do not invent new escapes.
+- You may emit multiple tool calls in one block; the engine will execute
+  them in document order.
+- Do NOT use bare ``{tool => "X", args => {...}}`` or
+  ``[TOOL_CALL]...[/TOOL_CALL]`` formats — those are legacy and will be
+  parsed only as a fallback for old session replays.
+
 ### File Operations
 - **Read**: read(path, offset=0, limit=0) - Read file contents. Returns content with line numbers.
 - **Write**: write(path, content) - Create or overwrite file with content.
 - **Edit**: edit(path, old_string, new_string) - Replace exact string in file. **CRITICAL**: old_string must be UNIQUE in the file — provide enough context (surrounding lines) to guarantee a single match. The edit WILL FAIL if old_string appears multiple times.
 - **Insert**: insert(path, line, text) - Insert text at a specific line. line=-1 for beginning, line=0 to insert after line 0, etc. Must read file first to verify target location.
 - **UndoEdit**: undo_edit(path) - Undo the most recent Edit/Insert on a file. Restores previous content.
-- **Glob**: glob(pattern) - Find files matching glob pattern (e.g., "**/*.py").
+- **Glob**: glob(pattern) - Find files matching a glob pattern (e.g., "**/*.py").
 - **Grep**: grep(pattern, include=None) - Search for regex pattern in files.
 - **List**: list(path=".") - List directory contents.
 - **ApplyPatch**: apply_patch(patch) - Apply a patch file. Supports Add/Update/Move/Delete File markers.
@@ -348,7 +380,7 @@ TOOL_DESCRIPTIONS = """
 
 ### MCP (CDH)
 - **MCPTool**: mcp_tool(server, tool, arguments) - Call a tool on a connected MCP server.
-- **MCPResources**: mcp_resources(server, action, uri) - List or read resources on an MCP server.
+- **MCPResources**: mcp_resources(server, action, uri) - List or read resources on a connected MCP server.
 
 ### LSP (CDH)
 - **LSP**: lsp(command, file_path, action, line, character, query) - Get code intelligence from a Language Server. Supported actions: diagnostics, gotoDefinition, findReferences, hover, documentSymbol, workspaceSymbol, gotoImplementation, callHierarchy, incomingCalls, outgoingCalls.
@@ -374,7 +406,7 @@ TOOL_DESCRIPTIONS = """
 - **TaskStop**: task_stop(task_id) - Stop a running task.
 - **TodoCreate**: todo_create(text) - Create a todo item. Returns todo id.
 - **TodoList**: todo_list() - List all todos.
-- **TodoComplete**: todo_complete(todo_id) - Mark a todo as done.
+- **TodoComplete**: todo_complete(todo_id) - Mark a todo as complete.
 """
 
 PLAN_INSTRUCTIONS = """

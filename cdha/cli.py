@@ -1,34 +1,77 @@
 import click
 import logging
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
 from cdha.config import ensure_dirs, load_config, save_config
 
 LOG_DIR = Path.home() / ".cdh" / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / "cdh.log"
+LOG_BACKUP_COUNT = 7  # keep 7 days of history
+
+_VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
 
-def setup_logging(log_level: str = "INFO"):
-    numeric_level = getattr(logging, log_level.upper(), logging.INFO)
-    handlers = [
-        logging.FileHandler(LOG_DIR / "cdh.log", mode="a"),
-    ]
+def setup_logging(log_level: str = "INFO") -> logging.Logger:
+    """Configure root logging to write to a daily-rotated ``cdh.log`` file.
 
-    logging.basicConfig(
-        level=numeric_level,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        handlers=handlers,
+    The active log is always ``~/.cdh/logs/cdh.log``; at midnight it is
+    rolled to ``cdh.log.YYYY-MM-DD`` and a fresh file is started.  Up to
+    :data:`LOG_BACKUP_COUNT` days of history are retained.
+
+    Returns the root logger so callers can attach additional handlers (e.g.
+    a console handler) without re-running ``basicConfig``.
+    """
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    level = log_level.upper()
+    if level not in _VALID_LOG_LEVELS:
+        level = "INFO"
+    numeric_level = getattr(logging, level)
+
+    handler = TimedRotatingFileHandler(
+        LOG_FILE,
+        when="midnight",
+        interval=1,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding="utf-8",
+        utc=False,
     )
+    handler.suffix = "%Y-%m-%d"
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+    )
+
+    root = logging.getLogger()
+    root.setLevel(numeric_level)
+    # Avoid stacking handlers if setup_logging() is called twice (e.g. by
+    # tests importing both the CLI and a sub-process entry point).
+    for h in list(root.handlers):
+        if isinstance(h, TimedRotatingFileHandler) and getattr(h, "baseFilename", "") == str(LOG_FILE):
+            root.removeHandler(h)
+    root.addHandler(handler)
+
+    # Silence chatty third-party loggers; keep the rest at the requested level.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("cdha").setLevel(logging.WARNING)
+    # Engine / provider / adapter loggers — leave at the requested level
+    # (do NOT cap the entire ``cdha`` namespace at WARNING any more, that
+    # was the bug which kept ``cdh.log`` empty).
+    return root
 
 
 @click.group()
-def cli():
+@click.option(
+    "--log-level",
+    type=click.Choice(sorted(_VALID_LOG_LEVELS), case_sensitive=False),
+    default="INFO",
+    show_default=True,
+    envvar="CDH_LOG_LEVEL",
+    help="Root logger verbosity. Defaults to INFO; daily-rotated to ~/.cdh/logs/cdh.log.",
+)
+def cli(log_level: str):
     """CDH Agent CLI - Cloud Dev Harness Agent commands."""
-    pass
+    setup_logging(log_level)
 
 
 @cli.group(invoke_without_command=True)
@@ -517,8 +560,6 @@ def config_mcp_disable(name):
         click.echo(f"Error: {err}")
     else:
         click.echo(f"MCP server '{name}' disabled.")
-
-
 @cli.command()
 @click.argument("command", required=False)
 @click.option("--list", "list_commands", is_flag=True, help="List all available commands")

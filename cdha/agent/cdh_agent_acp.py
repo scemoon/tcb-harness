@@ -8,14 +8,27 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import sys
 from pathlib import Path
 
 
+logger = logging.getLogger("cdha.agent.cdh_acp")
+
+
 def debug_log(*args, **kwargs):
-    """Debug log to stderr (safe for JSON-RPC on stdout)."""
-    print("[cdha]", *args, file=sys.stderr, flush=True)
+    """Debug log via the ``cdha.agent.cdh_acp`` logger.
+
+    Falls back to stderr if the logging system has not been configured
+    yet (e.g. during very early adapter import when ``setup_logging`` has
+    not been called).  This keeps the function safe to call from any
+    module-import-time path without breaking the JSON-RPC stream on stdout.
+    """
+    if logger.handlers or logging.getLogger().handlers:
+        logger.debug(" ".join(str(a) for a in args), **kwargs)
+    else:
+        print("[cdha]", *args, file=sys.stderr, flush=True)
 
 from cdha.agent.engine import AgentEngine
 from cdha.agent.session import AgentSession
@@ -24,6 +37,7 @@ from cdha.models.provider import ProviderRegistry
 from cdha.models.registry import ModelRegistry
 from cdha.models.messages import (
     StreamEventType,
+    ToolCategory,
     AgentMessage,
     TextBlock,
     ThinkBlock,
@@ -31,6 +45,7 @@ from cdha.models.messages import (
     ToolResult,
     SubAgentBlock,
     LifecycleStatus,
+    get_tool_category,
 )
 
 from cdha.models.providers.minimaxi_provider import MiniMaxiProvider
@@ -42,21 +57,30 @@ from cdha.models.providers.glm_provider import GLMProvider
 from cdha.models.providers.ollama_provider import OllamaProvider
 
 
-_TOOL_KIND_MAP: dict[str, str] = {
-    "Read": "read", "Write": "edit", "Edit": "edit", "Insert": "edit",
-    "UndoEdit": "edit",
-    "List": "read",
-    "Glob": "search", "Grep": "search",
-    "Bash": "execute",
-    "WebFetch": "fetch", "WebSearch": "search",
-    "Task": "other", "Agent": "other",
-    "TaskCreate": "other", "TaskGet": "other", "TaskList": "other",
-    "TaskUpdate": "other", "TaskOutput": "other", "TaskStop": "other",
-    "TodoCreate": "other", "TodoList": "other", "TodoComplete": "other",
-    "SendMessage": "other", "AskUser": "other",
-    "SkillTool": "other", "ToolSearch": "other",
-    "MCPTool": "other", "MCPResources": "other",
+_CATEGORY_TO_ACP_KIND: dict[str, str] = {
+    ToolCategory.FILE_READ: "read",
+    ToolCategory.FILE_WRITE: "edit",
+    ToolCategory.FILE_EDIT: "edit",
+    ToolCategory.FILE_LIST: "read",
+    ToolCategory.FILE_GLOB: "search",
+    ToolCategory.FILE_GREP: "search",
+    ToolCategory.BASH: "execute",
+    ToolCategory.WEB_FETCH: "fetch",
+    ToolCategory.WEB_SEARCH: "search",
+    ToolCategory.TASK: "other",
+    ToolCategory.TASK_MGMT: "other",
+    ToolCategory.INTERACTION: "other",
+    ToolCategory.UNKNOWN: "other",
 }
+
+
+def _kind_for_category(cat: ToolCategory) -> str:
+    """Map internal ``ToolCategory`` enum to ACP wire-format ``kind`` string.
+
+    The TUI expects ``"read"``, ``"edit"``, ``"search"``, ``"execute"``,
+    ``"fetch"`` or ``"other"`` (see ``tui/acp/protocol.py:ToolCall``).
+    """
+    return _CATEGORY_TO_ACP_KIND.get(cat, "other")
 
 
 _DEFAULT_MODES = {
@@ -70,6 +94,21 @@ _DEFAULT_MODES = {
 
 _OPEN_MARKER = "[TOOL_CALL]"
 _CLOSE_MARKER = "[/TOOL_CALL]"
+
+# Structured tool call markers (see engine.py MINIMAX_TOOL_CALL_RE).
+# The adapter's stream callback strips these from the user-visible text so
+# raw ``<minimax:tool_call>`` XML never reaches the chat.
+_MINIMAX_OPEN = "<minimax:tool_call>"
+_MINIMAX_CLOSE = "</minimax:tool_call>"
+
+
+def _extract_text_from_blocks(content: list) -> str:
+    """Concatenate the `text` field of each `text` block in a content list."""
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "text":
+            parts.append(item.get("text", ""))
+    return "".join(parts)
 
 
 def _scan_balanced_braces(text: str, open_pos: int) -> int | None:
@@ -193,6 +232,30 @@ def _language_for_path(path: str) -> str:
     return ""
 
 
+_STATUS_TO_WIRE: dict[str, str] = {
+    "pending": "pending",
+    "in_progress": "in_progress",
+    "running": "in_progress",
+    "complete": "completed",
+    "completed": "completed",
+    "failed": "failed",
+    "cancelled": "failed",
+}
+
+
+def _wire_status(value: str | None) -> str:
+    """Map an internal LifecycleStatus value to the ACP wire literal.
+
+    The ACP protocol (TUI side) expects ``ToolCallStatus = Literal["pending",
+    "in_progress", "completed", "failed"]``; the internal enum uses ``complete``
+    and ``cancelled``.  This helper normalises everything to a wire-valid value
+    and defaults to ``"completed"`` for any unknown value.
+    """
+    if not value:
+        return "completed"
+    return _STATUS_TO_WIRE.get(value, "completed")
+
+
 def _try_pretty_print_json(text: str) -> str:
     """If *text* looks like JSON, pretty-print it; otherwise return as-is.
 
@@ -278,6 +341,36 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
                 "content": {"type": "text", "text": f"📄 {path}"},
             }]
 
+    if name == "ApplyPatch":
+        patch = str(arguments.get("patch", ""))
+        if patch:
+            return [{
+                "type": "content",
+                "content": {"type": "text", "text": f"```diff\n{patch}\n```"},
+            }]
+
+    if name == "Insert":
+        path = str(arguments.get("path", ""))
+        line = arguments.get("line", -1)
+        text = str(arguments.get("text", ""))
+        if path:
+            lang = _language_for_path(path)
+            return [{
+                "type": "content",
+                "content": {
+                    "type": "text",
+                    "text": f"📝 {path} (line {line})\n```{lang}\n{text}\n```",
+                },
+            }]
+
+    if name == "UndoEdit":
+        path = str(arguments.get("path", ""))
+        if path:
+            return [{
+                "type": "content",
+                "content": {"type": "text", "text": f"↩️ Undo edit on {path}"},
+            }]
+
     args_text = json.dumps(arguments, indent=2, ensure_ascii=False)
     return [{
         "type": "content",
@@ -309,7 +402,8 @@ def _find_bare_legacy_tool_call(text: str) -> int | None:
 
 
 def _filter_tool_call_text(text: str) -> str:
-    """Remove complete [TOOL_CALL]...[/TOOL_CALL] blocks from text.
+    """Remove complete ``[TOOL_CALL]...[/TOOL_CALL]`` and
+    ``<minimax:tool_call>...</minimax:tool_call>`` blocks from text.
 
     Incomplete blocks (no closing marker) are left in place so the caller
     can hold the buffer and wait for more input.
@@ -318,14 +412,35 @@ def _filter_tool_call_text(text: str) -> str:
     pos = 0
     while pos < len(text):
         parsed = _extract_legacy_tool_call(text[pos:])
-        if parsed is None:
+        minimax_start = text.find(_MINIMAX_OPEN, pos)
+        minimax_end = (
+            text.find(_MINIMAX_CLOSE, pos) if minimax_start >= 0 else -1
+        )
+        minimax_span = (
+            (minimax_start, minimax_end + len(_MINIMAX_CLOSE))
+            if minimax_start >= 0 and minimax_end >= 0
+            else None
+        )
+
+        candidates: list[tuple[int, tuple[int, int]]] = []
+        if parsed is not None:
+            candidates.append((parsed["span"][0], parsed["span"]))
+        if minimax_span is not None:
+            candidates.append((minimax_span[0], minimax_span))
+
+        if not candidates:
             out.append(text[pos:])
             break
-        start, end = parsed["span"]
-        before = text[pos:pos + start]
+
+        candidates.sort(key=lambda c: c[0])
+        rel_start, span = candidates[0]
+        rel_end = span[1]
+        abs_start = pos + rel_start
+        abs_end = pos + rel_end
+        before = text[pos:abs_start]
         if before:
             out.append(before)
-        pos = pos + end
+        pos = abs_end
     return "".join(out)
 
 
@@ -403,7 +518,7 @@ class CDHACPAdapter:
         - <thinking>...</thinking> tags
         Returns a list of TextBlock, ThinkBlock, and MsgToolCall blocks.
         """
-        THINKING_RE = re.compile(r'<thinking>(.*?)</thinking>', re.DOTALL)
+        THINKING_RE = re.compile(r'<think(?:ing)?>(.*?)</think(?:ing)?>', re.DOTALL)
 
         blocks: list = []
         remaining = text
@@ -498,7 +613,7 @@ class CDHACPAdapter:
         update = {
             "sessionUpdate": "tool_call_update",
             "toolCallId": block.tool_use_id,
-            "status": "failed" if block.is_error else "complete",
+            "status": "failed" if block.is_error else "completed",
             "content": existing + content_block,
         }
         if block.tool_use_id in self.tool_calls:
@@ -546,7 +661,6 @@ class CDHACPAdapter:
         """Create new session."""
         cfg = load_config()
         self.agent = _create_engine(cwd)
-        self.agent.set_agent(cfg.default_mode)
 
         session = AgentSession()
         session.name = "New Session"
@@ -580,21 +694,23 @@ class CDHACPAdapter:
         if not loaded:
             return {"modes": _DEFAULT_MODES}
 
-        for msg in self.agent._session.messages:
-            role = msg.get("role", "")
+        # Walk the in-memory context (preserves list-of-blocks structure)
+        # instead of the raw _session.messages dicts, which only carry
+        # `content: str`.  Engine.chat_stream() stores tool_use / tool_result
+        # blocks in context.Message.content, and we need them at replay time.
+        for ctx_msg in self.agent.context.messages:
+            role = ctx_msg.role
+            content = ctx_msg.content
             if role == "user":
-                content = msg.get("content", "")
+                user_text = content if isinstance(content, str) else _extract_text_from_blocks(content)
                 self.send_session_update({
                     "sessionUpdate": "user_message_chunk",
-                    "content": {"type": "text", "text": content},
+                    "content": {"type": "text", "text": user_text},
                 })
             elif role == "assistant":
-                # Handle both old format (content as str/list) and new format (blocks)
-                if "blocks" in msg:
-                    agent_msg = AgentMessage.from_dict(msg)
-                    blocks = agent_msg.blocks
+                if isinstance(content, str):
+                    blocks = self._content_to_blocks(content)
                 else:
-                    content = msg.get("content", "")
                     blocks = self._content_to_blocks(content)
 
                 for block in blocks:
@@ -613,8 +729,8 @@ class CDHACPAdapter:
                                 "content": {"type": "text", "text": f"```thinking\n{filtered_thought}\n```"},
                             })
                     elif isinstance(block, MsgToolCall):
-                        tool_kind = _TOOL_KIND_MAP.get(block.name, "other")
-                        content = _build_tool_call_content(
+                        tool_kind = _kind_for_category(get_tool_category(block.name))
+                        content_blocks = _build_tool_call_content(
                             block.name, block.arguments or {}
                         )
                         self.tool_calls[block.id] = {
@@ -622,8 +738,8 @@ class CDHACPAdapter:
                             "toolCallId": block.id,
                             "title": block.name,
                             "kind": tool_kind,
-                            "status": block.status.value,
-                            "content": content,
+                            "status": _wire_status(block.status.value),
+                            "content": content_blocks,
                         }
                         self.send_session_update(self.tool_calls[block.id])
                     elif isinstance(block, ToolResult):
@@ -634,16 +750,22 @@ class CDHACPAdapter:
                             "content": {"type": "text", "text": block.result},
                         }] if block.result else []
                         self.send_session_update({
-                            "sessionUpdate": "tool_call",
-                            "toolCallId": block.id,
-                            "title": f"SubAgent: {block.agent_type}",
-                            "kind": "other",
-                            "status": block.status.value,
-                            "content": content_block,
+                            "sessionUpdate": "subagent_start",
+                            "subagentId": block.id,
+                            "agentType": block.agent_type,
+                        })
+                        if block.result:
+                            self.send_session_update({
+                                "sessionUpdate": "subagent_chunk",
+                                "subagentId": block.id,
+                                "text": block.result,
+                            })
+                        self.send_session_update({
+                            "sessionUpdate": "subagent_end",
+                            "subagentId": block.id,
+                            "agentType": block.agent_type,
                         })
             elif role == "tool":
-                # Tool results are stored as separate "tool" role messages
-                content = msg.get("content", "")
                 if isinstance(content, list):
                     for item in content:
                         if isinstance(item, dict) and item.get("type") == "tool_result":
@@ -653,6 +775,13 @@ class CDHACPAdapter:
                                 is_error=item.get("is_error", False),
                             )
                             self._emit_tool_result(tr)
+                elif isinstance(content, dict) and content.get("type") == "tool_result":
+                    tr = ToolResult(
+                        tool_use_id=content.get("tool_use_id", ""),
+                        content=content.get("content", ""),
+                        is_error=content.get("is_error", False),
+                    )
+                    self._emit_tool_result(tr)
 
         return {
             "modes": {
@@ -665,10 +794,11 @@ class CDHACPAdapter:
         """Create a thinking-aware streaming callback for real-time token output.
 
         Buffers text deltas from the provider, detects <thinking>...</thinking>,
-        [TOOL_CALL]...[/TOOL_CALL] and bare `{tool => "X", args => { ... }}`
-        boundaries (all cross-chunk tolerant), strips them from the text
-        buffer so they don't appear as raw agent messages, and routes
-        remaining content to the appropriate ACP session update type.
+        [TOOL_CALL]...[/TOOL_CALL], <minimax:tool_call>...</minimax:tool_call>,
+        and bare `{tool => "X", args => { ... }}` boundaries (all cross-chunk
+        tolerant), strips them from the text buffer so they don't appear as
+        raw agent messages, and routes remaining content to the appropriate
+        ACP session update type.
 
         Tool call notifications are sent by TOOL_CALL_START/TOOL_CALL_COMPLETE
         events from the engine, not from text parsing here.
@@ -676,6 +806,7 @@ class CDHACPAdapter:
         text_buffer = ""
         in_thinking = False
         in_tool_call = False
+        in_minimax_tool_call = False
         in_bare_tool_call = False
         bare_tool_start = 0
 
@@ -688,8 +819,9 @@ class CDHACPAdapter:
             })
 
         def _safe_start(s: str) -> str:
-            """Return text before any partial <thinking or [TOOL_CALL] tag at buffer end."""
-            tags = ("<thinking>", "[TOOL_CALL]")
+            """Return text before any partial <thinking / <think or [TOOL_CALL] or
+            <minimax:tool_call> tag at buffer end."""
+            tags = ("<thinking>", "<think>", "[TOOL_CALL]", _MINIMAX_OPEN)
             cut = len(s)
             for tag in tags:
                 for i in range(len(tag) - 1, 0, -1):
@@ -700,12 +832,21 @@ class CDHACPAdapter:
 
         def on_chunk(text: str):
             nonlocal text_buffer, in_thinking, in_tool_call
-            nonlocal in_bare_tool_call, bare_tool_start
+            nonlocal in_minimax_tool_call, in_bare_tool_call, bare_tool_start
             text_buffer += text
 
             while text_buffer:
                 if in_thinking:
-                    idx = text_buffer.find("</thinking>")
+                    close_thinking = text_buffer.find("</thinking>")
+                    close_think = (
+                        text_buffer.find("</think>")
+                        if close_thinking < 0 else -1
+                    )
+                    idx = close_thinking if close_thinking >= 0 else close_think
+                    close_len = (
+                        len("</thinking>") if close_thinking >= 0
+                        else len("</think>") if close_think >= 0 else 0
+                    )
                     if idx >= 0:
                         thinking = text_buffer[:idx]
                         if thinking:
@@ -713,7 +854,7 @@ class CDHACPAdapter:
                                 "sessionUpdate": "agent_thought_chunk",
                                 "content": {"type": "text", "text": f"```thinking\n{thinking}\n```"},
                             })
-                        text_buffer = text_buffer[idx + len("</thinking>"):]
+                        text_buffer = text_buffer[idx + close_len:]
                         in_thinking = False
                     else:
                         break
@@ -726,6 +867,16 @@ class CDHACPAdapter:
                     # The engine emits TOOL_CALL_START/COMPLETE separately.
                     text_buffer = text_buffer[close_idx + len(_CLOSE_MARKER):]
                     in_tool_call = False
+                elif in_minimax_tool_call:
+                    close_idx = text_buffer.find(_MINIMAX_CLOSE)
+                    if close_idx < 0:
+                        # No close marker yet — hold the whole buffer.
+                        break
+                    # Strip <minimax:tool_call>...</minimax:tool_call> from
+                    # the text buffer.  The engine emits the structured
+                    # TOOL_CALL_START/COMPLETE events separately.
+                    text_buffer = text_buffer[close_idx + len(_MINIMAX_CLOSE):]
+                    in_minimax_tool_call = False
                 elif in_bare_tool_call:
                     m = _BARE_LEGACY_RE.match(text_buffer, bare_tool_start)
                     if m is None:
@@ -749,22 +900,63 @@ class CDHACPAdapter:
                     bare_tool_start = 0
                 else:
                     tc_idx = text_buffer.find(_OPEN_MARKER)
+                    minimax_idx = text_buffer.find(_MINIMAX_OPEN)
                     think_idx = text_buffer.find("<thinking>")
+                    if think_idx < 0:
+                        think_short_idx = text_buffer.find("<think>")
+                    else:
+                        think_short_idx = -1
                     bare_idx = _find_bare_legacy_tool_call(text_buffer)
 
-                    if bare_idx is not None and (tc_idx < 0 or bare_idx < tc_idx) and \
-                       (think_idx < 0 or bare_idx < think_idx):
-                        if bare_idx > 0:
-                            _emit_message(text_buffer[:bare_idx])
-                        # Peek: is the bare tool call complete in the buffer?
-                        m = _BARE_LEGACY_RE.match(text_buffer, bare_idx)
-                        args_open = text_buffer.find("{", m.end() - 1)
+                    # Pick the earliest opener among all known markers.
+                    candidates: list[tuple[int, str]] = []
+                    if tc_idx >= 0:
+                        candidates.append((tc_idx, "legacy"))
+                    if minimax_idx >= 0:
+                        candidates.append((minimax_idx, "minimax"))
+                    if think_idx >= 0:
+                        candidates.append((think_idx, "think"))
+                    if think_short_idx >= 0:
+                        candidates.append((think_short_idx, "think_short"))
+                    if bare_idx is not None:
+                        candidates.append((bare_idx, "bare"))
+
+                    if not candidates:
+                        safe = _safe_start(text_buffer)
+                        if safe:
+                            _emit_message(safe)
+                        text_buffer = text_buffer[len(safe):]
+                        if not _safe_start(text_buffer):
+                            text_buffer = ""
+                        continue
+
+                    candidates.sort()
+                    next_idx, kind = candidates[0]
+
+                    if next_idx > 0:
+                        _emit_message(text_buffer[:next_idx])
+
+                    if kind == "minimax":
+                        text_buffer = text_buffer[next_idx + len(_MINIMAX_OPEN):]
+                        in_minimax_tool_call = True
+                    elif kind == "legacy":
+                        text_buffer = text_buffer[next_idx + len(_OPEN_MARKER):]
+                        in_tool_call = True
+                    elif kind in ("think", "think_short"):
+                        tag_len = len("<thinking>") if kind == "think" else len("<think>")
+                        text_buffer = text_buffer[next_idx + tag_len:]
+                        in_thinking = True
+                    else:
+                        # Bare legacy: peek whether the closing brace is
+                        # already in the buffer.
+                        m = _BARE_LEGACY_RE.match(text_buffer, next_idx)
+                        args_open = text_buffer.find("{", m.end() - 1) if m else -1
                         args_close = (
                             _scan_balanced_braces(text_buffer, args_open)
                             if args_open >= 0 else None
                         )
                         outer_close = (
-                            _scan_balanced_braces(text_buffer, bare_idx)
+                            _scan_balanced_braces(text_buffer, next_idx)
                             if args_close is not None else None
                         )
                         if (
@@ -773,32 +965,11 @@ class CDHACPAdapter:
                             and outer_close is not None
                             and outer_close > args_close
                         ):
-                            # Strip bare tool call from buffer.
-                            # The engine emits TOOL_CALL_START/COMPLETE separately.
                             text_buffer = text_buffer[outer_close + 1:]
                         else:
-                            # Hold buffer until the tool call completes.
                             in_bare_tool_call = True
-                            bare_tool_start = bare_idx
+                            bare_tool_start = next_idx
                             break
-                    elif tc_idx >= 0 and (think_idx < 0 or tc_idx < think_idx):
-                        if tc_idx > 0:
-                            _emit_message(text_buffer[:tc_idx])
-                        text_buffer = text_buffer[tc_idx + len(_OPEN_MARKER):]
-                        in_tool_call = True
-                    elif think_idx >= 0:
-                        before = text_buffer[:think_idx]
-                        if before:
-                            _emit_message(before)
-                        text_buffer = text_buffer[think_idx + len("<thinking>"):]
-                        in_thinking = True
-                    else:
-                        safe = _safe_start(text_buffer)
-                        if safe:
-                            _emit_message(safe)
-                        text_buffer = text_buffer[len(safe):]
-                        if not _safe_start(text_buffer):
-                            text_buffer = ""
 
         return on_chunk
 
@@ -816,28 +987,18 @@ class CDHACPAdapter:
         self.agent.on_text_chunk = self._make_stream_callback()
         async for event in self.agent.chat_stream(user_message):
             if event.type == StreamEventType.TEXT_DELTA:
-                text = event.text
-                if self.in_thinking:
-                    self.send_session_update({
-                        "sessionUpdate": "agent_thought_chunk",
-                        "content": {"type": "text", "text": text},
-                    })
-                    if text.strip().endswith("```"):
-                        self.in_thinking = False
-                elif text.lstrip().startswith("```thinking"):
-                    self.send_session_update({
-                        "sessionUpdate": "agent_thought_chunk",
-                        "content": {"type": "text", "text": text},
-                    })
-                    if not text.strip().endswith("```"):
-                        self.in_thinking = True
-                else:
-                    self.send_session_update({
-                        "sessionUpdate": "agent_message_chunk",
-                        "content": {"type": "text", "text": text},
-                    })
+                self.send_session_update({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": event.text},
+                })
+            elif event.type == StreamEventType.THINKING:
+                thought_text = f"```thinking\n{event.thinking}\n```"
+                self.send_session_update({
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"type": "text", "text": thought_text},
+                })
             elif event.type == StreamEventType.TOOL_CALL_START:
-                tool_kind = _TOOL_KIND_MAP.get(event.tool_name, "other")
+                tool_kind = _kind_for_category(event.tool_category)
                 self.tool_calls[event.tool_id] = {
                     "sessionUpdate": "tool_call",
                     "toolCallId": event.tool_id,
@@ -873,7 +1034,7 @@ class CDHACPAdapter:
                     })
                     self.send_session_update(self.tool_calls[event.tool_id])
             elif event.type == StreamEventType.TOOL_RESULT:
-                status = "failed" if event.result_is_error else "complete"
+                status = "failed" if event.result_is_error else "completed"
                 result_text = event.result_content or ""
                 # Wrap multi-line results in a fenced code block so the TUI
                 # renders them as a code block (MarkdownContent) rather than
@@ -948,12 +1109,33 @@ class CDHACPAdapter:
                 })
             elif event.type == StreamEventType.ASK_USER:
                 # Build tool call content for the permission request
-                tool_kind = _TOOL_KIND_MAP.get(event.ask_action, "other")
+                tool_kind = _kind_for_category(get_tool_category(event.ask_action))
                 pending = (self.agent._pending_approval or {}).get("tool_call", {})
                 tool_args = pending.get("input", {}) if pending else {}
                 tool_content = _build_tool_call_content(
                     event.ask_action, tool_args
                 ) if tool_args else []
+
+                # Prepend the question as a visible content block so the TUI
+                # permission dialog shows *what* the agent wants to do instead
+                # of an empty ``_meta`` that the TUI ignores.
+                question_block = {
+                    "type": "content",
+                    "content": {"type": "text", "text": f"❓ {event.ask_question}"},
+                }
+                tool_content = [question_block] + tool_content
+
+                # Guard against orphan permission requests: if the engine
+                # didn't supply a tool id, fall back to the pending approval
+                # id; if that's also empty, log and skip the request so the
+                # TUI doesn't render a dialog with no associated tool widget.
+                tool_call_id = event.tool_id or pending.get("id", "")
+                if not tool_call_id:
+                    debug_log(
+                        "ASK_USER skipped: no tool_id (action=%s question=%s)",
+                        event.ask_action, event.ask_question,
+                    )
+                    continue
 
                 permission_params = {
                     "sessionId": session_id,
@@ -964,15 +1146,11 @@ class CDHACPAdapter:
                         {"name": "Reject always", "optionId": "reject_always", "kind": "reject_always"},
                     ],
                     "toolCall": {
-                        "toolCallId": event.tool_id,
+                        "toolCallId": tool_call_id,
                         "title": event.ask_action,
                         "kind": tool_kind,
                         "content": tool_content,
-                        "status": "requires_approval",
-                    },
-                    "_meta": {
-                        "question": event.ask_question,
-                        "action": event.ask_action,
+                        "status": "pending",
                     },
                 }
                 try:
@@ -990,8 +1168,8 @@ class CDHACPAdapter:
                 if result:
                     result_str = result.get("content", "") or ""
                     is_error = result.get("is_error", False)
-                    tid = result.get("tool_use_id", "")
-                    status = "failed" if is_error else "complete"
+                    tid = result.get("tool_use_id", "") or tool_call_id
+                    status = "failed" if is_error else "completed"
                     content_block = [{
                         "type": "content",
                         "content": {"type": "text", "text": result_str},
@@ -1020,7 +1198,37 @@ class CDHACPAdapter:
 
         self.agent.save_session()
         stop_reason = "cancelled" if self.agent._cancelled else "end_turn"
-        return {"stopReason": stop_reason}
+        usage = self._build_session_usage()
+        return {
+            "sessionId": self.session_id,
+            "stopReason": stop_reason,
+            "usage": usage,
+        }
+
+    def _build_session_usage(self) -> dict:
+        """Aggregate per-turn usage from the engine into a single Usage dict.
+
+        The TUI's ``tui/acp/protocol.py:SessionPromptResponse.usage`` is a
+        free-form ``Usage`` object.  We sum the per-turn input/output/total
+        tokens tracked by the engine; missing fields fall back to 0.
+        """
+        turn_usages = getattr(self.agent, "_turn_usages", None) or []
+        if not turn_usages:
+            return {
+                "total_tokens": int(getattr(self.agent, "total_tokens", 0) or 0),
+                "input_tokens": 0,
+                "output_tokens": 0,
+            }
+        total_in = sum(int(u.get("input_tokens", 0) or 0) for u in turn_usages)
+        total_out = sum(int(u.get("output_tokens", 0) or 0) for u in turn_usages)
+        total_all = sum(int(u.get("total_tokens", 0) or 0) for u in turn_usages)
+        if total_all == 0:
+            total_all = total_in + total_out
+        return {
+            "total_tokens": total_all,
+            "input_tokens": total_in,
+            "output_tokens": total_out,
+        }
 
     async def session_cancel(self, session_id: str, _meta: dict):
         """Cancel current session."""

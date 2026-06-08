@@ -9,12 +9,35 @@ from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
+from cdha.models.errors import (
+    ProviderError, TransientProviderError, retry_after_seconds,
+)
 from cdha.models.provider import ChatResponse, Message, ModelResponse, Provider, ProviderRegistry
 
 logger = logging.getLogger("cdha.provider.minimaxi")
 
 LOG_DIR = Path.home() / ".cdh" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _raise_for_status(resp: httpx.Response, body_text: str = "") -> None:
+    """Raise a :class:`ProviderError` subclass if ``resp.status_code`` is not 2xx.
+
+    Falls back to :class:`TransientProviderError` for 5xx, and to the
+    specific :class:`RateLimitError` / :class:`AuthError` /
+    :class:`ContextLengthError` subclasses when the body matches.
+    Callers *must* provide ``body_text`` for streaming responses (e.g.
+    after calling ``await resp.aread()``).
+    """
+    if 200 <= resp.status_code < 300:
+        return
+    if not body_text:
+        body_text = resp.text
+    raise Provider.classify_http_error(
+        resp.status_code,
+        body_text,
+        retry_after=retry_after_seconds(resp),
+    )
 
 
 def _log_request(model: str, messages: list, response_data: dict = None, error: str = None):
@@ -60,7 +83,7 @@ class MiniMaxiProvider(Provider):
         if not key:
             error_msg = "API key not configured. Set MINMAXI_API_KEY."
             _log_request(model, messages, error=error_msg)
-            return ModelResponse(content=[{"type": "text", "text": error_msg}], model=model)
+            raise ProviderError(error_msg)
 
         start_time = time.time()
         try:
@@ -81,6 +104,15 @@ class MiniMaxiProvider(Provider):
                 elapsed = time.time() - start_time
                 logger.info(f"[{req_id}] Response status: {resp.status_code}, elapsed: {elapsed:.2f}s")
 
+                if resp.status_code != 200:
+                    error_text = resp.text
+                    logger.error(f"[{req_id}] Non-2xx HTTP {resp.status_code}: {error_text[:500]}")
+                    _log_request(model, messages, error=f"HTTP {resp.status_code}: {error_text[:500]}")
+                    raise Provider.classify_http_error(
+                        resp.status_code, error_text,
+                        retry_after=retry_after_seconds(resp),
+                    )
+
                 data = resp.json()
                 choice = data.get("choices", [{}])[0]
                 content = choice.get("message", {}).get("content", "")
@@ -94,16 +126,18 @@ class MiniMaxiProvider(Provider):
                     usage=data.get("usage", {}),
                     raw=data,
                 )
+        except ProviderError:
+            raise
         except httpx.ConnectError as e:
             error_msg = f"Connection error: {e}"
             logger.error(f"[{req_id}] {error_msg}")
             _log_request(model, messages, error=error_msg)
-            return ModelResponse(content=[{"type": "text", "text": f"Connection error: {e}"}], model=model)
+            raise TransientProviderError(error_msg) from e
         except Exception as e:
             error_msg = f"Error: {e}"
             logger.exception(f"[{req_id}] {error_msg}")
             _log_request(model, messages, error=error_msg)
-            return ModelResponse(content=[{"type": "text", "text": f"Error: {e}"}], model=model)
+            raise TransientProviderError(error_msg) from e
 
     async def chat_stream_response(
         self,
@@ -118,7 +152,7 @@ class MiniMaxiProvider(Provider):
 
         key = self.resolve_api_key(self.api_key)
         if not key:
-            return ChatResponse(content="API key not configured.")
+            raise ProviderError("API key not configured.")
 
         start_time = time.time()
         content_parts: list[str] = []
@@ -139,12 +173,9 @@ class MiniMaxiProvider(Provider):
                         **kwargs,
                     },
                 ) as resp:
-                    if resp.status_code != 200:
-                        error_body = await resp.aread()
-                        error_text = error_body.decode("utf-8", errors="replace")
-                        logger.error(f"[{req_id}] Stream error HTTP {resp.status_code}: {error_text[:500]}")
-                        return ChatResponse(content=f"API Error {resp.status_code}: {error_text[:200]}")
-
+                    if resp.status_code >= 400:
+                        error_body = (await resp.aread()).decode("utf-8", errors="replace")
+                        _raise_for_status(resp, body_text=error_body)
                     async for line in resp.aiter_lines():
                         if line.startswith("data: ") and line[6:] != "[DONE]":
                             try:
@@ -162,14 +193,20 @@ class MiniMaxiProvider(Provider):
 
             elapsed = time.time() - start_time
             logger.info(f"[{req_id}] Stream complete, elapsed: {elapsed:.2f}s, chars: {sum(len(p) for p in content_parts)}")
+        except ProviderError:
+            # Already classified — propagate verbatim.
+            _log_request(model, messages, error="provider error (see exception)")
+            raise
         except httpx.ConnectError as e:
             error_msg = f"Connection error: {e}"
             logger.error(f"[{req_id}] {error_msg}")
-            return ChatResponse(content=error_msg)
+            _log_request(model, messages, error=error_msg)
+            raise TransientProviderError(error_msg) from e
         except Exception as e:
             error_msg = f"Error: {e}"
             logger.exception(f"[{req_id}] {error_msg}")
-            return ChatResponse(content=error_msg)
+            _log_request(model, messages, error=error_msg)
+            raise TransientProviderError(error_msg) from e
 
         _log_request(model, messages, response_data={"stream": True})
         return ChatResponse(content="".join(content_parts))
@@ -187,8 +224,7 @@ class MiniMaxiProvider(Provider):
         if not key:
             error_msg = "API key not configured."
             _log_request(model, messages, error=error_msg)
-            yield error_msg
-            return
+            raise ProviderError(error_msg)
 
         start_time = time.time()
         full_content = []
@@ -218,8 +254,10 @@ class MiniMaxiProvider(Provider):
                         error_text = error_body.decode("utf-8", errors="replace")
                         logger.error(f"[{req_id}] Stream error HTTP {resp.status_code}: {error_text[:1000]}")
                         _log_request(model, messages, error=f"HTTP {resp.status_code}: {error_text[:500]}")
-                        yield f"API Error {resp.status_code}: {error_text[:200]}"
-                        return
+                        raise Provider.classify_http_error(
+                            resp.status_code, error_text,
+                            retry_after=retry_after_seconds(resp),
+                        )
 
                     async for line in resp.aiter_lines():
                         if line.startswith("data: ") and line[6:] != "[DONE]":
@@ -238,18 +276,18 @@ class MiniMaxiProvider(Provider):
                 elapsed = time.time() - start_time
                 logger.info(f"[{req_id}] Stream complete, elapsed: {elapsed:.2f}s, chars: {len(full_content)}")
                 response_data = {"stream": True, "full_content_length": len(full_content)}
+        except ProviderError:
+            raise
         except httpx.ConnectError as e:
             error_msg = f"Connection error: {e}"
             logger.error(f"[{req_id}] {error_msg}")
             _log_request(model, messages, error=error_msg)
-            yield error_msg
-            return
+            raise TransientProviderError(error_msg) from e
         except Exception as e:
             error_msg = f"Error: {e}"
             logger.exception(f"[{req_id}] {error_msg}")
             _log_request(model, messages, error=error_msg)
-            yield error_msg
-            return
+            raise TransientProviderError(error_msg) from e
 
         _log_request(model, messages, response_data=response_data)
 

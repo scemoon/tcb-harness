@@ -7,10 +7,20 @@ from unittest.mock import Mock, patch, MagicMock
 import pytest
 
 from cdha.agent.cdh_agent_acp import CDHACPAdapter
+from cdha.agent.context import Message
 
 
 def _collect_updates(adapter: CDHACPAdapter) -> list[dict]:
     return [call[0][0] for call in adapter.send_session_update.call_args_list]
+
+
+def _install_context(mock_engine, raw_messages: list[dict]) -> None:
+    """Convert the legacy `_session.messages` shape into a populated
+    `context.messages` list so the adapter (which now reads context.messages)
+    can replay them.  Each dict in raw_messages is turned into a
+    ``context.Message`` preserving ``role`` and ``content``.
+    """
+    mock_engine.context.messages = [Message.from_dict(m) for m in raw_messages]
 
 
 @pytest.fixture
@@ -26,11 +36,12 @@ async def test_session_load_legacy_tool_call(mock_create_engine, mock_load_confi
     """Session load with legacy [TOOL_CALL] format produces tool_call updates."""
     mock_engine = MagicMock()
     mock_engine.load_session.return_value = True
-    mock_engine._session.messages = [
+    raw_messages = [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content":
             "before [TOOL_CALL]{tool => \"Read\", args => {--path \"/f\"}}[/TOOL_CALL] after"},
     ]
+    _install_context(mock_engine, raw_messages)
     mock_create_engine.return_value = mock_engine
     mock_load_config.return_value.default_mode = "agent"
 
@@ -53,15 +64,14 @@ async def test_session_load_agent_message_blocks(mock_create_engine, mock_load_c
     """Session load with new AgentMessage block format."""
     mock_engine = MagicMock()
     mock_engine.load_session.return_value = True
-    mock_engine._session.messages = [
+    raw_messages = [
         {"role": "user", "content": "hello"},
-            {
-                "role": "assistant",
-                "blocks": [
-                    {"type": "text", "text": "hello world"},
-                ]
-            },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hello world"}],
+        },
     ]
+    _install_context(mock_engine, raw_messages)
     mock_create_engine.return_value = mock_engine
     mock_load_config.return_value.default_mode = "agent"
 
@@ -79,12 +89,13 @@ async def test_session_load_multiple_tool_calls(mock_create_engine, mock_load_co
     """Session with multiple tool calls sends a tool_call for each."""
     mock_engine = MagicMock()
     mock_engine.load_session.return_value = True
-    mock_engine._session.messages = [
+    raw_messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content":
             "[TOOL_CALL]{tool => \"R\", args => {--path \"a\"}}[/TOOL_CALL]"
             "[TOOL_CALL]{tool => \"W\", args => {--path \"b\" --content \"c\"}}[/TOOL_CALL]"},
     ]
+    _install_context(mock_engine, raw_messages)
     mock_create_engine.return_value = mock_engine
     mock_load_config.return_value.default_mode = "agent"
 
@@ -102,7 +113,7 @@ async def test_session_load_tool_result_role(mock_create_engine, mock_load_confi
     """Session with separate 'tool' role messages emits tool_call_update."""
     mock_engine = MagicMock()
     mock_engine.load_session.return_value = True
-    mock_engine._session.messages = [
+    raw_messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content":
             "[TOOL_CALL]{tool => \"Read\", args => {--path \"/f\"}}[/TOOL_CALL]"},
@@ -111,6 +122,7 @@ async def test_session_load_tool_result_role(mock_create_engine, mock_load_confi
              "content": "file content", "is_error": False}
         ]},
     ]
+    _install_context(mock_engine, raw_messages)
     mock_create_engine.return_value = mock_engine
     mock_load_config.return_value.default_mode = "agent"
 

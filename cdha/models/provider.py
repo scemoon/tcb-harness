@@ -328,6 +328,50 @@ class Provider(ABC):
             usage=response.usage,
         )
 
+    # ── Error classification ────────────────────────────────────────
+
+    @staticmethod
+    def classify_http_error(
+        status_code: int,
+        body: str,
+        *,
+        retry_after: Optional[float] = None,
+    ) -> "ProviderError":
+        """Convert an upstream HTTP error into the most specific
+        :class:`ProviderError` subclass.
+
+        The 4 KiB body cap is applied here too so callers don't have to
+        remember to truncate before constructing the exception.
+        """
+        from cdha.models.errors import (
+            AuthError,
+            ContextLengthError,
+            ProviderError,
+            RateLimitError,
+            TransientProviderError,
+        )
+        snippet = (body or "").strip()
+        if status_code == 429:
+            return RateLimitError(
+                "rate limit exceeded", status_code=status_code,
+                retry_after=retry_after, body=snippet,
+            )
+        if status_code in (401, 403):
+            return AuthError(
+                "authentication failed", status_code=status_code, body=snippet,
+            )
+        if status_code == 400 and "context" in snippet.lower() and "length" in snippet.lower():
+            return ContextLengthError(
+                "context length exceeded", status_code=status_code, body=snippet,
+            )
+        if 500 <= status_code < 600:
+            return TransientProviderError(
+                f"upstream {status_code}", status_code=status_code, body=snippet,
+            )
+        return ProviderError(
+            f"upstream error {status_code}", status_code=status_code, body=snippet,
+        )
+
 
 class ProviderRegistry:
     _providers: dict[str, type[Provider]] = {}

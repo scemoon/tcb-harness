@@ -89,51 +89,61 @@ class Sandbox:
         return bwrap_args
 
     def _set_resource_limits(self) -> None:
-        limits = self.config.resource_limits
-
-        try:
-            resource.setrlimit(resource.RLIMIT_CPU, (limits.cpu_time, limits.cpu_time + 5))
-        except (ValueError, resource.error):
-            pass
-
-        try:
-            mem_bytes = limits.memory_mb * 1024 * 1024
-            resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-        except (ValueError, resource.error):
-            pass
-
-        try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (limits.max_procs, limits.max_procs + 5))
-        except (ValueError, resource.error):
-            pass
-
-        try:
-            resource.setrlimit(resource.RLIMIT_NOFILE, (limits.max_open_files, limits.max_open_files + 10))
-        except (ValueError, resource.error):
-            pass
-
-        try:
-            if limits.max_pseudo_terminals > 0:
-                resource.setrlimit(resource.RLIMIT_NPTYS, (limits.max_pseudo_terminals, limits.max_pseudo_terminals + 2))
-        except (ValueError, resource.error):
-            pass
+        """Deprecated: applied rlimits to the parent process which broke
+        ``subprocess.run``.  Kept as a no-op for backward compatibility —
+        use :meth:`_exec_direct` (which now applies the limits in a
+        ``preexec_fn``) instead.
+        """
+        return
 
     def exec(self, cmd: str, timeout: int = 60) -> dict:
+        """Public entry point — dispatches to the right backend for the mode."""
         mode = self.config.mode
 
         if mode == SandboxMode.NONE:
             return self._exec_direct(cmd, timeout)
-        elif mode == SandboxMode.BUBBLEWRAP:
+        if mode == SandboxMode.BUBBLEWRAP:
             if self._check_bwrap_available():
                 return self._exec_bwrap(cmd, timeout)
             return self._exec_direct(cmd, timeout)
-        elif mode == SandboxMode.DOCKER:
+        if mode == SandboxMode.DOCKER:
             return self._exec_docker(cmd, timeout)
-        else:
-            return self._exec_direct(cmd, timeout)
+        return self._exec_direct(cmd, timeout)
 
     def _exec_direct(self, cmd: str, timeout: int) -> dict:
-        self._set_resource_limits()
+        # Apply resource limits in the *child* process only — calling
+        # ``setrlimit`` on the parent (this Python interpreter) shrinks
+        # its own address space, which then fails with ``EAGAIN`` on the
+        # very next ``fork``/``execve`` that ``subprocess.run`` performs.
+        limits = self.config.resource_limits
+
+        def _preexec_apply_rlimits() -> None:  # pragma: no cover (runs in child)
+            try:
+                resource.setrlimit(
+                    resource.RLIMIT_CPU, (limits.cpu_time, limits.cpu_time + 5)
+                )
+            except (ValueError, OSError, resource.error):
+                pass
+            try:
+                mem_bytes = limits.memory_mb * 1024 * 1024
+                resource.setrlimit(
+                    resource.RLIMIT_AS, (mem_bytes, mem_bytes)
+                )
+            except (ValueError, OSError, resource.error):
+                pass
+            try:
+                resource.setrlimit(
+                    resource.RLIMIT_NPROC, (limits.max_procs, limits.max_procs + 5)
+                )
+            except (ValueError, OSError, resource.error):
+                pass
+            try:
+                resource.setrlimit(
+                    resource.RLIMIT_NOFILE,
+                    (limits.max_open_files, limits.max_open_files + 10),
+                )
+            except (ValueError, OSError, resource.error):
+                pass
 
         try:
             result = subprocess.run(
@@ -143,6 +153,7 @@ class Sandbox:
                 text=True,
                 cwd=str(self.config.workspace_root),
                 timeout=timeout,
+                preexec_fn=_preexec_apply_rlimits,
             )
             return {
                 "success": result.returncode == 0,

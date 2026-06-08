@@ -39,13 +39,110 @@ TOOL_CALL_RE = re.compile(
     re.DOTALL,
 )
 
+# Structured tool call format used by the minimaxi / claude / Anthropic-style
+# models.  Looks like::
+#
+#     <minimax:tool_call>
+#     <invoke name="Read">
+#     <parameter name="path">SPEC.md</parameter>
+#     </invoke>
+#     <invoke name="Bash">
+#     <parameter name="command">ls -la</parameter>
+#     <parameter name="timeout">30</parameter>
+#     </invoke>
+#     </minimax:tool_call>
+#
+# We match the outer block, then split into individual <invoke> elements
+# inside ``_extract_minimax_tool_uses``.
+MINIMAX_TOOL_CALL_RE = re.compile(
+    r'<minimax:tool_call>(.*?)</minimax:tool_call>',
+    re.DOTALL,
+)
+
+# An individual <invoke name="X">...</invoke> block.  ``name`` is captured
+# separately so we can call ``_parse_minimax_invoke_body`` on the inner XML.
+_MINIMAX_INVOKE_RE = re.compile(
+    r'<invoke\s+name="([^"]+)">(.*?)</invoke>',
+    re.DOTALL,
+)
+
+# A single <parameter name="X">value</parameter> element.  The value can span
+# multiple lines, may contain entity-escaped angle brackets, and we tolerate
+# either double or single quotes around the name.
+_MINIMAX_PARAM_RE = re.compile(
+    r'<parameter\s+name=["\']([^"\']+)["\']>(.*?)</parameter>',
+    re.DOTALL,
+)
+
 THINKING_RE = re.compile(
-    r'<thinking>(.*?)</thinking>',
+    r'<think(?:ing)?>(.*?)</think(?:ing)?>',
     re.DOTALL,
 )
 
 _LEGACY_OPEN = "[TOOL_CALL]"
 _LEGACY_CLOSE = "[/TOOL_CALL]"
+
+
+def _parse_minimax_invoke_body(body: str) -> dict:
+    """Parse the inner XML of a single ``<invoke name="X">`` block.
+
+    Returns a dict ``{"name": str, "arguments": {param_name: value, ...}}``.
+    The ``arguments`` dict is empty if no ``<parameter>`` children are found.
+    """
+    body = body.strip()
+    arguments: dict = {}
+    for m in _MINIMAX_PARAM_RE.finditer(body):
+        param_name = m.group(1)
+        raw_value = m.group(2)
+        arguments[param_name] = _unescape_xml(raw_value)
+    return arguments
+
+
+def _unescape_xml(s: str) -> str:
+    """Reverse the common XML / HTML entity escapes.
+
+    We keep this conservative — the five predefined entities and the numeric
+    ones — so we never accidentally mangle content that legitimately contains
+    ampersands.
+    """
+    return (
+        s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+    )
+
+
+def _extract_minimax_tool_uses(text: str, id_start: int = 0) -> tuple[list[dict], str, int]:
+    """Extract ``<minimax:tool_call>...</minimax:tool_call>`` blocks.
+
+    Returns ``(tool_uses, cleaned_text, next_id)`` where ``tool_uses`` is a
+    list of ``{id, name, input}`` dicts and ``cleaned_text`` has every
+    matched block removed.  ``id_start`` is the next available tool id
+    counter (caller-owned, see ``AgentEngine._tool_id_counter``); the next
+    free id is returned in the tuple so callers can pass it to subsequent
+    extractions without losing uniqueness.
+    """
+    tool_uses: list[dict] = []
+    cleaned = text
+    counter = id_start
+    while True:
+        m = MINIMAX_TOOL_CALL_RE.search(cleaned)
+        if m is None:
+            break
+        block_body = m.group(1)
+        for inv in _MINIMAX_INVOKE_RE.finditer(block_body):
+            name = inv.group(1)
+            arguments = _parse_minimax_invoke_body(inv.group(2))
+            counter += 1
+            tool_uses.append({
+                "id": f"minimax-{counter}",
+                "name": name,
+                "input": arguments,
+            })
+        cleaned = cleaned[:m.start()] + cleaned[m.end():]
+    return tool_uses, cleaned, counter
 
 
 def _scan_balanced_braces(text: str, open_pos: int) -> int | None:
@@ -104,15 +201,20 @@ def _parse_legacy_tool_body(body: str) -> dict:
     return {"name": name, "arguments": arguments}
 
 
-def _extract_legacy_tool_uses(text: str) -> tuple[list[dict], str]:
+def _extract_legacy_tool_uses(
+    text: str, id_start: int = 0
+) -> tuple[list[dict], str, int]:
     """Extract all [TOOL_CALL]...[/TOOL_CALL] blocks from text.
 
-    Returns (tool_uses, cleaned_text) where tool_uses has
+    Returns (tool_uses, cleaned_text, next_id) where tool_uses has
     [{id, name, input}, ...] and cleaned_text has all markers removed.
+    ``id_start`` lets the caller share a monotonic counter across multiple
+    extraction passes; the next free id is returned so callers can pass it
+    forward.
     """
     tool_uses: list[dict] = []
     cleaned = text
-    tool_id_counter = 0
+    counter = id_start
     while True:
         open_idx = cleaned.find(_LEGACY_OPEN)
         if open_idx < 0:
@@ -127,14 +229,14 @@ def _extract_legacy_tool_uses(text: str) -> tuple[list[dict], str]:
         parsed = _parse_legacy_tool_body(body)
         name = parsed.get("name")
         if name:
-            tool_id_counter += 1
+            counter += 1
             tool_uses.append({
-                "id": f"legacy-{tool_id_counter}",
+                "id": f"legacy-{counter}",
                 "name": name,
                 "input": parsed.get("arguments", {}),
             })
         cleaned = cleaned[:open_idx] + cleaned[span_end:]
-    return tool_uses, cleaned
+    return tool_uses, cleaned, counter
 
 
 _TASK_STATUSES = {"pending", "in_progress", "completed"}
@@ -357,6 +459,14 @@ class AgentEngine:
 
         # Cancellation support
         self._cancelled: bool = False
+
+        # Monotonic tool-call id counter — shared across every
+        # ``chat_stream`` turn so the same id is never reused even when the
+        # model re-emits ``legacy-0`` / ``minimax-0`` in a fresh turn.
+        # Touched only by ``_extract_*_tool_uses`` through the engine
+        # instance, not by the module-level helpers (which take an explicit
+        # ``id_start`` for testability).
+        self._tool_id_counter: int = 0
 
     def _build_tool_registry(self) -> ToolRegistry:
         from cdha.agent.tools.registry import ToolRegistry
@@ -780,10 +890,8 @@ class AgentEngine:
             return
 
         logger.info(f"Creating provider instance: {provider_cls.__name__}")
-        provider = provider_cls(
-            api_key=config.api_key or "",
-            endpoint=config.endpoint or None,
-        )
+        provider_kwargs = dict(api_key=config.api_key or "", endpoint=config.endpoint or None)
+        provider = provider_cls(**provider_kwargs)
 
         # Reset per-turn usage tracking
         self._turn_usages = []
@@ -825,13 +933,25 @@ class AgentEngine:
                 )
                 response_text = chat_response.content
                 tool_uses = chat_response.tool_uses
-                if not tool_uses and _LEGACY_OPEN in response_text:
-                    parsed_uses, response_text = _extract_legacy_tool_uses(response_text)
-                    if parsed_uses:
-                        tool_uses = parsed_uses
+                if not tool_uses and (
+                    "<minimax:tool_call>" in response_text
+                    or _LEGACY_OPEN in response_text
+                ):
+                    parsed_uses, response_text, self._tool_id_counter = (
+                        _extract_minimax_tool_uses(
+                            response_text, id_start=self._tool_id_counter
+                        )
+                    )
+                    legacy_uses, response_text, self._tool_id_counter = (
+                        _extract_legacy_tool_uses(
+                            response_text, id_start=self._tool_id_counter
+                        )
+                    )
+                    tool_uses = parsed_uses + legacy_uses
+                    if tool_uses:
                         logger.info(
-                            "Extracted %d legacy [TOOL_CALL] tool uses from response text",
-                            len(tool_uses),
+                            "Extracted %d text tool uses (%d minimax, %d legacy) from response",
+                            len(tool_uses), len(parsed_uses), len(legacy_uses),
                         )
                 if chat_response.usage:
                     turn_usage = chat_response.usage
@@ -851,13 +971,25 @@ class AgentEngine:
                         if cb.type == ContentBlockType.TOOL_USE and cb.tool_use
                         for tu in [cb.tool_use]
                     ]
-                    if not tool_uses and _LEGACY_OPEN in response_text:
-                        parsed_uses, response_text = _extract_legacy_tool_uses(response_text)
-                        if parsed_uses:
-                            tool_uses = parsed_uses
+                    if not tool_uses and (
+                        "<minimax:tool_call>" in response_text
+                        or _LEGACY_OPEN in response_text
+                    ):
+                        parsed_uses, response_text, self._tool_id_counter = (
+                            _extract_minimax_tool_uses(
+                                response_text, id_start=self._tool_id_counter
+                            )
+                        )
+                        legacy_uses, response_text, self._tool_id_counter = (
+                            _extract_legacy_tool_uses(
+                                response_text, id_start=self._tool_id_counter
+                            )
+                        )
+                        tool_uses = parsed_uses + legacy_uses
+                        if tool_uses:
                             logger.info(
-                                "Extracted %d legacy [TOOL_CALL] tool uses from chat() fallback",
-                                len(tool_uses),
+                                "Extracted %d text tool uses (%d minimax, %d legacy) from chat() fallback",
+                                len(tool_uses), len(parsed_uses), len(legacy_uses),
                             )
                     if model_response.usage:
                         turn_usage = model_response.usage
@@ -884,7 +1016,7 @@ class AgentEngine:
                 clean_text = THINKING_RE.sub('', response_text).strip()
                 if not self._streaming_used:
                     for tb in thinking_blocks:
-                        yield StreamEvent.text_delta(f"\n```thinking\n{tb}\n```\n")
+                        yield StreamEvent.thinking(tb)
 
             # Add assistant response to context with proper content blocks
             if tool_uses:
@@ -926,16 +1058,35 @@ class AgentEngine:
             for tu in tool_uses:
                 logger.info(f"Executing tool: {tu['name']} (id={tu['id']})")
 
-                # Emit subagent lifecycle events for Task tool
+                # Task tool: forward subagent text deltas to the TUI as
+                # subagent_chunk events so the SubAgent widget actually has
+                # content to render.  The Task tool's spec is (agent_type,
+                # prompt); we read them from the tool input.
                 if tu["name"] == "Task":
-                    yield StreamEvent.subagent_start(
-                        tu["input"].get("agent_type", "general"), tu["id"]
-                    )
-
-                result = await self._execute_tool(tu)
-
-                if tu["name"] == "Task":
+                    subagent_type = tu["input"].get("agent_type", "general")
+                    subagent_prompt = tu["input"].get("prompt", "")
+                    yield StreamEvent.subagent_start(subagent_type, tu["id"])
+                    accumulated: list[str] = []
+                    async for sub_event, sub_text in self._spawn_subagent_async_streaming(
+                        subagent_type, subagent_prompt
+                    ):
+                        if sub_text and sub_event.type == StreamEventType.SUBAGENT_END:
+                            accumulated.append(sub_text)
+                        elif sub_text:
+                            accumulated.append(sub_text)
+                            yield StreamEvent.subagent_chunk(tu["id"], sub_text)
                     yield StreamEvent.subagent_end(tu["id"])
+                    formatted = self._format_subagent_output(
+                        subagent_type, subagent_prompt, "".join(accumulated)
+                    )
+                    result = {
+                        "tool_use_id": tu["id"],
+                        "is_error": False,
+                        "category": "task",
+                        "content": formatted,
+                    }
+                else:
+                    result = await self._execute_tool(tu)
                 result_str = str(result.get("content", ""))
                 is_error = result.get("is_error", False)
                 category = result.get("category", "unknown")
@@ -1129,29 +1280,50 @@ class AgentEngine:
 
     async def _spawn_subagent_async(self, agent_type: str, prompt: str) -> str:
         """Spawn a sub-agent with streaming-like output.
-        
-        Uses chat_stream to get structured output that the ChatPanel 
+
+        Uses chat_stream to get structured output that the ChatPanel
         can parse for professional rendering.
         """
-        import asyncio
+        parts: list[str] = []
+        async for _event, text in self._spawn_subagent_async_streaming(agent_type, prompt):
+            parts.append(text)
+        result = "".join(parts)
+        return self._format_subagent_output(agent_type, prompt, result)
+
+    async def _spawn_subagent_async_streaming(
+        self, agent_type: str, prompt: str
+    ) -> AsyncIterator[tuple[StreamEvent, str]]:
+        """Streaming variant of :meth:`_spawn_subagent_async`.
+
+        Yields ``(event, text)`` pairs so the caller (typically the Task-tool
+        path in :meth:`chat_stream`) can forward each text delta as a
+        ``subagent_chunk`` notification on the ACP wire.  The full agent text
+        is also accumulated and emitted in a single ``(subagent_end, text)``
+        payload at the end so callers that only care about the final output
+        can ignore the intermediate chunks.
+        """
         sub_engine = AgentEngine(self.app)
         sub_engine.set_agent(agent_type)
+        parts: list[str] = []
         try:
-            # Accumulate full result for parent context
-            parts = []
             async for chunk in sub_engine.chat_stream(prompt):
                 if isinstance(chunk, StreamEvent):
-                    # Extract text from stream events for sub-agent result
-                    parts.append(chunk.text)
+                    if chunk.type == StreamEventType.TEXT_DELTA and chunk.text:
+                        parts.append(chunk.text)
+                        yield chunk, chunk.text
                 else:
-                    parts.append(chunk)
-            result = "".join(parts)
-            # Format as structured output (DeepSeek-TUI style contract)
-            formatted = self._format_subagent_output(agent_type, prompt, result)
-            return formatted
+                    if chunk:
+                        parts.append(chunk)
         except Exception as e:
             logger.exception(f"Subagent error: {e}")
-            return f"SUMMARY:\nSub-agent failed with error: {e}\n\nCHANGES:\nNone.\n\nEVIDENCE:\nNone.\n\nRISKS:\nNone.\n\nBLOCKERS:\n{e}"
+            err_text = (
+                f"SUMMARY:\nSub-agent failed with error: {e}\n\n"
+                "CHANGES:\nNone.\n\nEVIDENCE:\nNone.\n\nRISKS:\nNone.\n\n"
+                f"BLOCKERS:\n{e}"
+            )
+            yield StreamEvent.subagent_end(""), err_text
+            return
+        yield StreamEvent.subagent_end(""), "".join(parts)
     
     def _format_subagent_output(self, agent_type: str, prompt: str, result: str) -> str:
         """Format sub-agent output in DeepSeek-TUI structured contract format.

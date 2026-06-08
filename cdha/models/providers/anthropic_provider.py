@@ -86,80 +86,97 @@ class AnthropicProvider(Provider):
         on_text_chunk: Optional[Callable[[str], None]] = None,
         **kwargs,
     ) -> ChatResponse:
+        from cdha.models.errors import (
+            ProviderError, TransientProviderError, retry_after_seconds,
+        )
         key = self.resolve_api_key(self.api_key)
         if not key:
-            return ChatResponse(content="API key not configured.")
+            raise ProviderError("API key not configured.")
 
         content_parts: list[str] = []
         tool_uses: list[dict] = []
         usage: dict = {}
         current_tool: Optional[dict] = None
 
-        async with httpx.AsyncClient(timeout=300) as client:
-            body = {
-                "model": model,
-                "max_tokens": kwargs.get("max_tokens", 4096),
-                "messages": self.prepare_messages(messages),
-                "stream": True,
-            }
-            tools = kwargs.get("tools")
-            if tools:
-                body["tools"] = tools
-            body.update({k: v for k, v in kwargs.items() if k not in ("tools", "stream", "max_tokens")})
+        try:
+            async with httpx.AsyncClient(timeout=300) as client:
+                body = {
+                    "model": model,
+                    "max_tokens": kwargs.get("max_tokens", 4096),
+                    "messages": self.prepare_messages(messages),
+                    "stream": True,
+                }
+                tools = kwargs.get("tools")
+                if tools:
+                    body["tools"] = tools
+                body.update({k: v for k, v in kwargs.items() if k not in ("tools", "stream", "max_tokens")})
 
-            async with client.stream(
-                "POST",
-                f"{self._endpoint}/messages",
-                headers={
-                    "x-api-key": key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json=body,
-            ) as resp:
-                async for line in resp.aiter_lines():
-                    if line.startswith("data: ") and line[6:] != "[DONE]":
-                        chunk = json.loads(line[6:])
-                        chunk_type = chunk.get("type", "")
+                async with client.stream(
+                    "POST",
+                    f"{self._endpoint}/messages",
+                    headers={
+                        "x-api-key": key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json=body,
+                ) as resp:
+                    if resp.status_code != 200:
+                        error_body = await resp.aread()
+                        error_text = error_body.decode("utf-8", errors="replace")
+                        raise Provider.classify_http_error(
+                            resp.status_code, error_text, retry_after=retry_after_seconds(resp),
+                        )
 
-                        if chunk_type == "content_block_start":
-                            block = chunk.get("content_block", {})
-                            if block.get("type") == "tool_use":
-                                current_tool = {
-                                    "id": block.get("id", ""),
-                                    "name": block.get("name", ""),
-                                    "input": {},
-                                    "input_json": "",
-                                }
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: ") and line[6:] != "[DONE]":
+                            chunk = json.loads(line[6:])
+                            chunk_type = chunk.get("type", "")
 
-                        elif chunk_type == "content_block_delta":
-                            delta = chunk.get("delta", {})
-                            delta_type = delta.get("type", "")
-                            if delta_type == "text_delta":
-                                text = delta.get("text", "")
-                                if text:
-                                    content_parts.append(text)
-                                    if on_text_chunk:
-                                        on_text_chunk(text)
-                            elif delta_type == "input_json_delta":
+                            if chunk_type == "content_block_start":
+                                block = chunk.get("content_block", {})
+                                if block.get("type") == "tool_use":
+                                    current_tool = {
+                                        "id": block.get("id", ""),
+                                        "name": block.get("name", ""),
+                                        "input": {},
+                                        "input_json": "",
+                                    }
+
+                            elif chunk_type == "content_block_delta":
+                                delta = chunk.get("delta", {})
+                                delta_type = delta.get("type", "")
+                                if delta_type == "text_delta":
+                                    text = delta.get("text", "")
+                                    if text:
+                                        content_parts.append(text)
+                                        if on_text_chunk:
+                                            on_text_chunk(text)
+                                elif delta_type == "input_json_delta":
+                                    if current_tool is not None:
+                                        current_tool["input_json"] += delta.get("partial_json", "")
+
+                            elif chunk_type == "content_block_stop":
                                 if current_tool is not None:
-                                    current_tool["input_json"] += delta.get("partial_json", "")
+                                    try:
+                                        current_tool["input"] = json.loads(current_tool["input_json"])
+                                    except (json.JSONDecodeError, TypeError):
+                                        current_tool["input"] = {"raw": current_tool["input_json"]}
+                                    tool_uses.append({
+                                        "id": current_tool["id"],
+                                        "name": current_tool["name"],
+                                        "input": current_tool["input"],
+                                    })
+                                    current_tool = None
 
-                        elif chunk_type == "content_block_stop":
-                            if current_tool is not None:
-                                try:
-                                    current_tool["input"] = json.loads(current_tool["input_json"])
-                                except (json.JSONDecodeError, TypeError):
-                                    current_tool["input"] = {"raw": current_tool["input_json"]}
-                                tool_uses.append({
-                                    "id": current_tool["id"],
-                                    "name": current_tool["name"],
-                                    "input": current_tool["input"],
-                                })
-                                current_tool = None
-
-                        elif chunk_type == "message_delta":
-                            usage = chunk.get("usage", {})
+                            elif chunk_type == "message_delta":
+                                usage = chunk.get("usage", {})
+        except ProviderError:
+            raise
+        except httpx.ConnectError as e:
+            raise TransientProviderError(f"Connection error: {e}") from e
+        except Exception as e:
+            raise TransientProviderError(f"Error: {e}") from e
 
         return ChatResponse(
             content="".join(content_parts),
