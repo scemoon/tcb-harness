@@ -284,6 +284,7 @@ class Conversation(containers.Vertical):
             "alt+down",
             "cursor_down",
             "Block cursor down",
+            priority=True,
             group=CURSOR_BINDING_GROUP,
         ),
         Binding(
@@ -305,6 +306,12 @@ class Conversation(containers.Vertical):
             "Collapse",
             key_display="␣",
             tooltip="Collapse cursor block",
+        ),
+        Binding(
+            "x",
+            "toggle_expand",
+            "Toggle expand",
+            tooltip="Toggle expand/collapse cursor block",
         ),
         Binding(
             "escape",
@@ -634,14 +641,15 @@ class Conversation(containers.Vertical):
             return bool(self.modes)
         if action == "cancel":
             return True if (self.agent and self.turn == "agent") else None
-        if action in {"expand_block", "collapse_block"}:
+        if action in {"expand_block", "collapse_block", "toggle_expand"}:
             if (cursor_block := self.cursor_block) is None:
                 return False
             elif isinstance(cursor_block, ExpandProtocol):
                 if action == "expand_block":
                     return False if cursor_block.is_block_expanded() else True
-                else:
+                elif action == "collapse_block":
                     return True if cursor_block.is_block_expanded() else False
+                return cursor_block.can_expand()
             return None if action == "expand_block" else False
 
         return True
@@ -663,6 +671,16 @@ class Conversation(containers.Vertical):
         if (cursor_block := self.cursor_block) is not None:
             if isinstance(cursor_block, ExpandProtocol):
                 cursor_block.collapse_block()
+                self.refresh_bindings()
+                self.call_after_refresh(self.cursor.follow, cursor_block)
+
+    async def action_toggle_expand(self) -> None:
+        if (cursor_block := self.cursor_block) is not None:
+            if isinstance(cursor_block, ExpandProtocol):
+                if cursor_block.is_block_expanded():
+                    cursor_block.collapse_block()
+                else:
+                    cursor_block.expand_block()
                 self.refresh_bindings()
                 self.call_after_refresh(self.cursor.follow, cursor_block)
 
@@ -1458,19 +1476,19 @@ class Conversation(containers.Vertical):
     def _build_slash_commands(self) -> list[SlashCommand]:
         slash_commands = [
             SlashCommand("/exit", "Exit A2TUI"),
-            SlashCommand("/tui:about", "About A2TUI"),
+            SlashCommand("/about", "About A2TUI"),
             SlashCommand(
-                "/tui:clear",
+                "/clear",
                 "Clear conversation window",
                 "<optional number of lines to preserve>",
             ),
             SlashCommand(
-                "/tui:session",
+                "/session",
                 "Session commands: list, load, new, close, rename",
                 "<list|load|new|close|rename> [args]",
             ),
             SlashCommand(
-                "/tui:project",
+                "/project",
                 "Project commands: list, load, new",
                 "<list|load|new> [args]",
             ),
@@ -2009,7 +2027,7 @@ class Conversation(containers.Vertical):
                 be forwarded to the agent.
         """
         command, _, parameters = text[1:].partition(" ")
-        if command == "tui:about":
+        if command == "about":
             from tui import about
             from tui.widgets.markdown_note import MarkdownNote
 
@@ -2018,17 +2036,17 @@ class Conversation(containers.Vertical):
             await self.post(MarkdownNote(about_md, classes="about"))
             self.app.copy_to_clipboard(about_md)
             self.notify(
-                "A copy of /about:tui has been placed in your clipboard",
-                title="/tui:about",
+                "A copy of /about has been placed in your clipboard",
+                title="/about",
             )
             return True
-        elif command == "tui:clear":
+        elif command == "clear":
             try:
                 line_count = max(0, int(parameters) if parameters.strip() else 0)
             except ValueError:
                 self.notify(
                     "Unable to clear—a number was expected",
-                    title="/tui:clear",
+                    title="/clear",
                     severity="error",
                 )
                 return True
@@ -2050,9 +2068,9 @@ class Conversation(containers.Vertical):
                 }
             self.app.exit()
             return True
-        elif command == "tui:session":
+        elif command == "session":
             return await self._handle_session_command(parameters)
-        elif command == "tui:project":
+        elif command == "project":
             return await self._handle_project_command(parameters)
         return await self._handle_tui_session_project_dispatch(command, parameters)
 
@@ -2073,7 +2091,7 @@ class Conversation(containers.Vertical):
             db = DB()
             recent = await db.session_get_recent(max_results=20)
             if not recent:
-                self.notify("No sessions found", title="/tui:session list")
+                self.notify("No sessions found", title="/session list")
                 return True
             lines = ["Recent sessions:"]
             for s in recent:
@@ -2081,16 +2099,16 @@ class Conversation(containers.Vertical):
                 aid = s.get("agent_identity", "unknown")
                 sid = s.get("agent_session_id", "")[:8]
                 lines.append(f"  [{s['id']}] {title} ({aid[:20]}... {sid})")
-            self.notify("\n".join(lines), title="/tui:session list")
+            self.notify("\n".join(lines), title="/session list")
             return True
         elif sub_cmd == "load":
             if not arg:
-                self.notify("Session ID required", title="/tui:session load", severity="error")
+                self.notify("Session ID required", title="/session load", severity="error")
                 return True
             try:
                 session_pk = int(arg)
             except ValueError:
-                self.notify("Invalid session ID", title="/tui:session load", severity="error")
+                self.notify("Invalid session ID", title="/session load", severity="error")
                 return True
             self.post_message(messages.SessionLoad(session_pk))
             return True
@@ -2118,7 +2136,7 @@ class Conversation(containers.Vertical):
                 self.notify(
                     "Expected a name for the session.\n"
                     'For example: "add comments to blog"',
-                    title="/tui:session rename",
+                    title="/session rename",
                     severity="error",
                 )
                 return True
@@ -2128,8 +2146,8 @@ class Conversation(containers.Vertical):
             return True
         else:
             self.notify(
-                "Usage: /tui:session <list|load|new|close|rename>",
-                title="/tui:session",
+                "Usage: /session <list|load|new|close|rename>",
+                title="/session",
                 severity="error",
             )
             return True
@@ -2145,20 +2163,20 @@ class Conversation(containers.Vertical):
             from cdha.config import CLOUD_DEV_HARNESS_DIR
             projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
             if not projects_dir.exists():
-                self.notify("No projects found", title="/tui:project list")
+                self.notify("No projects found", title="/project list")
                 return True
             project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
             if not project_files:
-                self.notify("No projects found", title="/tui:project list")
+                self.notify("No projects found", title="/project list")
                 return True
             lines = ["Projects:"]
             for pf in sorted(project_files):
                 lines.append(f"  {pf.stem}")
-            self.notify("\n".join(lines), title="/tui:project list")
+            self.notify("\n".join(lines), title="/project list")
             return True
         elif sub_cmd == "load":
             if not name:
-                self.notify("Project name required", title="/tui:project load", severity="error")
+                self.notify("Project name required", title="/project load", severity="error")
                 return True
             from pathlib import Path
             from cdha.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
@@ -2170,7 +2188,7 @@ class Conversation(containers.Vertical):
                     project_file = pf
                     break
             if not project_file:
-                self.notify(f"Project '{name}' not found", title="/tui:project load", severity="error")
+                self.notify(f"Project '{name}' not found", title="/project load", severity="error")
                 return True
             import yaml
             proj_data = yaml.safe_load(project_file.read_text()) if project_file.suffix in [".yaml", ".yml"] else __import__("json").loads(project_file.read_text())
@@ -2186,7 +2204,7 @@ class Conversation(containers.Vertical):
             return True
         elif sub_cmd == "new":
             if not name:
-                self.notify("Project name required", title="/tui:project new", severity="error")
+                self.notify("Project name required", title="/project new", severity="error")
                 return True
             from pathlib import Path
             from cdha.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
@@ -2208,8 +2226,8 @@ class Conversation(containers.Vertical):
             return True
         else:
             self.notify(
-                "Usage: /tui:project <list|load|new> [name] [path]",
-                title="/tui:project",
+                "Usage: /project <list|load|new> [name] [path]",
+                title="/project",
                 severity="error",
             )
             return True
