@@ -306,9 +306,50 @@ def tui(ctx, project_dir, agent_identity):
     ensure_dirs()
     cfg = load_config()
     setup_logging(cfg.log_level)
+
+    # Resolve workspace directory
+    ws = Path(project_dir).expanduser().resolve()
+
+    # ── .cdh/ onboarding ──────────────────────────────────────
+    from cdha.agent.cdh_loader import CdhProjectLoader
+
+    cdh_dir = CdhProjectLoader.find_cdh_dir(ws)
+    if cdh_dir is None:
+        click.echo("")
+        click.echo("⚠  No .cdh project found in this directory.")
+        click.echo("   What would you like to do?\n")
+        click.echo("   1) Create .cdh/ in current directory")
+        click.echo("   2) Select an existing project from ~/.cdh/projects/")
+        click.echo("   3) Continue without .cdh (temporary mode)")
+        click.echo("")
+        choice = click.prompt("Choice", type=click.Choice(["1", "2", "3"]), default="1")
+
+        if choice == "1":
+            name = click.prompt("Project name", default=ws.name)
+            CdhProjectLoader.init_project(ws, name)
+            click.echo(f"✓  Created .cdh project '{name}' at {ws}")
+        elif choice == "2":
+            result = _interactive_select_project()
+            if result is None:
+                click.echo("No project selected. Continuing without .cdh.")
+            elif result[0] == "load":
+                _, name = result
+                proj_info = _load_project_by_name(name)
+                if proj_info:
+                    ws = Path(proj_info[1]).resolve()
+                    click.echo(f"✓  Switched to project '{name}' at {ws}")
+            elif result[0] == "new":
+                path = click.prompt("Project path", type=str, default=".").strip()
+                name = click.prompt("Project name", type=str).strip()
+                ws = Path(path).expanduser().resolve()
+                CdhProjectLoader.init_project(ws, name)
+                click.echo(f"✓  Created .cdh project '{name}' at {ws}")
+        # choice == "3": continue without .cdh
+    # ── end .cdh/ onboarding ──────────────────────────────────
+
     from tui.app import A2TUIApp
     app = A2TUIApp(
-        project_dir=project_dir,
+        project_dir=str(ws),
         launch_agent_identity=agent_identity,
     )
     app.run()

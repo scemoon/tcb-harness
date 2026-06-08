@@ -409,6 +409,45 @@ Rules:
 - **TodoComplete**: todo_complete(todo_id) - Mark a todo as complete.
 """
 
+def filter_tool_descriptions(
+    allowlist: list[str] | None = None,
+    denylist: list[str] | None = None,
+) -> str:
+    """Return TOOL_DESCRIPTIONS filtered to only show the allowed tools.
+
+    When *allowlist* is non-empty, only those tool names are shown.
+    When *denylist* is non-empty, those tool names are hidden (their
+    description lines are removed, but category headers are kept).
+    If both are empty, the full tool list is returned.
+    """
+    if not allowlist and not denylist:
+        return TOOL_DESCRIPTIONS
+
+    _TOOL_LINE_RE = re.compile(r'^- \*\*([^*]+)\*\*:')
+
+    lines = TOOL_DESCRIPTIONS.split("\n")
+    result_lines: list[str] = []
+    skip_this_line = False
+
+    for line in lines:
+        m = _TOOL_LINE_RE.match(line.lstrip())
+        if m:
+            tool_name = m.group(1).strip()
+            if allowlist:
+                skip_this_line = tool_name not in allowlist
+            elif denylist:
+                skip_this_line = tool_name in denylist
+            else:
+                skip_this_line = False
+        else:
+            skip_this_line = False
+
+        if not skip_this_line:
+            result_lines.append(line)
+
+    return "\n".join(result_lines)
+
+
 PLAN_INSTRUCTIONS = """
 ## Planning & Task Management
 

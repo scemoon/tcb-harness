@@ -9,8 +9,9 @@ from cdha.agent.tools.registry import ToolRegistry, ToolSpec
 
 
 class AgentTool:
-    def __init__(self, registry: ToolRegistry):
+    def __init__(self, registry: ToolRegistry, permission_checker=None):
         self._registry = registry
+        self._permission_checker = permission_checker
 
     def spec(self) -> ToolSpec:
         return ToolSpec(
@@ -57,7 +58,14 @@ class AgentTool:
                     break
                 continue
             sub_input = call.get("input", {})
-            tc = {"name": sub_name, "input": sub_input, "tool_use_id": f"agent_{idx}"}
+            if self._permission_checker:
+                denied = self._permission_checker(sub_name, sub_input)
+                if denied:
+                    results.append({"name": sub_name, "is_error": True, "output": denied})
+                    any_error = True
+                    if stop_on_error:
+                        break
+                    continue
             from cdha.agent.tools.protocol import ToolCall
             sub_result = self._registry.dispatch(ToolCall(name=sub_name, input=sub_input, tool_use_id=f"agent_{idx}"))
             sub_error = sub_result.is_error

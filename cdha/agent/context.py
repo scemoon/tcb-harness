@@ -80,6 +80,21 @@ class ContextManager:
                 return True
         return False
 
+    def remove_system_by_marker(self, marker: str) -> int:
+        """Remove all system messages whose content contains *marker*.
+
+        Returns the number of messages removed.
+        """
+        before = len(self.messages)
+        self.messages = [
+            m for m in self.messages
+            if not (m.role == "system" and isinstance(m.content, str) and marker in m.content)
+        ]
+        removed = before - len(self.messages)
+        if removed:
+            self._update_token_count()
+        return removed
+
     def add_user(self, content: str) -> None:
         self.add_message("user", content)
 
@@ -123,14 +138,26 @@ class ContextManager:
 
     def _summarize_messages(self, msgs: list[Message]) -> str:
         content_parts = []
-        for m in msgs[-20:]:
-            prefix = {"user": "User", "assistant": "Assistant", "tool": "Tool"}.get(m.role, m.role)
+        for m in msgs[-30:]:
+            prefix = {"user": "User", "assistant": "Assistant", "tool": "Tool (result)"}.get(m.role, m.role)
             if isinstance(m.content, str):
-                content_parts.append(f"{prefix}: {m.content[:500]}")
+                content_parts.append(f"{prefix}: {m.content[:800]}")
             elif isinstance(m.content, list):
-                texts = [_block_text(b)[:200] for b in m.content]
-                content_parts.append(f"{prefix}: {' | '.join(texts)[:500]}")
-        return "\n".join(content_parts[-10:])
+                texts = []
+                for b in m.content:
+                    if isinstance(b, dict):
+                        btype = b.get("type", "")
+                        if btype == "tool_use":
+                            texts.append(f"[tool_call: {b.get('name', '?')}]")
+                        elif btype == "tool_result":
+                            result_text = str(b.get("content", ""))[:300]
+                            texts.append(f"[result: {result_text}]")
+                        else:
+                            texts.append(_block_text(b)[:300])
+                    else:
+                        texts.append(str(b)[:300])
+                content_parts.append(f"{prefix}: {' | '.join(texts)[:800]}")
+        return "\n".join(content_parts[-20:])
 
     def get_context(self) -> list:
         def to_provider_content(msg: Message) -> Union[str, list]:

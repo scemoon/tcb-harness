@@ -147,6 +147,20 @@ class ToolRegistry:
 
             # 4. Execute
             result = tool.run(call.input)
+
+            # Enforce max result size — truncate oversized output so the
+            # context window is not flooded by a single tool result.
+            max_chars = spec.max_result_size_chars
+            if max_chars > 0 and isinstance(result.output, str) and len(result.output) > max_chars:
+                result = ToolResult(
+                    name=result.name,
+                    output=result.output[:max_chars]
+                    + f"\n\n[Output truncated to {max_chars} characters]",
+                    is_error=result.is_error,
+                    tool_use_id=result.tool_use_id or call.tool_use_id,
+                    content_type=result.content_type,
+                )
+
             if result.tool_use_id is None:
                 return ToolResult(
                     name=result.name,

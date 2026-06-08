@@ -62,7 +62,6 @@ class Sandbox:
         bwrap_args.extend(["--proc", "/proc"])
 
         bwrap_args.extend(["--bind", ws, "/workspace"])
-        os.chdir(ws)
 
         for ro_path in self.config.read_only_bindings:
             p = Path(ro_path)
@@ -175,6 +174,7 @@ class Sandbox:
                 bwrap_cmd,
                 capture_output=True,
                 text=True,
+                cwd=str(self.config.workspace_root),
                 timeout=timeout,
             )
             return {
@@ -227,7 +227,7 @@ class Sandbox:
             }
         except docker.errors.DockerException:
             return {"success": False, "error": "Docker not available", "sandbox": "docker"}
-        except subprocess.TimeoutExpired:
+        except docker.errors.TimeoutError:
             return {"success": False, "error": "Container timed out", "sandbox": "docker"}
         except Exception as e:
             return {"success": False, "error": str(e), "sandbox": "docker"}

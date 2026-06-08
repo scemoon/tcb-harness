@@ -1036,16 +1036,12 @@ class CDHACPAdapter:
             elif event.type == StreamEventType.TOOL_RESULT:
                 status = "failed" if event.result_is_error else "completed"
                 result_text = event.result_content or ""
-                # Wrap multi-line results in a fenced code block so the TUI
-                # renders them as a code block (MarkdownContent) rather than
-                # raw text. Skip if it already contains markdown markers.
-                if result_text and "\n" in result_text:
-                    has_markdown = (
-                        "```" in result_text
-                        or re.search(r"^#{1,6}\s.*$", result_text, re.MULTILINE) is not None
-                    )
-                    if not has_markdown:
-                        result_text = f"```\n{result_text}\n```"
+                # TUI now renders all text content as Markdown.
+                # Wrap multi-line results in a fenced code block so they
+                # display as a code block rather than a raw paragraph.
+                # Skip if already contains a code fence to avoid nesting.
+                if result_text and "\n" in result_text and "```" not in result_text:
+                    result_text = f"```\n{result_text}\n```"
                 content_block = [{
                     "type": "content",
                     "content": {"type": "text", "text": result_text},

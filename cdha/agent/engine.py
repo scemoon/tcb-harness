@@ -468,6 +468,10 @@ class AgentEngine:
         # ``id_start`` for testability).
         self._tool_id_counter: int = 0
 
+        # Subagent engines spawned by this engine — we track them so
+        # cancelling the parent also cancels in-flight subagents.
+        self._child_engines: list[AgentEngine] = []
+
     def _build_tool_registry(self) -> ToolRegistry:
         from cdha.agent.tools.registry import ToolRegistry
         from cdha.agent.tools.file_tools import ReadTool, WriteTool, EditTool, InsertTool, UndoEditTool, GlobTool, GrepTool, ListTool
@@ -514,7 +518,7 @@ class AgentEngine:
         registry.register(TodoListTool(self._task_manager))
         registry.register(TodoCompleteTool(self._task_manager))
         # Agent tools
-        registry.register(AgentTool(registry))
+        registry.register(AgentTool(registry, permission_checker=self._check_tool_permission))
         registry.register(TaskTool(self._spawn_subagent_async))
 
         # Skill tool (Clawd-Code pattern)
@@ -631,7 +635,7 @@ class AgentEngine:
         return ""
 
     def set_agent(self, agent_type: str) -> None:
-        from cdha.agent.agents.types import create_agent, PLAN_INSTRUCTIONS, TOOL_DESCRIPTIONS
+        from cdha.agent.agents.types import create_agent, PLAN_INSTRUCTIONS, TOOL_DESCRIPTIONS, filter_tool_descriptions
         self.current_agent = create_agent(agent_type)
         system_parts = [self.current_agent.description]
 
@@ -661,23 +665,36 @@ class AgentEngine:
                 "Use `/harness status` to check current phase.\n"
             )
 
-        system_parts.append(TOOL_DESCRIPTIONS)
+        tool_desc = filter_tool_descriptions(
+            allowlist=self.current_agent.tools or None,
+            denylist=self.current_agent.disallowed_tools or None,
+        )
+        system_parts.append(tool_desc)
 
         tagged_content = "<!-- AGENT_CONFIG -->\n" + "\n".join(system_parts)
         if not self.context.replace_system_section("AGENT_CONFIG", tagged_content):
             self.context.add_system(tagged_content)
 
     def get_available_tools(self) -> str:
-        from cdha.agent.agents.types import TOOL_DESCRIPTIONS
-        return TOOL_DESCRIPTIONS
+        from cdha.agent.agents.types import TOOL_DESCRIPTIONS, filter_tool_descriptions
+        return filter_tool_descriptions(
+            allowlist=self.current_agent.tools or None,
+            denylist=self.current_agent.disallowed_tools or None,
+        )
 
-    def _load_skills(self) -> None:
-        if self._skills_loaded:
+    def _load_skills(self, force: bool = False) -> None:
+        if self._skills_loaded and not force:
             return
+
+        # Remove previously loaded skill-tagged messages so they don't
+        # accumulate across agent switches or skill re-loads.
+        self.context.remove_system_by_marker("<!-- SKILL:")
+        self.context.remove_system_by_marker("<!-- CDH_PROJECT -->")
         self._skills_loaded = True
 
         for skill in self._skill_loader.get_enabled():
-            self.context.add_system(skill.content)
+            tagged = f"<!-- SKILL:{skill.name} -->\n{skill.content}"
+            self.context.add_system(tagged)
 
         # Also load harness skill if applicable
         from cdha.agent.harness_skill import HarnessSkill
@@ -686,7 +703,13 @@ class AgentEngine:
             getattr(self.app, "current_project", None) or "",
         )
         if harness_content:
-            self.context.add_system(harness_content)
+            self.context.add_system(f"<!-- SKILL:harness -->\n{harness_content}")
+
+        # Load project .cdh/ state into context
+        from cdha.agent.cdh_loader import CdhProjectLoader
+        cdh_content = CdhProjectLoader.load_for_workspace(self._workspace)
+        if cdh_content:
+            self.context.add_system(f"<!-- CDH_PROJECT -->\n{cdh_content}")
 
     def _inject_project_context(self, project_name: str) -> None:
         if not project_name:
@@ -780,10 +803,45 @@ class AgentEngine:
         from cdha.models.messages import get_tool_category
         return get_tool_category(name).value
 
+    def _check_tool_permission(self, name: str, inp: dict) -> str | None:
+        """Check agent-level permission for a tool. Returns an error string or None."""
+        from cdha.agent.agents.types import AgentPermission
+        if name == "Read":
+            if self.current_agent.permission_read == AgentPermission.DENY:
+                return "Read denied"
+        elif name in ("Write", "Edit", "Insert", "UndoEdit", "ApplyPatch"):
+            if self.current_agent.permission_edit == AgentPermission.DENY:
+                return json.dumps({"success": False, "error": "Edit denied"})
+            if self.current_agent.permission_edit == AgentPermission.ASK:
+                return json.dumps({"success": False, "error": "Edit requires approval", "requires_approval": True})
+        elif name == "Bash":
+            if self.current_agent.permission_bash == AgentPermission.DENY:
+                return json.dumps({"success": False, "error": "Bash denied"})
+            if self.current_agent.permission_bash == AgentPermission.ASK:
+                return json.dumps({"success": False, "error": "Bash requires approval", "requires_approval": True})
+        elif name in ("WebFetch",):
+            if self.current_agent.permission_webfetch == AgentPermission.DENY:
+                return "WebFetch denied"
+        elif name in ("WebSearch",):
+            if self.current_agent.permission_websearch == AgentPermission.DENY:
+                return "WebSearch denied"
+        elif name == "Glob":
+            if self.current_agent.permission_glob == AgentPermission.DENY:
+                return json.dumps({"success": False, "error": "Glob denied"})
+        elif name == "Grep":
+            if self.current_agent.permission_grep == AgentPermission.DENY:
+                return json.dumps({"success": False, "error": "Grep denied"})
+        elif name == "List":
+            if self.current_agent.permission_list == AgentPermission.DENY:
+                return json.dumps({"success": False, "error": "List denied"})
+        elif name in ("Task", "Agent"):
+            if self.current_agent.permission_task == AgentPermission.DENY:
+                return json.dumps({"success": False, "error": "Task denied"})
+        return None
+
     async def _execute_tool(self, tool_call: dict) -> dict:
         from cdha.agent.tools.registry import ToolCall as RegistryToolCall
         from cdha.agent.tools.permissions import ToolPermissionContext
-        from cdha.agent.agents.types import AgentPermission
         name = tool_call["name"]
         tid = tool_call["id"]
         inp = tool_call["input"]
@@ -791,28 +849,9 @@ class AgentEngine:
         base = {"tool_use_id": tid, "is_error": False, "category": category}
         try:
             # Apply agent-level permission checks for sensitive tools
-            if name == "Read":
-                if self.current_agent.permission_read == AgentPermission.DENY:
-                    return {**base, "content": "Read denied", "is_error": True}
-            elif name in ("Write", "Edit", "Insert", "UndoEdit"):
-                if self.current_agent.permission_edit == AgentPermission.DENY:
-                    return {**base, "content": json.dumps({"success": False, "error": "Edit denied"}), "is_error": True}
-                if self.current_agent.permission_edit == AgentPermission.ASK:
-                    return {**base, "content": json.dumps({"success": False, "error": "Edit requires approval", "requires_approval": True}), "is_error": True}
-            elif name == "Bash":
-                if self.current_agent.permission_bash == AgentPermission.DENY:
-                    return {**base, "content": json.dumps({"success": False, "error": "Bash denied"}), "is_error": True}
-                if self.current_agent.permission_bash == AgentPermission.ASK:
-                    return {**base, "content": json.dumps({"success": False, "error": "Bash requires approval", "requires_approval": True}), "is_error": True}
-            elif name in ("WebFetch",):
-                if self.current_agent.permission_webfetch == AgentPermission.DENY:
-                    return {**base, "content": "WebFetch denied", "is_error": True}
-            elif name in ("WebSearch",):
-                if self.current_agent.permission_websearch == AgentPermission.DENY:
-                    return {**base, "content": "WebSearch denied", "is_error": True}
-            elif name in ("Task", "Agent"):
-                if self.current_agent.permission_task == AgentPermission.DENY:
-                    return {**base, "content": json.dumps({"success": False, "error": "Task denied"}), "is_error": True}
+            denied = self._check_tool_permission(name, inp)
+            if denied:
+                return {**base, "content": denied, "is_error": True}
 
             # Dispatch via ToolRegistry with permission context (Clawd-Code pattern)
             call = RegistryToolCall(name=name, input=inp, tool_use_id=tid)
@@ -845,8 +884,10 @@ class AgentEngine:
             return str(output)
 
     async def cancel(self):
-        """Cancel the current chat_stream turn."""
+        """Cancel the current chat_stream turn and all in-flight subagents."""
         self._cancelled = True
+        for child in self._child_engines:
+            child._cancelled = True
 
     async def chat_stream(self, user_input: str) -> AsyncIterator[StreamEvent | str]:
         self._load_skills()
@@ -1301,9 +1342,27 @@ class AgentEngine:
         is also accumulated and emitted in a single ``(subagent_end, text)``
         payload at the end so callers that only care about the final output
         can ignore the intermediate chunks.
+
+        Inherits project context, harness mode, and skills from the parent
+        engine so the subagent does not start from a blank slate.
         """
         sub_engine = AgentEngine(self.app)
+
+        # Inherit parent context: project info, harness mode, skills
+        sub_engine._project_context_loaded = self._project_context_loaded
+        sub_engine._harness_mode = self._harness_mode
+        sub_engine._project_config = dict(self._project_config)
+        sub_engine._skills_loaded = True
+        for skill in self._skill_loader.get_enabled():
+            if skill.content not in (m.content for m in sub_engine.context.messages if m.role == "system"):
+                sub_engine.context.add_system(skill.content)
+
         sub_engine.set_agent(agent_type)
+
+        # Track child so parent cancellation cascades
+        self._child_engines.append(sub_engine)
+
+        # Link the subagent's cancellation flag to the parent
         parts: list[str] = []
         try:
             async for chunk in sub_engine.chat_stream(prompt):

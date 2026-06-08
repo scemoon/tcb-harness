@@ -120,6 +120,9 @@ class Agent(AgentBase):
             self._log_file_path = Path(log_path).resolve().absolute()
             with suppress(OSError):
                 self._log_file_path.unlink(missing_ok=True)
+        elif session_id:
+            log_dir = paths.get_log() / session_id
+            self._log_file_path = log_dir / log_filename
         else:
             self._log_file_path = paths.get_log() / log_filename
 
@@ -723,6 +726,19 @@ class Agent(AgentBase):
         response = await session_new_response.wait()
         assert response is not None
         self.session_id = response["sessionId"]
+
+        # Move log file to session subdirectory now that we have a session_id
+        if not os.environ.get("TOAD_LOG"):
+            session_log_dir = paths.get_log() / self.session_id
+            new_log_path = session_log_dir / self._log_file_path.name
+            if self._log_file_path != new_log_path:
+                try:
+                    session_log_dir.mkdir(parents=True, exist_ok=True)
+                    self._log_file_path.rename(new_log_path)
+                except OSError:
+                    pass
+                else:
+                    self._log_file_path = new_log_path
 
         if self.supports_load_session:
             db = DB()
