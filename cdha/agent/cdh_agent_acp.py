@@ -378,6 +378,30 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
     }]
 
 
+def _format_tui_display_text(result_text: str) -> str:
+    """Convert internal tool result JSON to user-visible text for TUI.
+
+    Tools return dicts like ``{"success": true, "path": "..."}`` that are
+    meaningful to the LLM but noisy for the user.  This function strips
+    internal JSON wrappers and returns only what the user should see.
+    """
+    if not result_text:
+        return ""
+    try:
+        parsed = json.loads(result_text)
+    except json.JSONDecodeError:
+        return result_text
+    if not isinstance(parsed, dict):
+        return result_text
+    if "error" in parsed:
+        return str(parsed["error"])
+    if parsed.get("success") is True:
+        if path := parsed.get("path"):
+            return f"✓ {path}"
+        return ""
+    return result_text
+
+
 _BARE_LEGACY_RE = re.compile(
     r"\{[^{}]*tool\s*=>\s*\"(?P<name>\w+)\"[^{}]*args\s*=>\s*\{",
     re.DOTALL,
@@ -605,10 +629,25 @@ class CDHACPAdapter:
 
     def _emit_tool_result(self, block: ToolResult) -> None:
         """Send a tool_result as a tool_call_update, accumulating with existing content."""
+        display_text = _format_tui_display_text(block.content)
+
+        # Update title with path from result if not already set
+        if block.content and block.tool_use_id in self.tool_calls:
+            try:
+                parsed = json.loads(block.content)
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(parsed, dict) and parsed.get("success") is True:
+                    current_title = self.tool_calls[block.tool_use_id].get("title", "")
+                    if ":" not in current_title:
+                        if path := parsed.get("path"):
+                            self.tool_calls[block.tool_use_id]["title"] = f"{current_title}: {path}"
+
         content_block = [{
             "type": "content",
-            "content": {"type": "text", "text": block.content},
-        }] if block.content else []
+            "content": {"type": "text", "text": display_text},
+        }] if display_text else []
         existing = self.tool_calls.get(block.tool_use_id, {}).get("content", [])
         update = {
             "sessionUpdate": "tool_call_update",
@@ -1010,14 +1049,20 @@ class CDHACPAdapter:
                 self.send_session_update(self.tool_calls[event.tool_id])
             elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
                 if event.tool_id in self.tool_calls:
+                    title = event.tool_name
                     if event.tool_args:
+                        if path := event.tool_args.get("path", ""):
+                            title = f"{event.tool_name}: {path}"
+                        elif event.tool_name == "Bash":
+                            cmd = str(event.tool_args.get("command", ""))[:60]
+                            title = f"Bash: {cmd}"
                         content = _build_tool_call_content(
                             event.tool_name, event.tool_args
                         )
                         debug_log(
-                            "TOOL_CALL_COMPLETE %s id=%s args_keys=%s content_blocks=%d",
+                            "TOOL_CALL_COMPLETE %s id=%s args_keys=%s title=%s content_blocks=%d",
                             event.tool_name, event.tool_id,
-                            list(event.tool_args.keys()),
+                            list(event.tool_args.keys()), title,
                             len(content),
                         )
                     else:
@@ -1029,30 +1074,46 @@ class CDHACPAdapter:
                     self.tool_calls[event.tool_id].update({
                         "sessionUpdate": "tool_call_update",
                         "toolCallId": event.tool_id,
+                        "title": title,
                         "status": "pending",
                         "content": content,
                     })
                     self.send_session_update(self.tool_calls[event.tool_id])
             elif event.type == StreamEventType.TOOL_RESULT:
                 status = "failed" if event.result_is_error else "completed"
-                result_text = event.result_content or ""
+                display_text = _format_tui_display_text(event.result_content or "")
+
+                # Update title with path from result if not already set
+                if event.result_content and event.tool_id in self.tool_calls:
+                    try:
+                        parsed = json.loads(event.result_content)
+                    except json.JSONDecodeError:
+                        pass
+                    else:
+                        if isinstance(parsed, dict) and parsed.get("success") is True:
+                            current_title = self.tool_calls[event.tool_id].get("title", "")
+                            if ":" not in current_title:
+                                if path := parsed.get("path"):
+                                    self.tool_calls[event.tool_id]["title"] = f"{current_title}: {path}"
+
                 # TUI now renders all text content as Markdown.
                 # Wrap multi-line results in a fenced code block so they
                 # display as a code block rather than a raw paragraph.
                 # Skip if already contains a code fence to avoid nesting.
-                if result_text and "\n" in result_text and "```" not in result_text:
-                    result_text = f"```\n{result_text}\n```"
+                if display_text and "\n" in display_text and "```" not in display_text:
+                    display_text = f"```\n{display_text}\n```"
                 content_block = [{
                     "type": "content",
-                    "content": {"type": "text", "text": result_text},
-                }] if result_text else []
+                    "content": {"type": "text", "text": display_text},
+                }] if display_text else []
                 if event.tool_id in self.tool_calls:
                     existing_content = self.tool_calls[event.tool_id].get("content", [])
                 else:
                     existing_content = []
                 debug_log(
-                    "TOOL_RESULT id=%s status=%s result_len=%d existing_blocks=%d new_blocks=%d",
-                    event.tool_id, status, len(result_text),
+                    "TOOL_RESULT id=%s status=%s result_len=%d display_len=%d existing_blocks=%d new_blocks=%d",
+                    event.tool_id, status,
+                    len(event.result_content or ""), len(display_text),
                     len(existing_content), len(content_block),
                 )
                 update = {
