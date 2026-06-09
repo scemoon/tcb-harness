@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 
 import click
 
@@ -334,7 +335,7 @@ def version():
 
 
 # Attach remaining cdha subcommands selectively
-_skip = {"config", "init", "set", "list", "tui", "help", "version", "skill", "mcp"}
+_skip = {"config", "init", "set", "list", "tui", "help", "version", "mcp"}
 for cmd_name in cdha_cli.commands:
     if cmd_name in _skip:
         continue

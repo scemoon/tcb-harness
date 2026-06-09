@@ -204,26 +204,22 @@ def skill():
 
 @skill.command("list")
 def skill_list():
-    """List all installed skills."""
-    from cdha.skills.manager import SkillManager
-    import yaml
+    """List all skills."""
+    from cdha.skills.loader import SkillLoader
 
-    mgr = SkillManager()
-    skills = mgr.list()
+    loader = SkillLoader()
+    skills = loader.get_all()
 
     if not skills:
-        click.echo("No skills installed. Use `cdh skill add <path>` to install one.")
+        click.echo("No skills found.")
         return
 
-    click.echo("Installed skills:")
-    for s in skills:
-        name = s.get("name", "unknown")
-        desc = s.get("description", "")
-        enabled = s.get("enabled", True)
-        status = "[enabled]" if enabled else "[disabled]"
-        click.echo(f"  {status} {name}")
-        if desc:
-            click.echo(f"           {desc}")
+    click.echo("Skills:")
+    for s in skills.values():
+        status = "[enabled]" if s.enabled else "[disabled]"
+        click.echo(f"  {status} {s.name}")
+        if s.description:
+            click.echo(f"           {s.description}")
     click.echo(f"\nTotal: {len(skills)} skill(s)")
 
 
@@ -256,12 +252,7 @@ def skill_add(path):
 @skill.command("remove")
 @click.argument("name")
 def skill_remove(name):
-    """Remove an installed skill by name.
-
-    \b
-    Example:
-      cdh skill remove my-skill
-    """
+    """Remove an installed skill by name."""
     from cdha.skills.manager import SkillManager
 
     mgr = SkillManager()
@@ -272,6 +263,43 @@ def skill_remove(name):
         click.echo(f"Skill '{name}' removed.")
 
 
+@skill.command("enable")
+@click.argument("name")
+def skill_enable(name):
+    """Enable a skill by name."""
+    _toggle_skill(name, enabled=True)
+
+
+@skill.command("disable")
+@click.argument("name")
+def skill_disable(name):
+    """Disable a skill by name."""
+    _toggle_skill(name, enabled=False)
+
+
+def _toggle_skill(name: str, enabled: bool):
+    import yaml
+    from cdha.skills.loader import SkillLoader
+
+    loader = SkillLoader()
+    skill = loader.get(name)
+    if not skill or not skill.path:
+        click.echo(f"Skill '{name}' not found.")
+        return
+
+    skill_yaml = skill.path / "skill.yaml"
+    if not skill_yaml.exists():
+        click.echo(f"No skill.yaml found at {skill.path}")
+        return
+
+    data = yaml.safe_load(skill_yaml.read_text()) or {}
+    data["enabled"] = enabled
+    skill_yaml.write_text(yaml.dump(data, default_flow_style=False))
+    loader.invalidate_cache()
+    status = "enabled" if enabled else "disabled"
+    click.echo(f"Skill '{name}' {status}.")
+
+
 @config.group("skill")
 def config_skill():
     """Manage CDH skills (alias for cdh skill)."""
@@ -280,25 +308,22 @@ def config_skill():
 
 @config_skill.command("list")
 def config_skill_list():
-    """List all installed skills."""
-    from cdha.skills.manager import SkillManager
+    """List all skills."""
+    from cdha.skills.loader import SkillLoader
 
-    mgr = SkillManager()
-    skills = mgr.list()
+    loader = SkillLoader()
+    skills = loader.get_all()
 
     if not skills:
-        click.echo("No skills installed. Use `cdh skill add <path>` to install one.")
+        click.echo("No skills found.")
         return
 
-    click.echo("Installed skills:")
-    for s in skills:
-        name = s.get("name", "unknown")
-        desc = s.get("description", "")
-        enabled = s.get("enabled", True)
-        status = "[enabled]" if enabled else "[disabled]"
-        click.echo(f"  {status} {name}")
-        if desc:
-            click.echo(f"           {desc}")
+    click.echo("Skills:")
+    for s in skills.values():
+        status = "[enabled]" if s.enabled else "[disabled]"
+        click.echo(f"  {status} {s.name}")
+        if s.description:
+            click.echo(f"           {s.description}")
     click.echo(f"\nTotal: {len(skills)} skill(s)")
 
 
@@ -332,6 +357,20 @@ def config_skill_remove(name):
         click.echo(f"Error: {err}")
     else:
         click.echo(f"Skill '{name}' removed.")
+
+
+@config_skill.command("enable")
+@click.argument("name")
+def config_skill_enable(name):
+    """Enable a skill by name."""
+    _toggle_skill(name, enabled=True)
+
+
+@config_skill.command("disable")
+@click.argument("name")
+def config_skill_disable(name):
+    """Disable a skill by name."""
+    _toggle_skill(name, enabled=False)
 
 
 @cli.group(invoke_without_command=True)
