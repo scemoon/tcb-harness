@@ -1,0 +1,39 @@
+# TCB Deployment
+
+Production deployment pipeline for TCB.
+
+## Environments
+
+| Environment | Purpose | Deploy Trigger |
+|-------------|---------|----------------|
+| preview | BDD e2e verification | Feature branch push |
+| staging | Pre-production validation | PR merge to main |
+| production | Live traffic | Release tag + human approval |
+
+## Deployment Steps
+
+```yaml
+staging:
+  steps:
+    - tcb fn deploy --env staging
+    - tcb db migrate --env staging
+    - tcb hosting deploy --env staging
+    - smoke-test ${STAGING_URL}
+
+production:
+  steps:
+    - human-approval-gate
+    - tcb fn deploy --env production
+    - tcb db migrate --env production
+    - tcb hosting deploy --env production
+    - smoke-test ${PRODUCTION_URL}
+    - health-check ${PRODUCTION_URL}/health
+```
+
+## Rollback
+
+```bash
+# Rollback to previous version
+tcb fn rollback --name <function> --version <prev>
+tcb hosting rollback --version <prev>
+```

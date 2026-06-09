@@ -1,0 +1,44 @@
+# TCB Preview
+
+Preview deployment configuration. Dynamic URL resolution.
+
+## Overview
+
+TCB hosting supports preview deployments that create ephemeral environments with unique URLs. Used for BDD e2e verification before production.
+
+## Preview Flow
+
+```
+git push feature branch
+  → tcb hosting deploy --preview
+  → https://{env-id}-{project}.tcb-preview.com
+  → PREVIEW_URL set for e2e tests
+  → pytest-bdd features/ (against preview URL)
+  → TTL: 24h → auto cleanup
+```
+
+## Configuration
+
+```yaml
+preview:
+  auto_deploy: true
+  ttl: 24h
+  auto_cleanup: true
+  db_sandbox: true  # Isolated database for preview
+  url_pattern: "https://{env-id}.tcb-preview.com"
+  env:
+    - PREVIEW_URL
+    - DATABASE_URL (sandbox)
+```
+
+## BDD E2E Integration
+
+```bash
+# Deploy preview
+PREVIEW_URL=$(tcb hosting deploy --preview --output url)
+
+# Run BDD e2e tests
+PREVIEW_URL=$PREVIEW_URL pytest tests/e2e/ --preview-url $PREVIEW_URL
+
+# Cleanup (automatic after TTL)
+```

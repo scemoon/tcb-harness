@@ -1,0 +1,44 @@
+# Aliyun Preview
+
+Preview deployment configuration. Dynamic URL resolution.
+
+## Overview
+
+Aliyun Function Compute supports alias-based preview deployments. Each preview gets a unique alias with an isolated endpoint.
+
+## Preview Flow
+
+```
+git push feature branch
+  → fun deploy --preview
+  → https://{function}-{alias}.{region}.fc.devs.com
+  → PREVIEW_URL set for e2e tests
+  → pytest-bdd features/ (against preview URL)
+  → TTL: 24h → auto cleanup
+```
+
+## Configuration
+
+```yaml
+preview:
+  auto_deploy: true
+  ttl: 24h
+  auto_cleanup: true
+  db_sandbox: true
+  url_pattern: "https://{function}-{alias}.{region}.fc.devs.com"
+  env:
+    - PREVIEW_URL
+    - DATABASE_URL (sandbox)
+```
+
+## BDD E2E Integration
+
+```bash
+# Deploy preview
+PREVIEW_URL=$(fun deploy --preview --output url)
+
+# Run BDD e2e tests
+PREVIEW_URL=$PREVIEW_URL pytest tests/e2e/ --preview-url $PREVIEW_URL
+
+# Cleanup (automatic after TTL)
+```

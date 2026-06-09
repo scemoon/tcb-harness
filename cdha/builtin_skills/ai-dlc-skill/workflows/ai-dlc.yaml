@@ -1,0 +1,78 @@
+name: ai-dlc
+version: 2.0.0
+description: >
+  AI-DLC four-phase development workflow:
+  Understand (SDD+BDD) → Plan (SDD+TDD)
+  → Verify (BDD+TDD) → Deliver (SDD+Cloud).
+
+phases:
+  - name: understand
+    label: "① Understand — 理解"
+    description: >
+      Capture intent, produce OpenSpec spec delta in EARS format,
+      write BDD feature files with Given/When/Then scenarios.
+    practices:
+      - sdd  # proposal, spec delta
+      - bdd  # feature files, scenarios
+    gates:
+      - UND-001: Intent documented before implementation
+      - UND-002: Requirements use EARS syntax
+      - UND-003: Minimum 3 scenarios per FR (positive, negative, edge)
+      - Human review and approval
+    artifacts:
+      - requirements.md
+      - openspec/changes/{id}/spec-delta.md
+      - features/{domain}/{feature}.feature
+
+  - name: plan
+    label: "② Plan — 规划"
+    description: >
+      Design the solution, decompose into units with dependency DAG,
+      write test plans for each scenario.
+    practices:
+      - sdd  # design doc, task list
+      - tdd  # test plan
+    gates:
+      - PLN-001: Design doc exists (architecture, data model, API, state machine)
+      - PLN-002: Task DAG with explicit dependencies
+      - PLN-003: Test plan written before implementation
+      - Human review and approval
+    artifacts:
+      - openspec/changes/{id}/design.md
+      - openspec/changes/{id}/task-list.md
+
+  - name: verify
+    label: "③ Verify — 验证"
+    description: >
+      Execute TDD red-green-refactor per BDD scenario.
+      Verify all scenarios pass. Quality gates enforced as backpressure.
+    practices:
+      - bdd  # pytest-bdd scenario verification
+      - tdd  # red-green-refactor per scenario
+    gates:
+      - VRF-001: Tests written and fail first (Red)
+      - VRF-002: Minimum implementation passes (Green)
+      - VRF-003: Refactor keeps all tests green
+      - VRF-004: All BDD scenarios pass (pytest-bdd 100%)
+      - VRF-005: Quality gate backpressure (cov≥80%, scenarios≥90%, 0 vulns, no TODO)
+    artifacts:
+      - tests/unit/test_{feature}.py
+      - features/steps/test_{feature}_steps.py
+      - src/{module}/{feature}.py
+
+  - name: deliver
+    label: "④ Deliver — 交付"
+    description: >
+      Deploy to preview, run BDD e2e, stage, human approval,
+      production deploy, BVT validation.
+    practices:
+      - sdd   # archive artifacts
+      - cloud # TCB/Aliyun preview + deploy
+    gates:
+      - DLV-001: Preview deploy + BDD e2e pass
+      - DLV-002: Human approval for production
+      - DLV-003: BVT pass (auto-rollback on failure)
+    artifacts:
+      - Preview URL (dynamic from cloud platform)
+      - BDD e2e report
+      - BVT report

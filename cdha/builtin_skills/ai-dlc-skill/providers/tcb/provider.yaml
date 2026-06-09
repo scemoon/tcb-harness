@@ -1,0 +1,78 @@
+# TCB Provider
+
+Default cloud development platform.
+
+## Metadata
+
+```yaml
+provider:
+  name: tcb
+  display_name: Tencent CloudBase
+  default: true
+  version: 2.0.0
+  website: https://cloud.tencent.com/product/tcb
+
+regions:
+  - id: ap-shanghai
+    name: Shanghai
+  - id: ap-beijing
+    name: Beijing
+  - id: ap-guangzhou
+    name: Guangzhou
+  - id: ap-singapore
+    name: Singapore
+
+services:
+  - functions: cloudbase
+  - database: cloudbase
+  - storage: cloudbase
+  - hosting: cloudbase
+
+limits:
+  function_timeout: 60s
+  function_memory: 1536MB
+  max_instances: 100
+
+capabilities:
+  - serverless_functions
+  - static_hosting
+  - serverless_database
+  - serverless_storage
+  - preview_deploy
+  - ssl_cert
+  - custom_domain
+  - cdn_acceleration
+```
+
+## CLI
+
+```bash
+# Deploy preview (returns dynamic URL)
+tcb hosting deploy --preview
+# → https://{env-id}-{project}.tcb-preview.com
+
+# Deploy production
+tcb fn deploy --env production
+tcb hosting deploy --env production
+
+# Database
+tcb db query "SELECT * FROM users"
+tcb db migrate
+
+# Functions
+tcb fn deploy --name hello --dir ./functions
+tcb fn invoke --name hello --params '{}'
+tcb fn logs --name hello
+
+# Environment
+tcb env list
+tcb env use <env-id>
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| TCB_SECRET_ID | Tencent Cloud secret ID |
+| TCB_SECRET_KEY | Tencent Cloud secret key |
+| TCB_ENV_ID | CloudBase environment ID |

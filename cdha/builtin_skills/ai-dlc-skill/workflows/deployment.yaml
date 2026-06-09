@@ -1,0 +1,77 @@
+# AI-DLC Deliver Deployment Pipeline
+
+Extends the Deliver phase with detailed deployment steps, environment management, and BVT validation.
+
+## Environments
+
+| Environment | Purpose | Deploy Trigger | TTL |
+|-------------|---------|----------------|-----|
+| preview | BDD e2e verification | Feature branch | 24h, auto-cleanup |
+| staging | Pre-production validation | PR merge to main | — |
+| production | Live traffic | Release tag + human approval | — |
+
+## Pipeline
+
+```yaml
+name: deliver
+version: 2.0.0
+
+stages:
+  - name: preview
+    description: Preview deploy with dynamic URL
+    steps:
+      - name: deploy_preview
+        command: deploy_cloud --preview
+        platform: dynamic  # TCB or Aliyun
+        output:
+          - name: preview_url
+      - name: bdd_e2e
+        command: pytest tests/e2e/ --preview-url ${PREVIEW_URL}
+        env:
+          PREVIEW_URL: ${preview_url}
+
+  - name: staging
+    description: Staging smoke test
+    steps:
+      - name: deploy_staging
+        command: deploy_cloud --env staging
+      - name: smoke
+        command: smoke-test ${STAGING_URL}
+
+  - name: production
+    description: Production deploy with BVT
+    conditions:
+      branch: main
+    steps:
+      - name: approve
+        command: human-approval-gate
+      - name: deploy_production
+        command: deploy_cloud --env production
+      - name: bvt
+        command: bvt ${PRODUCTION_URL}
+        timeout: 60s
+      - name: health_check
+        command: curl -f ${PRODUCTION_URL}/health
+        timeout: 30s
+
+rollback:
+  triggers:
+    - condition: BVT failure → automatic rollback
+    - condition: Health check 5xx → automatic rollback
+    - condition: Error rate >1% in 5min → manual rollback
+  action: deploy_cloud --rollback ${LAST_STABLE_VERSION}
+```
+
+## BVT Checklist
+
+Executed after every production deployment:
+
+```bash
+bvt ${PRODUCTION_URL}
+#  1. /health returns 200 OK
+#  2. Core login flow works
+#  3. Core API endpoints respond
+#  4. Database reachable
+#  5. Error rate < 0.1%
+#  6. Latency p99 < 500ms
+```

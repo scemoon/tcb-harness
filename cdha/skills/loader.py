@@ -33,6 +33,11 @@ class SkillLoader:
         if USER_SKILLS_DIR.exists():
             dirs.append(("user", USER_SKILLS_DIR))
 
+        # Built-in skills packaged with cdha
+        builtin_dir = Path(__file__).resolve().parent.parent / "builtin_skills"
+        if builtin_dir.exists():
+            dirs.append(("builtin", builtin_dir))
+
         search_paths = [
             (".opencode", ".claude", ".agents"),
         ]

@@ -1,0 +1,40 @@
+# Aliyun Deployment
+
+Production deployment pipeline for Aliyun.
+
+## Environments
+
+| Environment | Purpose | Deploy Trigger |
+|-------------|---------|----------------|
+| preview | BDD e2e verification | Feature branch push |
+| staging | Pre-production validation | PR merge to main |
+| production | Live traffic | Release tag + human approval |
+
+## Deployment Steps
+
+```yaml
+staging:
+  steps:
+    - fun deploy --env staging
+    - oss sync ./static oss://bucket-staging/
+    - smoke-test ${STAGING_URL}
+
+production:
+  steps:
+    - human-approval-gate
+    - fun deploy --env production --publish
+    - oss sync ./static oss://bucket-production/
+    - cdn refresh --domain example.com
+    - smoke-test ${PRODUCTION_URL}
+    - health-check ${PRODUCTION_URL}/health
+```
+
+## Rollback
+
+```bash
+# Rollback FC version
+fun deploy --function <name> --version <prev> --alias release
+
+# Rollback static site
+oss cp oss://bucket-production/backup-<timestamp>/ oss://bucket-production/ --recursive
+```

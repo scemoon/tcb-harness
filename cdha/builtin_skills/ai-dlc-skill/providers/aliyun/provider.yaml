@@ -1,0 +1,76 @@
+# Aliyun Provider
+
+Aliyun (Alibaba Cloud) provider — secondary platform.
+
+## Metadata
+
+```yaml
+provider:
+  name: aliyun
+  display_name: Alibaba Cloud
+  default: false
+  version: 2.0.0
+  website: https://www.aliyun.com/
+
+regions:
+  - id: cn-shanghai
+    name: Shanghai
+  - id: cn-beijing
+    name: Beijing
+  - id: cn-hangzhou
+    name: Hangzhou
+  - id: ap-southeast-1
+    name: Singapore
+
+services:
+  - functions: function-compute
+  - database: rds + tablestore
+  - storage: oss
+  - hosting: static-website + cdn
+
+limits:
+  function_timeout: 600s
+  function_memory: 3072MB
+
+capabilities:
+  - function_compute
+  - oss_storage
+  - rds_database
+  - tablestore
+  - static_hosting
+  - cdn_acceleration
+  - preview_deploy
+  - ssl_cert
+```
+
+## CLI
+
+```bash
+# Deploy functions
+fun deploy --function hello
+
+# Preview (returns dynamic URL)
+fun deploy --preview
+# → https://{function}-{alias}.{region}.fc.devs.com
+
+# Storage (OSS)
+oss cp ./file.txt oss://bucket/path/
+oss ls oss://bucket/
+
+# Database
+# RDS: standard MySQL/PostgreSQL CLI
+# TableStore: ots search
+
+# Environment
+fun config --account-id <id>
+fun config --region cn-shanghai
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| ALICLOUD_ACCESS_KEY | Aliyun access key ID |
+| ALICLOUD_SECRET_KEY | Aliyun access key secret |
+| ALICLOUD_REGION | Default region |
+| FUNCTOIN_COMPUTE_SERVICE | FC service name |

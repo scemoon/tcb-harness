@@ -1,0 +1,17 @@
+name: ai-dlc-skill
+description: >-
+  AI-Driven Development Lifecycle skill.
+  Core phases: Understand (SDD+BDD) → Plan (SDD+TDD)
+  → Verify (BDD+TDD) → Deliver (SDD+Cloud).
+  Based on AI-DLC methodology with SDD/BDD/TDD practices.
+  Default cloud platform: TCB. Also supports Aliyun.
+version: 2.0.0
+entry: SKILL.md
+categories:
+  - ai-dlc
+  - development
+  - sdd
+  - bdd
+  - tdd
+  - specification
+  - cloud
