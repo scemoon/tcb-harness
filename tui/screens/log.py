@@ -268,6 +268,14 @@ class LogScreen(ModalScreen[None]):
         self._entries: list[LogEntry] = []
         self._current_index: int = -1
         self._reversed: bool = False
+        # Tracks whether the target log file has been observed to exist
+        # at least once.  When the F4 handler is pressed on a brand-new
+        # session the path is known but the file does not exist yet
+        # (the cdh-agent-acp subprocess has not been spawned, or
+        # ``acp_new_session`` has not yet renamed the file).  In that
+        # case we show a "waiting" placeholder and start a poller that
+        # detects the file's appearance and auto-resumes tailing.
+        self._file_was_present: bool = False
 
     def compose(self) -> ComposeResult:
         path = self._log_path or _find_log_file()
@@ -280,6 +288,20 @@ class LogScreen(ModalScreen[None]):
         if self._log_path is None:
             self._append_system("No log file yet. Start an agent to begin logging.")
             return
+        if not self._log_path.exists():
+            # The file path is known (per-session log) but the
+            # subprocess has not yet created it.  Show a hint and
+            # poll for the file to appear.
+            self._append_system(
+                f"⌛ Waiting for log file to be created…\n   {self._log_path}"
+            )
+            self._poll_timer = self.set_interval(0.2, self._poll_new_lines)
+            return
+        self._begin_tailing()
+
+    def _begin_tailing(self) -> None:
+        """Open the log file, ingest a tail-window of history, and start polling."""
+        assert self._log_path is not None
         try:
             size = self._log_path.stat().st_size
             start = max(0, size - _PREVIEW_BYTES)
@@ -293,7 +315,9 @@ class LogScreen(ModalScreen[None]):
         except OSError as e:
             self._append_system(f"Failed to open log: {e}")
             return
-        self._poll_timer = self.set_interval(0.2, self._poll_new_lines)
+        self._file_was_present = True
+        if self._poll_timer is None:
+            self._poll_timer = self.set_interval(0.2, self._poll_new_lines)
 
     def on_unmount(self) -> None:
         if self._poll_timer is not None:
@@ -399,7 +423,18 @@ class LogScreen(ModalScreen[None]):
         scroller.mount(Static(f"[dim]{msg}[/dim]"))
 
     def _poll_new_lines(self) -> None:
-        if self._log_path is None or not self._log_path.exists():
+        if self._log_path is None:
+            return
+        # "File appeared" transition: the F4 handler was called on a
+        # brand-new session whose log file did not exist yet, so we
+        # are still in the "waiting" state.  When the subprocess
+        # finally creates the file, switch into the normal tailing
+        # path.
+        if not self._log_path.exists():
+            return
+        if not self._file_was_present:
+            self._append_system(f"── log file appeared: {self._log_path} ──")
+            self._begin_tailing()
             return
         try:
             size = self._log_path.stat().st_size

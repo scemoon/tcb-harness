@@ -684,6 +684,24 @@ class AgentEngine:
         if self.current_agent.permission_task != AgentPermission.DENY:
             system_parts.append(PLAN_INSTRUCTIONS)
 
+        # Tell the model how to format intermediate reasoning so the TUI
+        # can render it as a collapsible "thought" block instead of
+        # leaking it into the visible answer.  Without these tags, the
+        # model's planning prose ("I will now update X…", "X is done,
+        # let me verify…") flows through as plain ``agent_message_chunk``
+        # and shows up in chat interleaved with tool calls.
+        system_parts.append(
+            "\n## Response style\n"
+            "- If you need to reason between tool calls, wrap your "
+            "reasoning in `<thinking>...</thinking>`.  The TUI will "
+            "render the wrapped block as a collapsible thought and "
+            "keep it out of the main answer.\n"
+            "- Do not narrate your plan in the visible answer.  Avoid "
+            'phrases like "I will now…", "Let me first…", "X is done, '
+            'let me verify…" — those should go inside `<thinking>`.  '
+            "The visible answer is only the final user-facing summary.\n"
+        )
+
         if self._harness_mode:
             system_parts.append(
                 "\n## Harness Mode Active\n"
@@ -1099,6 +1117,22 @@ class AgentEngine:
                 if not self._streaming_used:
                     for tb in thinking_blocks:
                         yield StreamEvent.thinking(tb)
+
+            # Log the raw model response so developers can verify the
+            # model is actually emitting ``<thinking>`` markers (and not
+            # bleeding planning prose into the visible answer).  Goes
+            # to the cdha root logger → ~/.cdh/logs/cdh.log when
+            # ``setup_logging(DEBUG)`` is in effect.
+            logger.debug(
+                "RAW_RESPONSE turn=%d text_len=%d first_200=%r "
+                "thinking_blocks=%d tool_uses=%d streaming_used=%s",
+                turn + 1,
+                len(response_text),
+                response_text[:200],
+                len(thinking_blocks),
+                len(tool_uses),
+                self._streaming_used,
+            )
 
             # Add assistant response to context with proper content blocks
             if tool_uses:
