@@ -256,7 +256,7 @@ class Window(containers.VerticalScroll):
 This is a view of your conversation with the agent.
 
 - **cursor keys** Scroll
-- **alt+up / alt+down** Navigate content
+- **ctrl+j / ctrl+k** Navigate content
 - **start typing** Focus the prompt
 """
     BINDING_GROUP_TITLE = "View"
@@ -274,16 +274,16 @@ class Conversation(containers.Vertical):
     CURSOR_BINDING_GROUP = Binding.Group(description="Cursor")
     BINDINGS = [
         Binding(
-            "alt+up",
-            "cursor_up",
-            "Block cursor up",
+            "ctrl+j",
+            "cursor_down",
+            "Block cursor down",
             priority=True,
             group=CURSOR_BINDING_GROUP,
         ),
         Binding(
-            "alt+down",
-            "cursor_down",
-            "Block cursor down",
+            "ctrl+k",
+            "cursor_up",
+            "Block cursor up",
             priority=True,
             group=CURSOR_BINDING_GROUP,
         ),
@@ -294,24 +294,11 @@ class Conversation(containers.Vertical):
             tooltip="Select this block",
         ),
         Binding(
-            "space",
-            "expand_block",
-            "Expand",
-            key_display="␣",
-            tooltip="Expand cursor block",
-        ),
-        Binding(
-            "space",
-            "collapse_block",
-            "Collapse",
-            key_display="␣",
-            tooltip="Collapse cursor block",
-        ),
-        Binding(
-            "x",
+            "ctrl+x",
             "toggle_expand",
             "Toggle expand",
             tooltip="Toggle expand/collapse cursor block",
+            priority=True,
         ),
         Binding(
             "escape",
@@ -509,6 +496,7 @@ class Conversation(containers.Vertical):
             and (event.character.isalnum() or event.character in "$/!")
             and self.window.has_focus
         ):
+            event.stop()
             self.prompt.focus()
             self.prompt.prompt_text_area.post_message(event)
 
