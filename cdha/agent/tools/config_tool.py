@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from cdha.agent.tools.permissions import PermissionResult, ToolPermissionContext
 from cdha.agent.tools.protocol import ToolResult
 from cdha.agent.tools.registry import ToolSpec
 from cdha.config import GlobalConfig
@@ -63,12 +62,6 @@ class ConfigReadTool:
                 return None
         return current
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class ConfigWriteTool:
@@ -135,9 +128,3 @@ class ConfigWriteTool:
             else:
                 setattr(current, last, value)
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW

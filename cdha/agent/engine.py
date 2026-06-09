@@ -425,7 +425,6 @@ class AgentEngine:
         from cdha.agent.tools.file_ops import ToolFactory, Permission
         from cdha.agent.agents.types import BuildAgent
         from cdha.agent.hooks import HookManager
-        from cdha.agent.permissions import PermissionChecker, create_safe_permission_set
         from cdha.skills.loader import SkillLoader
         from cdha.mcp.manager import MCPManager
         from cdha.agent.tools.cron_tools import CronScheduler
@@ -443,7 +442,6 @@ class AgentEngine:
         self._skills_loaded = False
         self._session: Optional[AgentSession] = None
         self._hooks = HookManager()
-        self._permissions = PermissionChecker(create_safe_permission_set())
         self._task_manager = TaskManager(on_change=self._on_task_change)
         self._plan_dirty: bool = False
         self._project_config: dict = {}
@@ -852,62 +850,52 @@ class AgentEngine:
         from cdha.models.messages import get_tool_category
         return get_tool_category(name).value
 
+    _TOOL_NAME_TO_PERM_KEY: dict[str, str] = {
+        "Read": "read",
+        "Write": "edit",
+        "Edit": "edit",
+        "Insert": "edit",
+        "UndoEdit": "edit",
+        "ApplyPatch": "edit",
+        "Bash": "bash",
+        "WebFetch": "webfetch",
+        "WebSearch": "websearch",
+        "Glob": "glob",
+        "Grep": "grep",
+        "List": "list",
+        "Task": "task",
+        "Agent": "task",
+        "Skill": "skill",
+    }
+
     def _check_tool_permission(self, name: str, inp: dict) -> str | None:
-        """Check agent-level permission for a tool. Returns an error string or None."""
+        """Unified agent-level permission check for all tools."""
         from cdha.agent.agents.types import AgentPermission
-        if name == "Read":
-            if self.current_agent.permission_read == AgentPermission.DENY:
-                return "Read denied"
-        elif name in ("Write", "Edit", "Insert", "UndoEdit", "ApplyPatch"):
-            if self.current_agent.permission_edit == AgentPermission.DENY:
-                return json.dumps({"success": False, "error": "Edit denied"})
-            if self.current_agent.permission_edit == AgentPermission.ASK:
-                return json.dumps({"success": False, "error": "Edit requires approval", "requires_approval": True})
-        elif name == "Bash":
-            if self.current_agent.permission_bash == AgentPermission.DENY:
-                return json.dumps({"success": False, "error": "Bash denied"})
-            if self.current_agent.permission_bash == AgentPermission.ASK:
-                return json.dumps({"success": False, "error": "Bash requires approval", "requires_approval": True})
-        elif name in ("WebFetch",):
-            if self.current_agent.permission_webfetch == AgentPermission.DENY:
-                return "WebFetch denied"
-        elif name in ("WebSearch",):
-            if self.current_agent.permission_websearch == AgentPermission.DENY:
-                return "WebSearch denied"
-        elif name == "Glob":
-            if self.current_agent.permission_glob == AgentPermission.DENY:
-                return json.dumps({"success": False, "error": "Glob denied"})
-        elif name == "Grep":
-            if self.current_agent.permission_grep == AgentPermission.DENY:
-                return json.dumps({"success": False, "error": "Grep denied"})
-        elif name == "List":
-            if self.current_agent.permission_list == AgentPermission.DENY:
-                return json.dumps({"success": False, "error": "List denied"})
-        elif name in ("Task", "Agent"):
-            if self.current_agent.permission_task == AgentPermission.DENY:
-                return json.dumps({"success": False, "error": "Task denied"})
+        perm_key = self._TOOL_NAME_TO_PERM_KEY.get(name)
+        if perm_key is None:
+            return None
+        tools_config = self.current_agent.get_tools_config()
+        perm = tools_config.get(perm_key, AgentPermission.ALLOW)
+        if perm == AgentPermission.DENY:
+            return json.dumps({"success": False, "error": f"{name} denied"})
+        if perm == AgentPermission.ASK:
+            return json.dumps({"success": False, "error": f"{name} requires approval", "requires_approval": True})
         return None
 
     async def _execute_tool(self, tool_call: dict) -> dict:
         from cdha.agent.tools.registry import ToolCall as RegistryToolCall
-        from cdha.agent.tools.permissions import ToolPermissionContext
         name = tool_call["name"]
         tid = tool_call["id"]
         inp = tool_call["input"]
         category = self._tool_category(name)
         base = {"tool_use_id": tid, "is_error": False, "category": category}
         try:
-            # Apply agent-level permission checks for sensitive tools
             denied = self._check_tool_permission(name, inp)
             if denied:
                 return {**base, "content": denied, "is_error": True}
 
-            # Dispatch via ToolRegistry with permission context (Clawd-Code pattern)
             call = RegistryToolCall(name=name, input=inp, tool_use_id=tid)
-            perm_ctx = ToolPermissionContext.from_iterables(
-                workspace_root=str(self._workspace),
-            )
-            result = self._tool_registry.dispatch(call, permission_context=perm_ctx)
+            result = self._tool_registry.dispatch(call)
 
             # Handle SendMessage tracking
             if name == "SendMessage":
@@ -1234,7 +1222,7 @@ class AgentEngine:
                 except (json.JSONDecodeError, ValueError):
                     pass
 
-                if requires_approval and tu["name"] in ("Write", "Edit", "Bash"):
+                if requires_approval:
                     self._pending_approval = {"tool_call": tu, "category": category}
                     self._notify_event(ToolEvent(
                         kind="tool_result",
@@ -1308,6 +1296,7 @@ class AgentEngine:
 
         Returns the tool result dict, or None if no pending approval.
         """
+        from cdha.agent.agents.types import AgentPermission
         if not self._pending_approval:
             return None
         
@@ -1322,18 +1311,17 @@ class AgentEngine:
                 "category": tc.get("category", "unknown"),
             }
         
-        # Re-execute with bypassed permission (user approved)
-        saved_edit = self.current_agent.permission_edit
-        saved_bash = self.current_agent.permission_bash
+        perm_key = self._TOOL_NAME_TO_PERM_KEY.get(tc["name"])
+        if perm_key is None:
+            return await self._execute_tool(tc)
+
+        attr_name = f"permission_{perm_key}"
+        saved = getattr(self.current_agent, attr_name)
         try:
-            if tc["name"] in ("Write", "Edit"):
-                self.current_agent.permission_edit = AgentPermission.ALLOW
-            elif tc["name"] == "Bash":
-                self.current_agent.permission_bash = AgentPermission.ALLOW
+            setattr(self.current_agent, attr_name, AgentPermission.ALLOW)
             return await self._execute_tool(tc)
         finally:
-            self.current_agent.permission_edit = saved_edit
-            self.current_agent.permission_bash = saved_bash
+            setattr(self.current_agent, attr_name, saved)
 
     def reset(self):
         self.context.reset()

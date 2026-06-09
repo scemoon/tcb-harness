@@ -114,10 +114,10 @@ class BuildAgent(AgentConfig):
     def __init__(self):
         super().__init__(
             name="build",
-            description="Full development agent with all tools enabled",
+            description="Full development agent with all tools enabled. Edits and shell commands require user approval.",
             mode=AgentMode.PRIMARY,
-            permission_edit=AgentPermission.ALLOW,
-            permission_bash=AgentPermission.ALLOW,
+            permission_edit=AgentPermission.ASK,
+            permission_bash=AgentPermission.ASK,
             permission_read=AgentPermission.ALLOW,
             permission_webfetch=AgentPermission.ALLOW,
             permission_websearch=AgentPermission.ALLOW,

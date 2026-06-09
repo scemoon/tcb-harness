@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from cdha.agent.tools.file_ops import FileOps, Permission
-from cdha.agent.tools.permissions import PermissionResult, ToolPermissionContext
 from cdha.agent.tools.protocol import ToolResult
 from cdha.agent.tools.registry import ToolSpec
 
@@ -38,12 +37,6 @@ class ReadTool:
         is_error = str(content).startswith("Error") or str(content).startswith("File not found")
         return ToolResult(name="Read", output=str(content), is_error=is_error)
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class WriteTool:
@@ -71,12 +64,6 @@ class WriteTool:
         result = self._file_ops.write(path, content)
         return ToolResult(name="Write", output=result, is_error=not result.get("success", True))
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class EditTool:
@@ -106,12 +93,6 @@ class EditTool:
         result = self._file_ops.edit(path, old, new)
         return ToolResult(name="Edit", output=result, is_error=not result.get("success", True))
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class InsertTool:
@@ -141,12 +122,6 @@ class InsertTool:
         result = self._file_ops.insert(path, line, text)
         return ToolResult(name="Insert", output=result, is_error=not result.get("success", True))
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class UndoEditTool:
@@ -172,12 +147,6 @@ class UndoEditTool:
         result = self._file_ops.undo_edit(path)
         return ToolResult(name="UndoEdit", output=result, is_error=not result.get("success", True))
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class GlobTool:
@@ -203,12 +172,6 @@ class GlobTool:
         result = self._file_ops.glob(pattern)
         return ToolResult(name="Glob", output=str(result))
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class GrepTool:
@@ -236,12 +199,6 @@ class GrepTool:
         result = self._file_ops.grep(pattern, include)
         return ToolResult(name="Grep", output=str(result))
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class ListTool:
@@ -267,9 +224,3 @@ class ListTool:
         result = self._file_ops.list(path)
         return ToolResult(name="List", output=str(result))
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW

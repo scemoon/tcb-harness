@@ -205,6 +205,14 @@ class ANSICursor(NamedTuple):
     """Optional style for remaining line."""
     auto_scroll: bool = False
     """Perform a scroll with the movement?"""
+    save: bool = False
+    """Save cursor position (DECSC)."""
+    restore: bool = False
+    """Restore cursor position (DECRC)."""
+    insert_lines: int = 0
+    """Insert blank lines at cursor (IL)."""
+    delete_lines: int = 0
+    """Delete lines at cursor (DL)."""
 
     def __rich_repr__(self) -> rich.repr.Result:
         yield "delta_x", self.delta_x, None
@@ -525,6 +533,10 @@ class ANSIStream:
                     return ANSIScroll(-1, int(lines))
                 case [lines, _, "T"]:
                     return ANSIScroll(+1, int(lines))
+                case [lines, _, "L"]:
+                    return ANSICursor(insert_lines=int(lines or 1))
+                case [lines, _, "M"]:
+                    return ANSICursor(delete_lines=int(lines or 1))
                 case [row, _, "d"]:
                     # VPA - Vertical Position Absolute: ESC[nd
                     return ANSICursor(absolute_y=int(row or 1) - 1)
@@ -681,6 +693,10 @@ class ANSIStream:
                         yield ANSICursor(delta_y=-1, auto_scroll=True)
                     elif control == "ind":
                         yield ANSICursor(delta_y=+1, auto_scroll=True)
+                    elif control == "decsc":
+                        yield ANSICursor(save=True)
+                    elif control == "decrc":
+                        yield ANSICursor(restore=True)
                     else:
                         pass
                 else:
@@ -997,6 +1013,9 @@ class TerminalState:
         self.mouse_tracking: MouseTracking | None = None
         """The mouse tracking state."""
 
+        self._saved_cursor: tuple[int, int, DECState] | None = None
+        """Saved cursor position and DEC state (DECSC/DECRC)."""
+
         self._updates: int = 0
         """Incrementing integer used in caching."""
 
@@ -1213,8 +1232,7 @@ class TerminalState:
         buffer = self.buffer
         if clear == "screen":
             buffer.clear(self.advance_updates())
-            # for _ in range(self.height):
-            #     self.add_line(buffer, EMPTY_CONTENT)
+            buffer._updated_lines = None
         elif clear == "cursor_to_end":
             buffer._updated_lines = None
             folded_cursor_line = buffer.cursor_line
@@ -1355,8 +1373,59 @@ class TerminalState:
                 _relative,
                 update_background,
                 auto_scroll,
+                save,
+                restore,
+                insert_lines,
+                delete_lines,
             ):
                 buffer = self.buffer
+
+                if save:
+                    self._saved_cursor = (
+                        buffer.cursor_offset,
+                        buffer.cursor_line,
+                        self.dec_state,
+                    )
+                if restore:
+                    if self._saved_cursor is not None:
+                        buffer.cursor_offset, buffer.cursor_line, self.dec_state = (
+                            self._saved_cursor
+                        )
+
+                if insert_lines:
+                    count = insert_lines
+                    margin_top, margin_bottom = buffer.scroll_margin.get_line_range(self.height)
+                    gutter_lines = max(0, buffer.height - self.height)
+                    if margin_top <= buffer.cursor_line <= margin_bottom:
+                        region_top = buffer.cursor_line
+                        for _ in range(count):
+                            for line_no in range(margin_bottom, region_top, -1):
+                                copy_line_no = line_no - 1
+                                try:
+                                    src = buffer.lines[copy_line_no + gutter_lines]
+                                except IndexError:
+                                    self.update_line(buffer, line_no + gutter_lines, EMPTY_CONTENT, NULL_STYLE)
+                                else:
+                                    self.update_line(buffer, line_no + gutter_lines, src.content, src.style)
+                            self.update_line(buffer, region_top + gutter_lines, EMPTY_CONTENT, NULL_STYLE)
+
+                if delete_lines:
+                    count = delete_lines
+                    margin_top, margin_bottom = buffer.scroll_margin.get_line_range(self.height)
+                    gutter_lines = max(0, buffer.height - self.height)
+                    if margin_top <= buffer.cursor_line <= margin_bottom:
+                        region_top = buffer.cursor_line
+                        for _ in range(count):
+                            for line_no in range(region_top, margin_bottom):
+                                copy_line_no = line_no + 1
+                                try:
+                                    src = buffer.lines[copy_line_no + gutter_lines]
+                                except IndexError:
+                                    self.update_line(buffer, line_no + gutter_lines, EMPTY_CONTENT, NULL_STYLE)
+                                else:
+                                    self.update_line(buffer, line_no + gutter_lines, src.content, src.style)
+                            self.update_line(buffer, margin_bottom + gutter_lines, EMPTY_CONTENT, NULL_STYLE)
+
                 folded_lines = buffer.folded_lines
                 while buffer.cursor_line >= len(folded_lines):
                     self.add_line(buffer, EMPTY_LINE)
@@ -1470,6 +1539,8 @@ class TerminalState:
                     self.cursor_blink = features.cursor_blink
                 if features.cursor_keys is not None:
                     self.cursor_keys = features.cursor_keys
+                if features.replace_mode is not None:
+                    self.replace_mode = features.replace_mode
                 if features.auto_wrap is not None:
                     self.auto_wrap = features.auto_wrap
                 self.advance_updates()

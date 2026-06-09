@@ -309,16 +309,8 @@ Tap escape *twice* to exit.
                 ]
                 if refresh_lines:
                     self.refresh(*refresh_lines)
-            alternate_height = self.state.alternate_buffer.height
             if alternate_delta is None:
-                self.refresh(
-                    Region(
-                        0,
-                        scrollback_height - scroll_y,
-                        window_width,
-                        scrollback_height + alternate_height,
-                    )
-                )
+                self.refresh()
             else:
                 alternate_delta = {
                     line_no + scrollback_height for line_no in alternate_delta
@@ -439,6 +431,9 @@ Tap escape *twice* to exit.
         event.stop()
 
         if event.key == "escape":
+            if self._alternate_screen:
+                await self.write_process_stdin("\x1b")
+                return
             if self._escaping:
                 if monotonic() < self._escape_time + ESCAPE_TAP_DURATION:
                     self.blur()

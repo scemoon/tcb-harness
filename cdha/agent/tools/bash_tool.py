@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from cdha.agent.tools.file_ops import ShellTool
-from cdha.agent.tools.permissions import PermissionResult, ToolPermissionContext
 from cdha.agent.tools.protocol import ToolResult
 from cdha.agent.tools.registry import ToolSpec
 
@@ -90,9 +89,3 @@ class BashTool:
             return "(no output)" if not is_error else "(failed with no output)"
         return "\n\n".join(parts)
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from cdha.agent.tools.permissions import PermissionResult, ToolPermissionContext
 from cdha.agent.tools.protocol import ToolResult
 from cdha.agent.tools.registry import ToolRegistry, ToolSpec
 
@@ -75,12 +74,6 @@ class AgentTool:
                 break
         return ToolResult(name="Agent", output={"results": results}, is_error=any_error)
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class TaskTool:
@@ -139,9 +132,3 @@ class TaskTool:
             return ToolResult(name="Task", output={"error": str(e)}, is_error=True)
         return ToolResult(name="Task", output=str(result))
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW

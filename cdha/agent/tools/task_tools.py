@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from cdha.agent.tools.permissions import PermissionResult, ToolPermissionContext
 from cdha.agent.tools.protocol import ToolResult
 from cdha.agent.tools.registry import ToolSpec
 
@@ -36,12 +35,6 @@ class TaskCreateTool:
         )
         return ToolResult(name="TaskCreate", output={"task": {"id": task["id"], "subject": task["subject"]}})
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class TaskGetTool:
@@ -69,12 +62,6 @@ class TaskGetTool:
         info = {k: task[k] for k in ("id", "subject", "description", "status", "blocks", "blockedBy")}
         return ToolResult(name="TaskGet", output={"task": info})
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class TaskListTool:
@@ -101,12 +88,6 @@ class TaskListTool:
             summaries.append(s)
         return ToolResult(name="TaskList", output={"tasks": summaries})
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class TaskUpdateTool:
@@ -149,12 +130,6 @@ class TaskUpdateTool:
             return ToolResult(name="TaskUpdate", output={"success": True, "taskId": task_id, "updatedFields": ["deleted"]})
         return ToolResult(name="TaskUpdate", output={"success": True, "taskId": task_id, "task": {"id": result["id"], "subject": result["subject"], "status": result["status"]}})
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class TaskOutputTool:
@@ -179,12 +154,6 @@ class TaskOutputTool:
         result = self._tm.get_task_output(task_id)
         return ToolResult(name="TaskOutput", output=result)
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class TaskStopTool:
@@ -213,12 +182,6 @@ class TaskStopTool:
             return ToolResult(name="TaskStop", output={"success": True, "stopped": True, "task_id": task_id})
         return ToolResult(name="TaskStop", output={"success": True, "stopped": True, "task_id": task_id})
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class TodoCreateTool:
@@ -243,12 +206,6 @@ class TodoCreateTool:
         todo_id = self._tm.add_todo(text)
         return ToolResult(name="TodoCreate", output={"id": todo_id, "text": text})
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class TodoListTool:
@@ -266,12 +223,6 @@ class TodoListTool:
         todos = self._tm.list_todos()
         return ToolResult(name="TodoList", output=todos)
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
 
 
 class TodoCompleteTool:
@@ -296,9 +247,3 @@ class TodoCompleteTool:
         ok = self._tm.complete_todo(str(todo_id))
         return ToolResult(name="TodoComplete", output={"success": ok, "todo_id": todo_id}, is_error=not ok)
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW

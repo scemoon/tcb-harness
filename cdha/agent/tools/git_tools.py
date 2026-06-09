@@ -4,7 +4,6 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from cdha.agent.tools.permissions import PermissionResult, ToolPermissionContext
 from cdha.agent.tools.protocol import ToolResult
 from cdha.agent.tools.registry import ToolSpec
 
@@ -87,9 +86,3 @@ class WorktreeTool:
         except Exception as e:
             return ToolResult(name="Worktree", output={"error": str(e)}, is_error=True)
 
-    def check_permissions(
-        self,
-        tool_input: dict[str, Any],
-        permission_context: ToolPermissionContext,
-    ) -> PermissionResult:
-        return PermissionResult.ALLOW
