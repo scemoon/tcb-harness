@@ -1,40 +1,67 @@
 # AI-DLC Phase 2: Plan (规划)
 
-Design the solution and decompose work into tracked, dependency-ordered units.
+Design the solution and decompose work into tracked, dependency-ordered units, including cross-component edges.
 
 ## Goal
 
-Translate approved specifications into a concrete technical plan that can be executed unit by unit.
+Translate approved specifications into a concrete technical plan that can be executed unit by unit, with explicit cross-component dependencies and contract references.
 
 ## Flow
 
 ```
-Approved Spec + BDD Features
+Approved Spec + BDD Features (per-component + cross-stack)
   │
   ▼
-SDD: Design Doc (architecture, data model, API, state machine)
+SDD: Design Doc
+  - architecture (per component)
+  - data model
+  - API contract (references INT-FR-*)
+  - state machine
+  - integration section (cross-component flow)
   │
   ▼
-SDD: Task Decomposition (units with DAG)
+SDD: Task Decomposition (units with DAG, including cross-component edges)
   │
   ▼
 TDD: Test Plan (per scenario, written before implementation)
+  - unit / integration / e2e / cross-stack layer
+  │
+  ▼
+INT: Contract plan (which contracts change, version impact)
   │
   ▼
 Gate: Human review → approved or revise
 ```
 
-## SDD — Design Document
+## SDD — Design Document (multi-component aware)
 
-### Architecture
+A multi-component design doc is organized by **component sections** plus an **integration section**.
 
 ```markdown
-## Architecture
+## Design — CHG-{{id}}
 
-- Frontend: SPA with React + TypeScript
-- Backend: Python serverless functions on TCB/Aliyun FC
-- Database: TCB DocDB / Aliyun TableStore
-- Auth: JWT-based, stateless
+**Affects:** [{{components}}]
+**Contracts touched:** {{list or "none"}}
+
+### Component: backend (BE-FR-*)
+- Architecture: {{serverless / container / ...}}
+- Data model: {{tables / collections}}
+- API surface: {{references INT-FR-* contract}}
+- State machine: {{...}}
+
+### Component: web (WEB-FR-*)
+- Architecture: {{SPA / SSR}}
+- Routes: {{...}}
+- Data flow: {{uses packages/shared generated from INT-FR-001}}
+
+### Component: app (APP-FR-*)
+- ... (if applicable)
+
+### Integration
+- Flow: {{web → backend → DB; or app → backend → event → ...}}
+- Contract refs: INT-FR-001, INT-FR-002
+- Failure modes: {{timeout, retry, fallback}}
+- Backward compat: {{additive / breaking → migration}}
 ```
 
 ### Data Model
@@ -47,9 +74,9 @@ Gate: Human review → approved or revise
 
 ### API Contract
 
-| Method | Path | Request | Response |
-|--------|------|---------|----------|
-| POST | /auth/login | `{email, password}` | `{token, expires_in}` |
+| Method | Path | INT FR | Provider | Consumer |
+|--------|------|--------|----------|----------|
+| POST | /auth/login | INT-FR-001 | BE-FR-001 | WEB-FR-001, APP-FR-001 |
 
 ### State Machine
 
@@ -59,56 +86,102 @@ ANONYMOUS → LOGGED_IN → SESSION_EXPIRED
           LOGGED_OUT
 ```
 
-## SDD — Task Decomposition with DAG
+## SDD — Task Decomposition with DAG (multi-component)
+
+Tasks MUST include cross-component edges. A task that produces or consumes a contract depends on the corresponding `INT-FR-*` task.
 
 ```mermaid
 graph TD
-  A[Unit 1: DB Schema + Models] --> B[Unit 2: Registration API]
-  A --> C[Unit 3: Login API]
-  C --> D[Unit 4: Session Middleware]
+  INT1[INT-FR-001: define /auth/login contract]
+  BE1[BE-FR-001 unit-1: DB schema + models]
+  BE2[BE-FR-001 unit-2: login endpoint]
+  WEB1[WEB-FR-001 unit-1: login form + API client]
+  WEB2[WEB-FR-001 unit-2: token storage + redirect]
+  CS1[INT-FR-001 cross-stack: e2e login flow]
+
+  INT1 --> BE2
+  INT1 --> WEB1
+  BE1 --> BE2
+  BE2 --> CS1
+  WEB1 --> CS1
+  WEB2 --> CS1
 ```
 
 ```yaml
 units:
-  - id: unit-1
-    name: Database schema and user model
+  - id: int-contract-1
+    fr: INT-FR-001
+    affects: [contracts]
+    depends_on: []
+    deliverables: [contracts/api/auth.yaml]
+  - id: be-unit-1
+    fr: BE-FR-001
+    affects: [backend]
     depends_on: []
     scenarios: []
-  - id: unit-2
-    name: Registration endpoint
-    depends_on: [unit-1]
-    scenarios: ["FR-001 @positive", "FR-001 @negative"]
-  - id: unit-3
-    name: Login endpoint
-    depends_on: [unit-1]
-    scenarios: ["FR-002 @positive", "FR-002 @negative", "FR-002 @edge"]
+  - id: be-unit-2
+    fr: BE-FR-001
+    affects: [backend]
+    depends_on: [int-contract-1, be-unit-1]
+    scenarios: ["BE-FR-001 @positive", "BE-FR-001 @negative"]
+  - id: web-unit-1
+    fr: WEB-FR-001
+    affects: [web]
+    depends_on: [int-contract-1]
+    scenarios: ["WEB-FR-001 @positive", "WEB-FR-001 @negative"]
+  - id: cross-stack-1
+    fr: INT-FR-001
+    affects: [web, backend]
+    depends_on: [be-unit-2, web-unit-1]
+    layer: cross-stack
+    scenarios: ["INT-FR-001 @positive", "INT-FR-001 @negative", "INT-FR-001 @edge"]
 ```
 
-## TDD — Test Plan
+## TDD — Test Plan (per scenario, per layer)
 
-For each scenario, plan the test cases **before** writing implementation.
+Each scenario gets a test plan that names the **layer** it runs at.
 
 ```markdown
-## FR-001 @positive: Successful login
-
+## BE-FR-001 @positive: Login API success
+Layer: integration
 Test cases:
-  1. test_login_valid_credentials → expect JWT token
-  2. test_login_returns_user_data → expect user object
-  3. test_login_sets_expiry → expect expires_in = 3600
+  1. test_login_valid_credentials_returns_jwt
+  2. test_login_sets_expiry_3600
+
+## WEB-FR-001 @positive: Login form happy path
+Layer: e2e
+Test cases:
+  1. test_login_form_submits_and_redirects
+
+## INT-FR-001 @positive: Full web→backend login flow
+Layer: cross-stack
+Test cases:
+  1. test_web_login_e2e_against_preview_url
 ```
+
+## INT — Contract Plan
+
+For each contract change, list:
+- Old version, new version
+- Breaking? (yes / no) → if yes, plan migration in `contracts/CHANGELOG.md`
+- Consumers affected (which components will pull the new shared types)
+- Backward-compat strategy (additive vs. deprecate-then-remove)
 
 ## Artifacts
 
 | Artifact | Location | Purpose |
 |----------|----------|---------|
-| Design doc | `openspec/changes/{id}/design.md` | Architecture + data model |
-| Task list | `openspec/changes/{id}/task-list.md` | DAG + unit breakdown |
-| Test plan | Embedded in task-list or separate | Per-scenario test cases |
+| Design doc | `openspec/changes/{id}/design.md` | Per-component + integration |
+| Task list | `openspec/changes/{id}/task-list.md` | DAG with cross-component edges |
+| Test plan | Embedded in task-list or separate | Per-scenario, per-layer |
+| Contract plan | `openspec/changes/{id}/contract-diff.md` placeholder | Filled in Verify |
 
 ## Gate
 
 **Before advancing to Verify phase:**
-- [ ] Design doc completed (architecture, data model, API, state machine)
-- [ ] Tasks decomposed with explicit dependency DAG
-- [ ] Test plans written per scenario
+- [ ] Design doc has per-component sections + integration section
+- [ ] Tasks decomposed with explicit dependency DAG (including cross-component edges)
+- [ ] `INT-FR-*` tasks precede the consuming per-component tasks
+- [ ] Test plans name the layer (`unit` / `integration` / `e2e` / `cross-stack`) per scenario
+- [ ] Contract plan identifies breaking vs. additive
 - [ ] Human reviewed and approved

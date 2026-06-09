@@ -1,6 +1,6 @@
-# TCB Provider
+# TCB Provider (Stack-aware)
 
-Default cloud development platform.
+Default cloud development platform. Supports the unified stack deploy (backend + web + app) and per-component deploys (for isolated dev sandboxes only).
 
 ## Metadata
 
@@ -9,8 +9,20 @@ provider:
   name: tcb
   display_name: Tencent CloudBase
   default: true
-  version: 2.0.0
+  version: 3.0.0
   website: https://cloud.tencent.com/product/tcb
+
+stack:
+  components:
+    - id: backend
+      deploy_order: 1
+      exposes: BACKEND_URL
+    - id: web
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: app
+      deploy_order: 3
+      consumes: BACKEND_URL
 
 regions:
   - id: ap-shanghai
@@ -42,31 +54,68 @@ capabilities:
   - ssl_cert
   - custom_domain
   - cdn_acceleration
+  - stack_deploy
+  - build_env_injection
 ```
 
-## CLI
+## Stack Deploy (recommended for shared environments)
 
 ```bash
-# Deploy preview (returns dynamic URL)
-tcb hosting deploy --preview
-# → https://{env-id}-{project}.tcb-preview.com
+# Unified stack preview (returns STACK_URL = BACKEND_URL + per-component URLs)
+deploy_stack --preview --provider tcb
+# → backend:  tcb fn deploy --env preview
+# → backend:  tcb db migrate --env preview
+# → web:      tcb hosting deploy --env preview --build-env BACKEND_URL=${STACK_URL}
+# → app:      build with BACKEND_URL injected; upload to internal distribution
+# → STACK_URL = https://{env-id}.tcb-preview.com
 
-# Deploy production
-tcb fn deploy --env production
-tcb hosting deploy --env production
+# Stack staging
+deploy_stack --env staging --provider tcb
 
-# Database
-tcb db query "SELECT * FROM users"
-tcb db migrate
+# Stack production (after human approval)
+deploy_stack --env production --provider tcb
 
+# Stack rollback
+deploy_stack --rollback ${LAST_STABLE_STACK_VERSION} --provider tcb
+```
+
+## Per-Component Deploy (dev sandboxes only)
+
+For isolated dev work on a single component, per-component deploy is allowed into a personal sandbox env.
+
+```bash
 # Functions
 tcb fn deploy --name hello --dir ./functions
 tcb fn invoke --name hello --params '{}'
 tcb fn logs --name hello
 
+# Database
+tcb db query "SELECT * FROM users"
+tcb db migrate
+
+# Hosting (web only)
+tcb hosting deploy --env dev-<user>
+
 # Environment
 tcb env list
 tcb env use <env-id>
+```
+
+> Per-component deploys to shared environments (preview, staging, production) are forbidden (STK-004). Use `deploy_stack`.
+
+## URL Resolution
+
+| Component | Pattern |
+|-----------|---------|
+| `STACK_URL` / `BACKEND_URL` | `https://{env-id}.tcb-preview.com` |
+| `WEB_URL` | `https://{env-id}-{project}.tcb-preview.com` |
+| `APP_DIST_URL` | internal distribution URL |
+
+## Build Config Injection
+
+```bash
+tcb hosting deploy --env preview --build-env BACKEND_URL=$STACK_URL
+# web reads process.env.BACKEND_URL at build time
 ```
 
 ## Environment Variables
@@ -76,3 +125,5 @@ tcb env use <env-id>
 | TCB_SECRET_ID | Tencent Cloud secret ID |
 | TCB_SECRET_KEY | Tencent Cloud secret key |
 | TCB_ENV_ID | CloudBase environment ID |
+| BACKEND_URL | Stack URL injected at build time |
+| STACK_URL | Alias of BACKEND_URL (gateway) |

@@ -1,10 +1,10 @@
 # AI-DLC Phase 1: Understand (理解)
 
-Transform business intent into formal specification and behavior scenarios.
+Transform business intent into formal specification and behavior scenarios, scoped to the right FR namespace.
 
 ## Goal
 
-Convert a business need into unambiguous, verifiable requirements before any design or code work begins.
+Convert a business need into unambiguous, verifiable requirements before any design or code work begins. For multi-component features, capture the **cross-component boundary** in addition to per-component behavior.
 
 ## Flow
 
@@ -12,36 +12,76 @@ Convert a business need into unambiguous, verifiable requirements before any des
 Intent (business need / user story)
   │
   ▼
-SDD: Proposal (why, what, impact)
+Identify scope: which components does this touch?
   │
   ▼
-SDD: Spec Delta (EARS format — ADDED/MODIFIED/REMOVED)
+SDD: Proposal (why, what, impact, affects: [app|web|backend|contracts])
   │
   ▼
-BDD: Feature File (Given/When/Then scenarios)
+SDD: Spec Delta (EARS format — ADDED/MODIFIED/REMOVED, FR namespaces)
+  │
+  ▼
+BDD: Feature Files
+  - features/{component}/{domain}/{feature}.feature   (per-component)
+  - features/cross-stack/{domain}/{feature}.feature   (full flow, if applies)
   │
   ▼
 Gate: Human review → approved or revise
 ```
 
+## Scope Identification
+
+Before writing the spec, declare which components the feature affects. This determines the FR namespaces and which lifecycle paths run.
+
+| Affects | Example | FRs |
+|---------|---------|-----|
+| `[backend]` only | Internal API | `BE-FR-NNN` |
+| `[web, backend]` | Login UI + API | `WEB-FR-NNN`, `BE-FR-NNN`, `INT-FR-NNN` |
+| `[app, web, backend]` | Full feature | `APP-FR-NNN`, `WEB-FR-NNN`, `BE-FR-NNN`, `INT-FR-NNN` |
+| `[contracts]` | Schema-only change | `INT-FR-NNN` only |
+
+`affects: [contracts]` is reserved for **pure contract changes** (e.g. add a new field shared by all components). It still requires Plan + Verify.
+
 ## SDD — Spec-Driven Development
 
 ### Intent Capture
 
-Document the what, why, and how to measure success.
-
 ```markdown
 ## Intent
 
-**Title:** User Authentication
-**Why:** Users need to securely access their account
-**What:** Login with email + password, receive JWT token
-**Success:** Login under 200ms p95, 99.9% uptime
+**Title:** {{title}}
+**Affects:** [{{components}}]
+**Why:** {{why}}
+**What:** {{what}}
+**Success:** {{success_criteria}}
 ```
 
-### Spec Delta (EARS)
+### Spec Delta (EARS) with Namespace
 
-Five EARS patterns for formal requirements:
+```markdown
+## Change: CHG-{{id}} — {{title}}
+
+**Affects:** [{{components}}]
+**Contracts touched:** {{list or "none"}}
+
+## ADDED Requirements
+
+### INT-FR-{{nnn}}: {{contract_title}}
+(only if affects contracts or ≥2 components)
+
+**Description (Event-Driven):**
+When a {{event}}, the system SHALL {{behavior}} on the contract boundary.
+
+### BE-FR-{{nnn}}: {{backend_title}}
+**Description (Event-Driven):**
+When {{event}}, the backend SHALL {{behavior}}.
+
+### WEB-FR-{{nnn}}: {{web_title}}
+**Description (Event-Driven):**
+When {{event}}, the web client SHALL {{behavior}}.
+```
+
+### EARS Patterns
 
 | Pattern | Syntax | When to Use |
 |---------|--------|-------------|
@@ -51,60 +91,69 @@ Five EARS patterns for formal requirements:
 | Unwanted | `If {condition}, the system SHALL ...` | Error handling |
 | Optional | `Where {feature} enabled, the system SHALL ...` | Feature flags |
 
-```markdown
-## FR-001: User Authentication
-
-**Priority:** P0
-
-**Description (Event-Driven):**
-When a user submits valid credentials, the system SHALL return a JWT token with 1-hour expiry.
-
-**Unwanted:**
-If credentials are invalid, the system SHALL return 401 with error code AUTH_001.
-```
-
 ## BDD — Behavior-Driven Development
 
-### Feature Files
+### Per-Component Feature Files
 
 ```gherkin
-@FR-001
-Feature: User Login
+@WEB-FR-001
+Feature: Web Login UI
 
-  @FR-001 @positive
-  Scenario: Successful login
-    Given the user is on the login page
+  @WEB-FR-001 @positive
+  Scenario: User logs in successfully
+    Given the web app is on the login page
     When the user submits valid credentials
-    Then the user receives a JWT token
+    Then the user is redirected to dashboard
+    And the user receives a JWT in storage
+
+  @WEB-FR-001 @negative
+  Scenario: Invalid credentials show error
+    ...
+
+  @WEB-FR-001 @edge
+  Scenario: Empty fields show validation
+    ...
+```
+
+### Cross-Stack Feature File (mandatory for `affects ≥ 2 components`)
+
+```gherkin
+@INT-FR-001
+Feature: Cross-stack login flow
+
+  @INT-FR-001 @positive
+  Scenario: Web login reaches backend and stores token
+    Given the web app is on the login page
+    When the user submits valid credentials
+    Then the backend POST /auth/login returns 200 with JWT
+    And the web app stores the token
     And the user is redirected to dashboard
 
-  @FR-001 @negative
-  Scenario: Login with invalid credentials
-    Given the user is on the login page
-    When the user submits invalid credentials
-    Then the user sees error "Invalid credentials"
-    And the user stays on the login page
+  @INT-FR-001 @negative
+  Scenario: Backend rejects invalid credentials with 401
+    ...
 
-  @FR-001 @edge
-  Scenario: Login with empty fields
-    Given the user is on the login page
-    When the user submits empty email and password
-    Then the user sees error "Email and password are required"
+  @INT-FR-001 @edge
+  Scenario: Backend timeout surfaces a user-friendly error
+    ...
 ```
 
 ## Artifacts
 
 | Artifact | Location | Purpose |
 |----------|----------|---------|
-| Intent | `requirements.md` | Business need capture |
-| Spec delta | `openspec/changes/{id}/spec-delta.md` | Formal EARS requirements |
-| BDD features | `features/{domain}/{feature}.feature` | Behavior scenarios |
+| Intent | `requirements.md` | Business need + `affects` |
+| Spec delta | `openspec/changes/{id}/spec-delta.md` | EARS, FR namespaces, `affects` |
+| Per-component BDD | `apps/{component}/features/{domain}/{feature}.feature` | Component behavior |
+| Cross-stack BDD | `features/cross-stack/{domain}/{feature}.feature` | End-to-end flow |
+| Contract spec | `contracts/{api,events}/{name}.{yaml,graphql}` | INT-FR-NNN source of truth |
 
 ## Gate
 
 **Before advancing to Plan phase:**
-- [ ] Intent documented (what, why, success criteria)
-- [ ] Spec delta written with EARS format
-- [ ] Each FR has ≥3 feature file scenarios (positive, negative, edge)
-- [ ] Scenarios tagged with `@FR-NNN`
+- [ ] `affects: [...]` declared in spec-delta
+- [ ] Spec delta uses EARS format
+- [ ] Per-component FRs: each tagged `@FR-{PREFIX}-NNN`, ≥3 scenarios (positive/negative/edge)
+- [ ] If `affects` includes ≥2 components: at least one `INT-FR-NNN` and a `features/cross-stack/*.feature` with ≥3 scenarios
+- [ ] If `affects` includes contracts: contract file present in `contracts/`
 - [ ] Human reviewed and approved

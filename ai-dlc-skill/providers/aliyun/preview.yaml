@@ -1,19 +1,21 @@
-# Aliyun Preview
+# Aliyun Stack Preview
 
-Preview deployment configuration. Dynamic URL resolution.
+Preview deployment for the unified stack (backend + web + app). URL resolution is dynamic per platform; `BACKEND_URL` is injected into web/app builds at build time.
 
 ## Overview
 
-Aliyun Function Compute supports alias-based preview deployments. Each preview gets a unique alias with an isolated endpoint.
+`deploy_stack --preview --provider aliyun` deploys the full stack to an isolated preview environment and exports the stack URL. Used for per-component e2e AND cross-stack e2e verification before staging or production.
 
 ## Preview Flow
 
 ```
 git push feature branch
-  → fun deploy --preview
-  → https://{function}-{alias}.{region}.fc.devs.com
-  → PREVIEW_URL set for e2e tests
-  → pytest-bdd features/ (against preview URL)
+  → deploy_stack --preview --provider aliyun
+  → STACK_URL = BACKEND_URL = https://{gateway}.{region}.fc.devs.com
+  → WEB_URL  = https://{bucket}.{region}.oss-website.aliyuncs.com
+  → APP_DIST_URL = internal distribution URL
+  → Per-component e2e: pytest apps/{comp}/tests/e2e/ --base-url $URL
+  → Cross-stack e2e:  pytest tests/cross-stack/ --stack-url $STACK_URL
   → TTL: 24h → auto cleanup
 ```
 
@@ -21,24 +23,43 @@ git push feature branch
 
 ```yaml
 preview:
-  auto_deploy: true
+  orchestrator: deploy_stack
+  strategy: unified
   ttl: 24h
   auto_cleanup: true
-  db_sandbox: true
-  url_pattern: "https://{function}-{alias}.{region}.fc.devs.com"
+  db_sandbox: true          # isolated DB per preview
+  url_pattern_backend: "https://{gateway}.{region}.fc.devs.com"
+  url_pattern_web:     "https://{bucket}.{region}.oss-website.aliyuncs.com"
+  build_env:
+    web:
+      - BACKEND_URL
+      - STACK_URL
+    app:
+      - BACKEND_URL
   env:
-    - PREVIEW_URL
+    - STACK_URL             # = BACKEND_URL (gateway)
+    - BACKEND_URL
+    - WEB_URL
+    - APP_DIST_URL
     - DATABASE_URL (sandbox)
 ```
 
 ## BDD E2E Integration
 
 ```bash
-# Deploy preview
-PREVIEW_URL=$(fun deploy --preview --output url)
+# Deploy unified stack preview
+export STACK_URL=$(deploy_stack --preview --provider aliyun --output url)
+export BACKEND_URL=$STACK_URL
+export WEB_URL=$(deploy_stack --preview --provider aliyun --output web_url)
+export APP_DIST_URL=$(deploy_stack --preview --provider aliyun --output app_url)
 
-# Run BDD e2e tests
-PREVIEW_URL=$PREVIEW_URL pytest tests/e2e/ --preview-url $PREVIEW_URL
+# Per-component e2e
+pytest apps/backend/tests/e2e/ --base-url $BACKEND_URL
+pytest apps/web/tests/e2e/ --base-url $WEB_URL --api-url $BACKEND_URL
+pytest apps/app/tests/e2e/ --backend-url $BACKEND_URL
+
+# Cross-stack e2e
+pytest tests/cross-stack/ --stack-url $STACK_URL
 
 # Cleanup (automatic after TTL)
 ```

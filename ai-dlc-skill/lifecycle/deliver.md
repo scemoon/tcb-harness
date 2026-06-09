@@ -1,125 +1,167 @@
 # AI-DLC Phase 4: Deliver (交付)
 
-Deploy to production-like environments, verify end-to-end, release with BVT validation.
+Deploy the **full stack** together, verify per-component and cross-stack e2e against the unified preview, release with stack-level BVT.
 
 ## Goal
 
-Deliver verified code to production with full confidence through preview environments, BDD e2e tests, and automated BVT.
+Deliver verified code to production as a coherent stack with full confidence — preview environment, per-component e2e, cross-stack e2e, stack-level BVT, and rollback at the stack level.
 
 ## Flow
 
 ```
-All Verify gates passed
+All Verify gates passed (per-component + contract + cross-stack)
   │
   ▼
-Preview Deploy (dynamic URL from cloud provider)
+Unified Stack Preview Deploy (dynamic URL from cloud provider)
+  - backend (functions + DB migrate)
+  - web (hosting build with BACKEND_URL)
+  - app (build with BACKEND_URL; if native, package + upload)
   │
   ▼
-BDD E2E Tests (against preview URL)
+Per-component BDD e2e (against component preview URL or stack URL)
   │
   ▼
-Staging Deploy + Smoke Tests
+Cross-stack e2e (full app ↔ web ↔ backend against unified stack URL)
+  │
+  ▼
+Staging Stack Deploy + Smoke
   │
   ▼
 Human Approval Gate
   │
   ▼
-Production Deploy
+Production Stack Deploy (whole stack as one unit)
   │
   ▼
-BVT (Build Verification Test)
+Stack BVT (Build Verification Test) — backend /health, app launch probe, web smoke, DB
   │
   ▼
-Gate: BVT pass → done | BVT fail → rollback
+Archive: contract-diff.md + e2e reports + BVT report
+  │
+  ▼
+Gate: BVT pass → done | BVT fail → stack rollback
 ```
 
-## Preview Deploy
+## Unified Stack Preview Deploy
 
-Deploy to an isolated preview environment. URL is dynamically resolved per platform.
+The whole stack is deployed as one unit. The preview URL is the **backend gateway**; `web` and `app` receive it as a build-time or runtime config.
 
 ```bash
 # TCB (default)
-tcb hosting deploy --preview
-# → https://{env-id}-{project}.tcb-preview.com
+deploy_stack --preview
+# → backend: tcb fn deploy --env preview
+# → backend: tcb db migrate --env preview
+# → web:     tcb hosting deploy --env preview --build-env BACKEND_URL=${STACK_URL}
+# → app:     build with BACKEND_URL=${STACK_URL}, upload to internal distribution
+# → STACK_URL = https://{env-id}.tcb-preview.com
 
 # Aliyun
-fun deploy --preview
-# → https://{function}-{alias}.{region}.fc.devs.com
+deploy_stack --preview
+# → backend: fun deploy --env preview
+# → web:     oss + cdn deploy with build env
+# → app:     build with BACKEND_URL, package
+# → STACK_URL = https://{gateway}.{region}.fc.devs.com
 ```
 
-## BDD E2E Tests
+The `deploy_stack` tool resolves the preview URL dynamically per platform and exports it as `STACK_URL` (or `BACKEND_URL` for components to consume).
 
-Run the same Gherkin scenarios against the live preview URL.
+## Per-Component BDD E2E
 
 ```bash
-export PREVIEW_URL=$(deploy_cloud --preview --output url)
-pytest tests/e2e/ --preview-url $PREVIEW_URL
+export STACK_URL=$(deploy_stack --preview --output url)
+export BACKEND_URL=$STACK_URL
+
+# Backend
+pytest apps/backend/tests/e2e/ --base-url $BACKEND_URL
+
+# Web (against web hosting URL; uses BACKEND_URL as API root)
+export WEB_URL=$(deploy_stack --preview --output web_url)
+pytest apps/web/tests/e2e/ --base-url $WEB_URL --api-url $BACKEND_URL
+
+# App (against installed package or emulator; uses BACKEND_URL)
+pytest apps/app/tests/e2e/ --backend-url $BACKEND_URL
 ```
+
+## Cross-Stack E2E
+
+```bash
+pytest tests/cross-stack/ --stack-url $STACK_URL --verbose
+# Runs the full app ↔ web ↔ backend flow defined in features/cross-stack/
+```
+
+**Rule STK-001:** All `cross-stack` scenarios must pass before staging or production.
 
 ## Staging
 
-Deploy to the staging environment for final integration validation.
-
 ```bash
-deploy_cloud --env staging
-pytest tests/integration/ --base-url $STAGING_URL
+deploy_stack --env staging
+export STAGING_URL=$(deploy_stack --env staging --output url)
+pytest tests/cross-stack/ --stack-url $STAGING_URL
+smoke-test $STAGING_URL
 ```
 
 ## Human Approval
 
-Production deployment requires explicit human approval.
+Production deployment requires explicit human approval. Approval is a **stack** decision — the reviewer sees the per-component e2e results, the cross-stack e2e results, the staging smoke, and the `contract-diff.md`.
+
+## Production Stack Deploy
 
 ```bash
-# Gate: human-approval required
-# Only proceed after explicit "approved" signal
+deploy_stack --env production
+# → Same as preview/staging but with prod env IDs and production secrets
 ```
 
-## Production Deploy
+## Stack BVT (Build Verification Test)
 
-```bash
-deploy_cloud --env production
-```
-
-## BVT (Build Verification Test)
-
-Automated health and functionality checks against the production deployment.
+Automated health and functionality checks against the **production stack**:
 
 ```bash
 bvt ${PRODUCTION_URL}
 # Checks:
-# - /health endpoint returns 200
-# - Core user flows work (login, API calls)
-# - Database connectivity
-# - No error rate spikes
+#  1. backend /health returns 200
+#  2. web home page returns 200 (SSR) or shell loads (SPA)
+#  3. app launch probe (deep link resolves against BACKEND_URL)
+#  4. Core end-to-end flow (login) succeeds
+#  5. Database connectivity (probe query)
+#  6. No error rate spikes (5xx < 0.1%, p99 < 500ms)
 ```
 
-**Rule DLV-003:** BVT must pass. If BVT fails, automatic rollback to previous stable version.
+**Rule DLV-003:** BVT must pass. If BVT fails, automatic **stack** rollback to the previous stable stack version.
 
-## Rollback
+## Stack Rollback
+
+Rollback is at the stack level — all components revert together so the stack stays internally consistent.
 
 ```bash
 # Automatic on BVT failure
-deploy_cloud --rollback ${LAST_STABLE_VERSION}
+deploy_stack --rollback ${LAST_STABLE_STACK_VERSION}
+
 # Manual on demand
-deploy_cloud --rollback --version v1.2.3
+deploy_stack --rollback --stack-version v1.2.3
 ```
+
+The previous stable stack version is identified by the `contracts/CHANGELOG.md` version at the time of the last green BVT.
 
 ## Artifacts
 
 | Artifact | Purpose |
 |----------|---------|
-| Preview URL | Dynamic, per-platform |
-| BDD e2e report | Scenario pass/fail against live env |
-| BVT report | Health check results |
-| Deploy log | Version, timestamp, artifacts |
+| `STACK_URL` / `BACKEND_URL` | Dynamic, per-platform, per-env |
+| Per-component e2e report | Scenario pass/fail per component |
+| Cross-stack e2e report | Full flow pass/fail |
+| `openspec/changes/{id}/contract-diff.md` | Final contract change record |
+| BVT report | Stack-level health check results |
+| Deploy log | Stack version, timestamp, component versions |
 
 ## Gate
 
 **Before marking complete:**
-- [ ] Preview deploy succeeded with valid URL
-- [ ] All BDD e2e tests pass against preview
+- [ ] Unified stack preview deploy succeeded; `STACK_URL` and `BACKEND_URL` resolved
+- [ ] All per-component BDD e2e tests pass against their preview URLs
+- [ ] All cross-stack e2e tests pass against the unified stack URL
 - [ ] Staging smoke tests pass
-- [ ] Human approval received
-- [ ] Production deploy succeeded
-- [ ] BVT passed
-- [ ] (If BVT failed) Rollback executed and confirmed
+- [ ] Human approval received (covers per-component + cross-stack + staging + contract diff)
+- [ ] Production stack deploy succeeded
+- [ ] Stack BVT passed
+- [ ] (If BVT failed) Stack rollback executed and confirmed
+- [ ] `openspec/changes/{id}/contract-diff.md` archived

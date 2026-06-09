@@ -1,0 +1,43 @@
+asyncapi: 3.0.0
+info:
+  title: {{title}}
+  version: {{version}}
+  description: |
+    Async contract for INT-FR-{{int_fr_id}}.
+    Producer: {{producer}}
+    Consumers: {{consumers}}
+  x-change-id: {{change_id}}
+  x-fr: INT-FR-{{int_fr_id}}
+
+channels:
+  {{channel_name}}:
+    address: {{channel_address}}
+    messages:
+      {{message_name}}:
+        $ref: '#/components/messages/{{MessageName}}'
+
+operations:
+  {{operation_name}}:
+    action: {{send | receive}}
+    channel:
+      $ref: '#/channels/{{channel_name}}'
+
+components:
+  messages:
+    {{MessageName}}:
+      name: {{message_name}}
+      title: {{message_title}}
+      contentType: application/cloudevents+json
+      payload:
+        $ref: '#/components/schemas/{{PayloadName}}'
+  schemas:
+    {{PayloadName}}:
+      type: object
+      required: [id, type, time, data]
+      properties:
+        id:       { type: string, format: uuid }
+        type:     { type: string }
+        source:   { type: string }
+        time:     { type: string, format: date-time }
+        specversion: { type: string, enum: ["1.0"] }
+        data:     { type: object }

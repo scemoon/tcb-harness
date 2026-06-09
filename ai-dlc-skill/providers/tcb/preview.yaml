@@ -1,19 +1,21 @@
-# TCB Preview
+# TCB Stack Preview
 
-Preview deployment configuration. Dynamic URL resolution.
+Preview deployment for the unified stack (backend + web + app). URL resolution is dynamic per platform; `BACKEND_URL` is injected into web/app builds at build time.
 
 ## Overview
 
-TCB hosting supports preview deployments that create ephemeral environments with unique URLs. Used for BDD e2e verification before production.
+`deploy_stack --preview --provider tcb` deploys the full stack to an isolated preview environment and exports the stack URL. Used for per-component e2e AND cross-stack e2e verification before staging or production.
 
 ## Preview Flow
 
 ```
 git push feature branch
-  → tcb hosting deploy --preview
-  → https://{env-id}-{project}.tcb-preview.com
-  → PREVIEW_URL set for e2e tests
-  → pytest-bdd features/ (against preview URL)
+  → deploy_stack --preview --provider tcb
+  → STACK_URL = BACKEND_URL = https://{env-id}.tcb-preview.com
+  → WEB_URL  = https://{env-id}-{project}.tcb-preview.com
+  → APP_DIST_URL = internal distribution URL
+  → Per-component e2e: pytest apps/{comp}/tests/e2e/ --base-url $URL
+  → Cross-stack e2e:  pytest tests/cross-stack/ --stack-url $STACK_URL
   → TTL: 24h → auto cleanup
 ```
 
@@ -21,24 +23,42 @@ git push feature branch
 
 ```yaml
 preview:
-  auto_deploy: true
+  orchestrator: deploy_stack
+  strategy: unified
   ttl: 24h
   auto_cleanup: true
-  db_sandbox: true  # Isolated database for preview
+  db_sandbox: true          # isolated database per preview
   url_pattern: "https://{env-id}.tcb-preview.com"
+  build_env:
+    web:
+      - BACKEND_URL
+      - STACK_URL
+    app:
+      - BACKEND_URL
   env:
-    - PREVIEW_URL
+    - STACK_URL             # = BACKEND_URL (gateway)
+    - BACKEND_URL
+    - WEB_URL
+    - APP_DIST_URL
     - DATABASE_URL (sandbox)
 ```
 
 ## BDD E2E Integration
 
 ```bash
-# Deploy preview
-PREVIEW_URL=$(tcb hosting deploy --preview --output url)
+# Deploy unified stack preview
+export STACK_URL=$(deploy_stack --preview --provider tcb --output url)
+export BACKEND_URL=$STACK_URL
+export WEB_URL=$(deploy_stack --preview --provider tcb --output web_url)
+export APP_DIST_URL=$(deploy_stack --preview --provider tcb --output app_url)
 
-# Run BDD e2e tests
-PREVIEW_URL=$PREVIEW_URL pytest tests/e2e/ --preview-url $PREVIEW_URL
+# Per-component e2e
+pytest apps/backend/tests/e2e/ --base-url $BACKEND_URL
+pytest apps/web/tests/e2e/ --base-url $WEB_URL --api-url $BACKEND_URL
+pytest apps/app/tests/e2e/ --backend-url $BACKEND_URL
+
+# Cross-stack e2e
+pytest tests/cross-stack/ --stack-url $STACK_URL
 
 # Cleanup (automatic after TTL)
 ```

@@ -1,31 +1,51 @@
-# {{name}}
+# {{project_name}}
 
 {{description}}
+
+## Stack
+
+| Component | FR Prefix | Directory | Purpose |
+|-----------|-----------|-----------|---------|
+| app | `APP-FR-*` | `apps/app/` | Mobile / native client |
+| web | `WEB-FR-*` | `apps/web/` | Browser frontend |
+| backend | `BE-FR-*` | `apps/backend/` | Service / API |
+| contracts | `INT-FR-*` | `contracts/`, `packages/shared/` | Cross-component contracts |
+
+Cloud: {{cloud_provider}} (default: TCB).
 
 ## Quick Start
 
 ```bash
-# ① Understand: write spec + feature
-touch requirements.md
-mkdir -p features/{{domain}}/
-touch features/{{domain}}/{{feature}}.feature
+# ① Understand — declare scope + namespaces
+cat > openspec/changes/CHG-001/spec-delta.md <<'YAML'
+affects: [{{primary_components}}]
+frs:
+  - id: {{primary_namespace}}-FR-001
+  - id: INT-FR-001   # if cross-component
+YAML
+# write features/{component}/{domain}/{feature}.feature
+# if cross-component, also write features/cross-stack/{domain}/{feature}.feature
 
-# ② Plan: design + task DAG
-mkdir -p openspec/changes/{{change_id}}/
+# ② Plan
+# write openspec/changes/CHG-001/design.md
+# write openspec/changes/CHG-001/task-list.md  (DAG with cross-component edges)
 
-# ③ Verify: TDD per scenario
-pytest tests/unit/ --verbose        # RED
-# implement src/{{module}}/{{feature}}.py
-pytest tests/unit/ --verbose        # GREEN
-pytest --cov --cov-fail-under=80    # REFACTOR
-pytest-bdd features/                # ALL SCENARIOS PASS
+# ③ Verify
+# Per component: TDD red-green-refactor
+{{verify_per_component}}
+# Contracts
+tools/generate_shared.py
+pytest tests/contract/
+# Cross-stack (if applies)
+pytest tests/cross-stack/ -k INT-FR-001
 
 # ④ Deliver
-deploy_cloud --preview
-pytest tests/e2e/
-# human approval
-deploy_cloud --env production
-bvt ${PRODUCTION_URL}
+deploy_stack --preview                                # unified stack URL
+export PREVIEW_URL=$(deploy_stack --preview --output url)
+pytest {e2e_paths} --preview-url $PREVIEW_URL
+deploy_stack --env staging
+deploy_stack --env production                        # after human approval
+bvt ${PRODUCTION_URL}                                # stack-level BVT
 ```
 
 ## Development
@@ -33,22 +53,66 @@ bvt ${PRODUCTION_URL}
 ### Prerequisites
 
 - Python 3.11+
+- Node 20+ (for app/web)
+- uv (Python workspace manager) or pnpm
 - pytest + pytest-bdd + pytest-cov
-- Cloud CLI (TCB: `tcb`, Aliyun: `fun`)
+- Cloud CLI: `tcb` (TCB) or `fun` (Aliyun)
 
 ### Project Structure
 
 ```
-├── requirements.md       # Intent
-├── features/             # BDD (.feature + steps/)
-├── tests/                # TDD (unit, integration, e2e)
-│   ├── unit/
-│   ├── integration/
-│   └── e2e/
-├── src/                  # Implementation
-├── openspec/             # Spec artifacts
-└── providers/            # Cloud config
+{{project_name}}/
+├── project.yaml                 # stack topology, components, contracts
+├── apps/
+│   ├── app/                     # APP-FR-*  (mobile/native)
+│   ├── web/                     # WEB-FR-*  (browser frontend)
+│   └── backend/                 # BE-FR-*   (service)
+├── contracts/                   # INT-FR-*  (single source of truth)
+│   ├── api/                     # OpenAPI 3.1
+│   ├── events/                  # AsyncAPI / CloudEvent
+│   └── CHANGELOG.md
+├── packages/shared/             # generated from contracts, consumed by all
+├── features/
+│   └── cross-stack/             # INT-FR-*.feature (full flow)
+├── tests/
+│   ├── contract/                # contract tests
+│   └── cross-stack/             # cross-stack e2e
+├── openspec/changes/{id}/       # spec + design + task-list per change
+├── providers/{tcb,aliyun}/      # cloud config
+└── tools/                       # deploy_stack, contract_diff, generate_shared
 ```
+
+### AI-DLC Workflow
+
+```bash
+# ① Understand
+# Intent → spec-delta.md (affects + FR namespaces) → feature files
+
+# ② Plan
+# design.md (per-component sections + integration) + task-list.md (DAG)
+
+# ③ Verify (per BDD scenario, per layer)
+{{component_verify_block}}
+# After all components: contract tests + cross-stack e2e
+
+# ④ Deliver
+deploy_stack --preview                          # unified stack URL
+# e2e per affected component
+# cross-stack e2e against unified URL
+deploy_stack --env production                   # after human approval
+bvt ${PRODUCTION_URL}                           # stack BVT
+```
+
+## Quality Gates
+
+| Gate | Command | Threshold | Scope |
+|------|---------|-----------|-------|
+| TDD | `pytest --cov` per component | ≥80% | Per component |
+| BDD | `pytest-bdd features/` per component | 100% pass | Per component |
+| Contract | `pytest tests/contract/` | 100% pass | Cross-component |
+| Cross-stack | `pytest tests/cross-stack/` | 100% pass | Stack |
+| Security | `bandit -r apps/` | 0 vulns | Per component |
+| BVT | `bvt ${URL}` | All checks pass | Stack |
 
 ## License
 
