@@ -40,6 +40,50 @@ def _raise_for_status(resp: httpx.Response, body_text: str = "") -> None:
     )
 
 
+def _accumulate_tool_call_delta(
+    slot: dict, tcd: dict
+) -> None:
+    """Fold a single OpenAI-style ``delta.tool_calls`` entry into ``slot``.
+
+    Extracted so the streaming parser and unit tests can share one
+    implementation.  Mutates ``slot`` in place.
+    """
+    if tcd.get("id"):
+        slot["id"] = tcd["id"]
+    fn = tcd.get("function", {}) or {}
+    if fn.get("name"):
+        slot["name"] = fn["name"]
+    slot["arguments"] += fn.get("arguments", "") or ""
+
+
+def _finalize_stream_tool_calls(
+    stream_tool_calls: dict[int, dict],
+) -> list[dict]:
+    """Convert accumulated OpenAI-style tool-call deltas into engine ``tool_uses``.
+
+    Each entry becomes ``{id, name, input}`` where ``input`` is the
+    ``arguments`` JSON string parsed back to a dict.  Entries without
+    a ``name`` are dropped (incomplete deltas at stream end).
+    """
+    tool_uses: list[dict] = []
+    for slot in stream_tool_calls.values():
+        name = slot.get("name") or ""
+        if not name:
+            continue
+        raw_args = slot.get("arguments") or ""
+        try:
+            inp: dict = json.loads(raw_args) if raw_args else {}
+        except (json.JSONDecodeError, TypeError):
+            inp = {"raw": raw_args}
+        if not isinstance(inp, dict):
+            inp = {"raw": inp}
+        tool_uses.append(
+            {"id": slot.get("id") or "", "name": name, "input": inp}
+        )
+    return tool_uses
+
+
+
 def _log_request(model: str, messages: list, response_data: dict = None, error: str = None):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     log_file = LOG_DIR / f"minimaxi_{timestamp}.json"
@@ -156,6 +200,11 @@ class MiniMaxiProvider(Provider):
 
         start_time = time.time()
         content_parts: list[str] = []
+        # OpenAI-compatible tool calls are streamed as a sequence of
+        # ``delta.tool_calls`` deltas.  Accumulate by ``index`` so the
+        # final ``arguments`` string can be parsed back into a dict
+        # that the engine passes to ``_build_tool_call_content``.
+        stream_tool_calls: dict[int, dict] = {}
 
         try:
             async with httpx.AsyncClient(timeout=300) as client:
@@ -186,13 +235,24 @@ class MiniMaxiProvider(Provider):
                                     content_parts.append(content)
                                     if on_text_chunk:
                                         on_text_chunk(content)
+                                for tcd in delta.get("tool_calls", []) or []:
+                                    idx = tcd.get("index", 0)
+                                    slot = stream_tool_calls.setdefault(
+                                        idx,
+                                        {"id": "", "name": "", "arguments": ""},
+                                    )
+                                    _accumulate_tool_call_delta(slot, tcd)
                             except json.JSONDecodeError:
                                 continue
                         elif line.startswith("data: [DONE]"):
                             pass
 
             elapsed = time.time() - start_time
-            logger.info(f"[{req_id}] Stream complete, elapsed: {elapsed:.2f}s, chars: {sum(len(p) for p in content_parts)}")
+            logger.info(
+                f"[{req_id}] Stream complete, elapsed: {elapsed:.2f}s, "
+                f"chars: {sum(len(p) for p in content_parts)}, "
+                f"tool_calls: {len(stream_tool_calls)}"
+            )
         except ProviderError:
             # Already classified — propagate verbatim.
             _log_request(model, messages, error="provider error (see exception)")
@@ -208,8 +268,10 @@ class MiniMaxiProvider(Provider):
             _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e
 
+        tool_uses = _finalize_stream_tool_calls(stream_tool_calls)
+
         _log_request(model, messages, response_data={"stream": True})
-        return ChatResponse(content="".join(content_parts))
+        return ChatResponse(content="".join(content_parts), tool_uses=tool_uses)
 
     async def chat_stream(
         self, messages: list[Message], model: str = "MiniMax-M2.7", **kwargs
