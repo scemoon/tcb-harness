@@ -384,6 +384,12 @@ def _format_tui_display_text(result_text: str) -> str:
     Tools return dicts like ``{"success": true, "path": "..."}`` that are
     meaningful to the LLM but noisy for the user.  This function strips
     internal JSON wrappers and returns only what the user should see.
+
+    Success results that have a ``path`` field render as ``✓ /path``;
+    other success results fall through to a compact view of the rest
+    of the dict so tools like ``TaskUpdate`` / ``TaskStop`` (which return
+    ``{"success": true, ...}`` without a path) still show meaningful
+    output instead of disappearing.
     """
     if not result_text:
         return ""
@@ -398,7 +404,13 @@ def _format_tui_display_text(result_text: str) -> str:
     if parsed.get("success") is True:
         if path := parsed.get("path"):
             return f"✓ {path}"
-        return ""
+        visible = {k: v for k, v in parsed.items() if k != "success"}
+        if not visible:
+            return "✓ done"
+        try:
+            return json.dumps(visible, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return str(visible)
     return result_text
 
 
