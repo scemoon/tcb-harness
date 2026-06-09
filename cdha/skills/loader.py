@@ -38,6 +38,15 @@ class SkillLoader:
         if builtin_dir.exists():
             dirs.append(("builtin", builtin_dir))
 
+        # Project root-level directories containing SKILL.md
+        try:
+            for d in sorted(self._workspace_root.iterdir()):
+                if d.is_dir() and (d / "SKILL.md").exists():
+                    dirs.append(("project", self._workspace_root))
+                    break
+        except Exception:
+            pass
+
         search_paths = [
             (".opencode", ".claude", ".agents"),
         ]
