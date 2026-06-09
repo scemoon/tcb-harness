@@ -63,6 +63,7 @@ class OllamaProvider(Provider):
         messages: list[Message],
         model: str,
         on_text_chunk: Optional[Callable[[str], None]] = None,
+        on_tool_call_delta: Optional[Callable[[str, str, str], None]] = None,
         **kwargs,
     ) -> ChatResponse:
         content_parts: list[str] = []

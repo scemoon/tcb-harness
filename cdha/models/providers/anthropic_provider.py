@@ -84,6 +84,7 @@ class AnthropicProvider(Provider):
         messages: list[Message],
         model: str,
         on_text_chunk: Optional[Callable[[str], None]] = None,
+        on_tool_call_delta: Optional[Callable[[str, str, str], None]] = None,
         **kwargs,
     ) -> ChatResponse:
         from cdha.models.errors import (
@@ -155,6 +156,11 @@ class AnthropicProvider(Provider):
                                 elif delta_type == "input_json_delta":
                                     if current_tool is not None:
                                         current_tool["input_json"] += delta.get("partial_json", "")
+                                        if on_tool_call_delta:
+                                            partial = delta.get("partial_json", "") or ""
+                                            call_id = current_tool.get("id", "")
+                                            name = current_tool.get("name", "")
+                                            on_tool_call_delta(call_id, name, partial)
 
                             elif chunk_type == "content_block_stop":
                                 if current_tool is not None:

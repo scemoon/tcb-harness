@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -8,11 +9,17 @@ from typing import Any
 from tui import paths
 
 
+def sanitize_filename(name: str) -> str:
+    """Replace characters that are problematic in file names with underscores."""
+    return re.sub(r'[<>:"/\\|?*]', "_", name)
+
+
 class MessageLog:
     """Structured JSON message log for recording user input and agent output.
 
     Writes one JSON line per event to a session-scoped log file for
     diagnostic analysis (e.g. why the agent returned no response).
+    Logs are grouped by session_id — one file per session.
     """
 
     def __init__(self, session_id: str, agent_name: str, log_dir: Path | None = None) -> None:
@@ -20,8 +27,7 @@ class MessageLog:
         self._agent_name = agent_name
         dir = (log_dir or paths.get_log()) / "messages"
         dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._path = dir / f"{ts}_{agent_name.replace('/', '_')}_{session_id[:8]}.jsonl"
+        self._path = dir / f"{sanitize_filename(session_id)}.jsonl"
         self._file: Any = None
 
     def _write(self, event: str, data: dict[str, Any]) -> None:

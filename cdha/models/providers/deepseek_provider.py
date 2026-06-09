@@ -135,6 +135,7 @@ class DeepSeekProvider(Provider):
         messages: list[Message],
         model: str,
         on_text_chunk: Optional[Callable[[str], None]] = None,
+        on_tool_call_delta: Optional[Callable[[str, str, str], None]] = None,
         **kwargs,
     ) -> ChatResponse:
         key = self.resolve_api_key(self.api_key)
@@ -187,6 +188,10 @@ class DeepSeekProvider(Provider):
                                 self._stream_tool_calls[idx]["id"] = tcd["id"]
                             if tcd.get("function", {}).get("name"):
                                 self._stream_tool_calls[idx]["name"] = tcd["function"]["name"]
+                            if on_tool_call_delta:
+                                call_id = self._stream_tool_calls[idx].get("id", "")
+                                name = self._stream_tool_calls[idx].get("name", "")
+                                on_tool_call_delta(call_id, name, args_delta)
 
         tool_uses = []
         for nt in self._stream_tool_calls.values():

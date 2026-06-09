@@ -896,7 +896,7 @@ class A2TUIApp(App, inherit_bindings=False):
         self.push_screen(LogScreen(log_path=log_path))
 
     def _current_session_log_path(self) -> Path | None:
-        """Resolve the JSON-RPC log file for the active session.
+        """Resolve the message log file for the active session.
 
         Returns ``None`` when there is no active session yet (e.g. on
         the splash / store screen).  The :class:`LogScreen` interprets
@@ -907,20 +907,14 @@ class A2TUIApp(App, inherit_bindings=False):
         screen = self.screen
         conv = getattr(screen, "conversation", None)
         agent = getattr(conv, "agent", None) if conv else None
-        if agent is not None:
-            path = getattr(agent, "_log_file_path", None)
-            if path is not None and path.exists():
-                return path
         session_id = (
             getattr(agent, "session_id", None) if agent else None
         ) or getattr(conv, "_agent_session_id", None)
         if not session_id:
             return None
-        sess_dir = paths.get_log() / session_id
-        if not sess_dir.exists():
-            return None
-        candidates = sorted(sess_dir.glob("*.txt"))
-        return candidates[0] if candidates else None
+        from tui.message_log import sanitize_filename
+        path = paths.get_log() / "messages" / f"{sanitize_filename(session_id)}.jsonl"
+        return path if path.exists() else None
 
     def action_quit(self) -> None:
         """An [action](/guide/actions) to quit the app as soon as possible."""

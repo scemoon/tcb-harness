@@ -98,13 +98,83 @@ class AgentServer:
                 })
                 return
 
+            from cdha.models.messages import StreamEvent, StreamEventType
+
+            _tc_args: dict[str, str] = {}
+
+            def _on_tool_call_delta(call_id: str, name: str, args_delta: str) -> None:
+                if not args_delta:
+                    return
+                _tc_args[call_id] = _tc_args.get(call_id, "") + args_delta
+                payload = json.dumps({
+                    "type": "tool_call_args",
+                    "toolCallId": call_id,
+                    "name": name,
+                    "args": _tc_args[call_id],
+                })
+                asyncio.ensure_future(send({
+                    "type": "http.response.body",
+                    "body": f"data: {payload}\n\n".encode(),
+                    "more_body": True,
+                }))
+
+            self._engine.on_tool_call_delta = _on_tool_call_delta
+
             text_buffer = []
             async for event in self._engine.chat_stream(user_input):
-                from cdha.models.messages import StreamEvent
                 if isinstance(event, StreamEvent):
-                    if event.text:
+                    if event.type == StreamEventType.TEXT_DELTA and event.text:
                         text_buffer.append(event.text)
                         payload = json.dumps({"type": "delta", "text": event.text})
+                        await send({
+                            "type": "http.response.body",
+                            "body": f"data: {payload}\n\n".encode(),
+                            "more_body": True,
+                        })
+                    elif event.type == StreamEventType.THINKING and event.thinking:
+                        payload = json.dumps({"type": "thinking", "content": event.thinking})
+                        await send({
+                            "type": "http.response.body",
+                            "body": f"data: {payload}\n\n".encode(),
+                            "more_body": True,
+                        })
+                    elif event.type == StreamEventType.TOOL_CALL_START:
+                        payload = json.dumps({
+                            "type": "tool_call_start",
+                            "toolCallId": event.tool_id,
+                            "name": event.tool_name,
+                        })
+                        await send({
+                            "type": "http.response.body",
+                            "body": f"data: {payload}\n\n".encode(),
+                            "more_body": True,
+                        })
+                    elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
+                        payload = json.dumps({
+                            "type": "tool_call_complete",
+                            "toolCallId": event.tool_id,
+                            "name": event.tool_name,
+                            "args": event.tool_args,
+                        })
+                        await send({
+                            "type": "http.response.body",
+                            "body": f"data: {payload}\n\n".encode(),
+                            "more_body": True,
+                        })
+                    elif event.type == StreamEventType.TOOL_RESULT:
+                        payload = json.dumps({
+                            "type": "tool_result",
+                            "toolCallId": event.tool_id,
+                            "content": event.result_content,
+                            "isError": event.result_is_error,
+                        })
+                        await send({
+                            "type": "http.response.body",
+                            "body": f"data: {payload}\n\n".encode(),
+                            "more_body": True,
+                        })
+                    elif event.type == StreamEventType.ERROR:
+                        payload = json.dumps({"type": "error", "message": event.error_message})
                         await send({
                             "type": "http.response.body",
                             "body": f"data: {payload}\n\n".encode(),

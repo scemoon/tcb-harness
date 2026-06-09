@@ -17,6 +17,17 @@ from pathlib import Path
 logger = logging.getLogger("cdha.agent.cdh_acp")
 
 
+def _short_path(p: str, project_dir: Path | None = None) -> str:
+    """Return *p* relative to *project_dir* if it is an absolute path under it."""
+    if not p or not project_dir:
+        return p
+    try:
+        resolved = Path(p).resolve()
+        return str(resolved.relative_to(project_dir.resolve()))
+    except (ValueError, OSError):
+        return p
+
+
 def debug_log(*args, **kwargs):
     """Debug log via the ``cdha.agent.cdh_acp`` logger.
 
@@ -654,7 +665,7 @@ class CDHACPAdapter:
                     current_title = self.tool_calls[block.tool_use_id].get("title", "")
                     if ":" not in current_title:
                         if path := parsed.get("path"):
-                            self.tool_calls[block.tool_use_id]["title"] = f"{current_title}: {path}"
+                            self.tool_calls[block.tool_use_id]["title"] = f"{current_title}: {_short_path(path, self.agent._project_dir)}"
 
         content_block = [{
             "type": "content",
@@ -1081,6 +1092,31 @@ class CDHACPAdapter:
 
         self.agent._cancelled = False
         self.agent.on_text_chunk = self._make_stream_callback()
+
+        # Track in-progress tool call args for incremental display
+        _incremental_args: dict[str, str] = {}
+
+        def _on_tool_call_delta(call_id: str, name: str, args_delta: str) -> None:
+            if args_delta:
+                _incremental_args[call_id] = _incremental_args.get(call_id, "") + args_delta
+                display_args = _incremental_args[call_id]
+                try:
+                    parsed = json.loads(display_args)
+                    display_text = json.dumps(parsed, indent=2, ensure_ascii=False)
+                except (json.JSONDecodeError, TypeError):
+                    display_text = display_args
+                self.send_session_update({
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": call_id,
+                    "title": name or "Tool call",
+                    "status": "in_progress",
+                    "content": [{
+                        "type": "content",
+                        "content": {"type": "text", "text": f"```json\n{display_text}\n```"},
+                    }] if display_text else [],
+                })
+
+        self.agent.on_tool_call_delta = _on_tool_call_delta
         async for event in self.agent.chat_stream(user_message):
             if event.type == StreamEventType.TEXT_DELTA:
                 self.send_session_update({
@@ -1095,13 +1131,14 @@ class CDHACPAdapter:
                 })
             elif event.type == StreamEventType.TOOL_CALL_START:
                 tool_kind = _kind_for_category(event.tool_category)
+                existing = self.tool_calls.get(event.tool_id, {})
                 self.tool_calls[event.tool_id] = {
                     "sessionUpdate": "tool_call",
                     "toolCallId": event.tool_id,
                     "title": event.tool_name,
                     "kind": tool_kind,
                     "status": "in_progress",
-                    "content": [],
+                    "content": existing.get("content", []),
                 }
                 self.send_session_update(self.tool_calls[event.tool_id])
             elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
@@ -1109,7 +1146,7 @@ class CDHACPAdapter:
                     title = event.tool_name
                     if event.tool_args:
                         if path := event.tool_args.get("path", ""):
-                            title = f"{event.tool_name}: {path}"
+                            title = f"{event.tool_name}: {_short_path(path, self.agent._project_dir)}"
                         elif event.tool_name == "Bash":
                             cmd = str(event.tool_args.get("command", ""))[:60]
                             title = f"Bash: {cmd}"
@@ -1151,7 +1188,7 @@ class CDHACPAdapter:
                             current_title = self.tool_calls[event.tool_id].get("title", "")
                             if ":" not in current_title:
                                 if path := parsed.get("path"):
-                                    self.tool_calls[event.tool_id]["title"] = f"{current_title}: {path}"
+                                    self.tool_calls[event.tool_id]["title"] = f"{current_title}: {_short_path(path, self.agent._project_dir)}"
 
                 # TUI now renders all text content as Markdown.
                 # Wrap multi-line results in a fenced code block so they

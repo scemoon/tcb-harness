@@ -83,12 +83,14 @@ class GLMProvider(Provider):
         messages: list[Message],
         model: str,
         on_text_chunk: Optional[Callable[[str], None]] = None,
+        on_tool_call_delta: Optional[Callable[[str, str, str], None]] = None,
         **kwargs,
     ) -> ChatResponse:
         key = self.resolve_api_key(self.api_key)
         if not key:
             return ChatResponse(content="API key not configured.")
         content_parts: list[str] = []
+        stream_tool_calls: dict[int, dict] = {}
         try:
             async with httpx.AsyncClient(timeout=300) as client:
                 async with client.stream(
@@ -114,9 +116,39 @@ class GLMProvider(Provider):
                                 content_parts.append(text)
                                 if on_text_chunk:
                                     on_text_chunk(text)
+                            for tcd in delta.get("tool_calls", []) or []:
+                                idx = tcd.get("index", 0)
+                                slot = stream_tool_calls.setdefault(
+                                    idx,
+                                    {"id": "", "name": "", "arguments": ""},
+                                )
+                                if tcd.get("id"):
+                                    slot["id"] = tcd["id"]
+                                fn = tcd.get("function", {}) or {}
+                                if fn.get("name"):
+                                    slot["name"] = fn["name"]
+                                args_delta = fn.get("arguments", "") or ""
+                                slot["arguments"] += args_delta
+                                if on_tool_call_delta:
+                                    on_tool_call_delta(slot.get("id", ""), slot.get("name", ""), args_delta)
         except Exception as e:
             return ChatResponse(content=f"Error: {e}")
-        return ChatResponse(content="".join(content_parts))
+        tool_uses = []
+        for slot in stream_tool_calls.values():
+            name = slot.get("name") or ""
+            if not name:
+                continue
+            raw_args = slot.get("arguments") or ""
+            try:
+                inp: dict = json.loads(raw_args) if raw_args else {}
+            except (json.JSONDecodeError, TypeError):
+                inp = {"raw": raw_args}
+            if not isinstance(inp, dict):
+                inp = {"raw": inp}
+            tool_uses.append(
+                {"id": slot.get("id") or "", "name": name, "input": inp}
+            )
+        return ChatResponse(content="".join(content_parts), tool_uses=tool_uses)
 
 
 ProviderRegistry.register("glm", GLMProvider)

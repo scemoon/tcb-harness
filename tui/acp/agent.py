@@ -4,8 +4,6 @@ import sys
 
 logger = logging.getLogger("tui.acp.agent")
 
-from contextlib import suppress
-from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -43,31 +41,6 @@ class Mode(NamedTuple):
     id: str
     name: str
     description: str | None
-
-
-def generate_datetime_filename(
-    prefix: str, suffix: str, datetime_format: str | None = None
-) -> str:
-    """Generate a filename which includes the current date and time.
-
-    Useful for ensuring a degree of uniqueness when saving files.
-
-    Args:
-        prefix: Prefix to attach to the start of the filename, before the timestamp string.
-        suffix: Suffix to attach to the end of the filename, after the timestamp string.
-            This should include the file extension.
-        datetime_format: The format of the datetime to include in the filename.
-            If None, the ISO format will be used.
-    """
-    if datetime_format is None:
-        dt = datetime.now().isoformat()
-    else:
-        dt = datetime.now().strftime(datetime_format)
-
-    file_name_stem = f"{prefix} {dt}"
-    for reserved in ' <>:"/\\|?*.':
-        file_name_stem = file_name_stem.replace(reserved, "_")
-    return file_name_stem + suffix
 
 
 @rich.repr.auto
@@ -116,17 +89,6 @@ class Agent(AgentBase):
 
         self._terminal_count: int = 0
 
-        log_filename: str = generate_datetime_filename(f"{agent['name']}", ".txt")
-        if log_path := os.environ.get("TOAD_LOG"):
-            self._log_file_path = Path(log_path).resolve().absolute()
-            with suppress(OSError):
-                self._log_file_path.unlink(missing_ok=True)
-        elif session_id:
-            log_dir = paths.get_log() / session_id
-            self._log_file_path = log_dir / log_filename
-        else:
-            self._log_file_path = paths.get_log() / log_filename
-
     @property
     def command(self) -> str | None:
         """The command used to launch the agent, or `None` if there isn't one."""
@@ -142,38 +104,6 @@ class Agent(AgentBase):
         yield self.project_root_path
         yield self.command
 
-    def log(self, line: str) -> None:
-        """Write text to the agent log file.
-
-        Args:
-            line: Text to be logged.
-
-        """
-        if self._message_target is not None:
-            self._message_target.call_later(self._log, line)
-
-    async def _log(self, line: str) -> None:
-        """Write text to the agent log file.
-
-        Intended to be called from `log`
-
-        Args:
-            line: Text to be logged.
-        """
-
-        if self._message_target is None:
-            return
-
-        def write_log(log_file_path: Path, line: str):
-            """Write log in a thread."""
-            try:
-                with log_file_path.open("at") as log_file:
-                    log_file.write(f"{line.rstrip()}\n")
-            except OSError:
-                pass
-
-        await asyncio.to_thread(write_log, self._log_file_path, line)
-
     def get_info(self) -> Content:
         agent_name = self._agent_data["name"]
         return Content(agent_name)
@@ -181,12 +111,6 @@ class Agent(AgentBase):
     async def start(self, message_target: MessagePump | None = None) -> None:
         """Start the agent."""
         self._message_target = message_target
-        try:
-            await asyncio.to_thread(
-                self._log_file_path.parent.mkdir, parents=True, exist_ok=True
-            )
-        except OSError:
-            pass
         self._agent_task = asyncio.create_task(self._run_agent())
 
     def send(self, request: jsonrpc.Request) -> None:
@@ -200,7 +124,7 @@ class Agent(AgentBase):
         """
         assert self._process is not None, "Process should be present here"
 
-        self.log(f"[client] {request.body}")
+        logger.debug("[client] %s", request.body)
         if (stdin := self._process.stdin) is not None:
             stdin.write(b"%s\n" % request.body_json)
 
@@ -263,10 +187,11 @@ class Agent(AgentBase):
                 "sessionUpdate": "tool_call",
                 "toolCallId": tool_call_id,
             }:
-                self.log(
-                    f"session/update: tool_call id={tool_call_id} "
-                    f"title={update.get('title','?')} kind={update.get('kind','?')} "
-                    f"status={update.get('status','?')} content_blocks={len(update.get('content',[]) or [])}"
+                logger.debug(
+                    "session/update: tool_call id=%s title=%s kind=%s status=%s content_blocks=%d",
+                    tool_call_id,
+                    update.get('title','?'), update.get('kind','?'),
+                    update.get('status','?'), len(update.get('content',[]) or []),
                 )
                 self.tool_calls[tool_call_id] = deepcopy(update)
                 self.post_message(messages.ToolCall(deepcopy(update)))
@@ -284,19 +209,21 @@ class Agent(AgentBase):
                         if value is not None:
                             current_tool_call[key] = value
 
-                    self.log(
-                        f"session/update: tool_call_update id={tool_call_id} "
-                        f"status={update.get('status','?')} "
-                        f"content_blocks={len(update.get('content',[]) or [])}"
+                    logger.debug(
+                        "session/update: tool_call_update id=%s status=%s content_blocks=%d",
+                        tool_call_id,
+                        update.get('status','?'),
+                        len(update.get('content',[]) or []),
                     )
 
                     self.post_message(
                         messages.ToolCallUpdate(deepcopy(current_tool_call), update)
                     )
                 else:
-                    self.log(
-                        f"session/update: tool_call_update ORPHAN id={tool_call_id} "
-                        f"(no prior tool_call, creating widget from update)"
+                    logger.debug(
+                        "session/update: tool_call_update ORPHAN id=%s "
+                        "(no prior tool_call, creating widget from update)",
+                        tool_call_id,
                     )
                     current_tool_call: protocol.ToolCall = {
                         "sessionUpdate": "tool_call",
@@ -566,14 +493,14 @@ class Agent(AgentBase):
             try:
                 line_str = line.decode("utf-8")
             except Exception as error:
-                self.log(f"[error] Unable to decode utf-8 from agent: {error}")
+                logger.error("Unable to decode utf-8 from agent: %s", error)
                 continue
 
-            self.log(f"[agent] {line_str}")
+            logger.debug("[agent] %s", line_str.rstrip())
             try:
                 agent_data: jsonrpc.JSONType = json.loads(line_str)
             except Exception as error:
-                self.log(f"[error] failed to decode JSON from agent: {error}")
+                logger.error("Failed to decode JSON from agent: %s", error)
                 continue
 
             if isinstance(agent_data, dict):
@@ -583,17 +510,15 @@ class Agent(AgentBase):
 
             elif isinstance(agent_data, list):
                 if not all(isinstance(datum, dict) for datum in agent_data):
-                    self.log(f"[error] Agent sent invalid data: {agent_data!r}")
-                    continue
-                if all(
-                    isinstance(datum, dict) and ("result" in datum or "error" in datum)
-                    for datum in agent_data
-                ):
-                    API.process_response(agent_data)
+                    logger.error("Agent sent invalid data: %r", agent_data)
                     continue
 
             if not isinstance(agent_data, dict):
-                self.log("[error] Invalid JSON from agent {agent_data!r}")
+                logger.error("Invalid JSON from agent: %r", agent_data)
+                continue
+
+            if not isinstance(agent_data, dict):
+                logger.error("Invalid JSON from agent: %r", agent_data)
                 continue
 
             # By this point we know it is a JSON RPC call
@@ -769,19 +694,6 @@ class Agent(AgentBase):
         response = await session_new_response.wait()
         assert response is not None
         self.session_id = response["sessionId"]
-
-        # Move log file to session subdirectory now that we have a session_id
-        if not os.environ.get("TOAD_LOG"):
-            session_log_dir = paths.get_log() / self.session_id
-            new_log_path = session_log_dir / self._log_file_path.name
-            if self._log_file_path != new_log_path:
-                try:
-                    session_log_dir.mkdir(parents=True, exist_ok=True)
-                    self._log_file_path.rename(new_log_path)
-                except OSError:
-                    pass
-                else:
-                    self._log_file_path = new_log_path
 
         if self.supports_load_session:
             self._pending_session_data = {

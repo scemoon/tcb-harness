@@ -143,7 +143,7 @@ class MainScreen(Screen, can_focus=False):
         panels: list[SideBar.Panel] = [
             SideBar.Panel(
                 "Plan",
-                Plan([], placeholder="Waiting for the agent to plan this turn…"),
+                Plan([], placeholder="no plan yet"),
             )
         ]
         if CdhProjectLoader.find_cdh_dir(self.project_path) is not None:

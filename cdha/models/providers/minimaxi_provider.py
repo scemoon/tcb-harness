@@ -188,6 +188,7 @@ class MiniMaxiProvider(Provider):
         messages: list[Message],
         model: str,
         on_text_chunk: Optional[Callable[[str], None]] = None,
+        on_tool_call_delta: Optional[Callable[[str, str, str], None]] = None,
         **kwargs,
     ) -> ChatResponse:
         self._request_count += 1
@@ -242,6 +243,11 @@ class MiniMaxiProvider(Provider):
                                         {"id": "", "name": "", "arguments": ""},
                                     )
                                     _accumulate_tool_call_delta(slot, tcd)
+                                    if on_tool_call_delta:
+                                        call_id = slot.get("id", "")
+                                        name = slot.get("name", "")
+                                        args_delta = tcd.get("function", {}).get("arguments", "") or ""
+                                        on_tool_call_delta(call_id, name, args_delta)
                             except json.JSONDecodeError:
                                 continue
                         elif line.startswith("data: [DONE]"):

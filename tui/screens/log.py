@@ -24,13 +24,13 @@ _MAX_ENTRIES = 2000
 
 
 def _find_log_file() -> Path | None:
-    """Return the most recent agent log file, or None if empty."""
-    log_dir = get_log()
+    """Return the most recent message log file, or None if empty."""
+    log_dir = get_log() / "messages"
     if not log_dir.exists():
         return None
     candidates = [
         p for p in log_dir.iterdir()
-        if p.is_file() and p.suffix == ".txt" and not p.name.startswith(".")
+        if p.is_file() and p.suffix == ".jsonl" and not p.name.startswith(".")
     ]
     if not candidates:
         return None
@@ -69,14 +69,47 @@ def _highlight_json(raw: str) -> str:
     return _ANSI_HIGHLIGHT.sub(_ansi_repl, formatted)
 
 
+def _summarize_message_log(record: dict) -> str:
+    """Extract a one-line summary of a MessageLog event record."""
+    event = record.get("event", "")
+    turn = record.get("turn", "")
+    turn_str = f" [dim](turn {turn})[/dim]" if turn != "" else ""
+    if event == "user_input":
+        text = record.get("text", "")
+        return f"user_input  [dim]\"{text[:60]}{'…' if len(text) > 60 else ''}\"[/dim]{turn_str}"
+    if event == "agent_output":
+        text = record.get("text", "")
+        return f"agent_output  [dim]\"{text[:60]}{'…' if len(text) > 60 else ''}\"[/dim]{turn_str}"
+    if event == "agent_thought":
+        return f"agent_thought{turn_str}"
+    if event == "tool_call":
+        name = record.get("tool_name", "")
+        return f"tool_call  [bold]{name}[/bold]{turn_str}"
+    if event == "tool_result":
+        name = record.get("tool_name", "")
+        status = record.get("status", "success")
+        return f"tool_result  [bold]{name}[/bold] → {status}{turn_str}"
+    if event == "turn_end":
+        reason = record.get("stop_reason", "")
+        return f"turn_end  stop={reason}{turn_str}"
+    if event == "error":
+        msg = record.get("message", "")
+        return f"error: {msg[:60]}{turn_str}"
+    return str(record)[:80]
+
+
 def _summarize(tag: str, raw: str) -> str:
-    """Extract a one-line summary of a JSON-RPC message."""
+    """Extract a one-line summary of a JSON-RPC or MessageLog message."""
     try:
         obj = json.loads(raw)
     except Exception:
         return raw[:80]
     if not isinstance(obj, dict):
         return str(obj)[:80]
+    # MessageLog event record (event-driven format)
+    if "event" in obj:
+        return _summarize_message_log(obj)
+    # Legacy JSON-RPC wire format
     if tag == "agent" and "method" in obj:
         method = obj.get("method", "")
         params = obj.get("params", {})
@@ -267,7 +300,7 @@ class LogScreen(ModalScreen[None]):
         self._entry_count = 0
         self._entries: list[LogEntry] = []
         self._current_index: int = -1
-        self._reversed: bool = False
+        self._reversed: bool = True
         # Tracks whether the target log file has been observed to exist
         # at least once.  When the F4 handler is pressed on a brand-new
         # session the path is known but the file does not exist yet
@@ -330,11 +363,11 @@ class LogScreen(ModalScreen[None]):
         path = self._log_path
         order = "⏷ reverse" if self._reversed else "⏵ forward"
         return (
-            f"📡 Agent log — {path}  [dim]│  {order}  │  "
+            f"📋 Session log — {path}  [dim]│  {order}  │  "
             f"{self._entry_count} msgs  │  j/k nav · ⏎ toggle · r reverse · "
             f"O open all · C close all · F4/Esc close[/dim]"
             if path
-            else "📡 Agent log — (no log file found)"
+            else "📋 Session log — (no log file found)"
         )
 
     def _refresh_header(self) -> None:
@@ -455,6 +488,22 @@ class LogScreen(ModalScreen[None]):
         for line in chunk.splitlines():
             if not line.strip():
                 continue
+            # Try MessageLog JSONL format first
+            try:
+                record = json.loads(line)
+                if isinstance(record, dict) and "event" in record:
+                    event = record.get("event", "")
+                    if event in ("user_input",):
+                        tag = "client"
+                    elif event in ("agent_output", "agent_thought", "tool_call", "tool_result", "turn_end"):
+                        tag = "agent"
+                    else:
+                        tag = "error"
+                    self._append_entry(tag, line, scroll=scroll)
+                    continue
+            except (json.JSONDecodeError, ValueError):
+                pass
+            # Legacy [tag] json format
             m = _TAG_RE.match(line)
             if m:
                 self._append_entry(m.group(1), m.group(2), scroll=scroll)

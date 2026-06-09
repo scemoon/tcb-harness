@@ -471,6 +471,7 @@ class AgentEngine:
         # Event callbacks
         self.on_event: ToolEventHandler | None = None
         self.on_text_chunk: Callable[[str], None] | None = None
+        self.on_tool_call_delta: Callable[[str, str, str], None] | None = None
         self._streaming_used: bool = False
 
         # Cancellation support
@@ -585,8 +586,6 @@ class AgentEngine:
 
     def _emit_plan_update(self) -> list[StreamEvent]:
         """Emit a plan update event from current tasks and todos."""
-        from cdha.models.messages import StreamEvent
-
         entries = []
         for task in self._task_manager.list_tasks():
             entries.append({
@@ -1030,6 +1029,7 @@ class AgentEngine:
                     context_messages,
                     model=model_name,
                     on_text_chunk=stream_cb,
+                    on_tool_call_delta=self.on_tool_call_delta,
                 )
                 response_text = chat_response.content
                 tool_uses = chat_response.tool_uses

@@ -178,7 +178,7 @@ class ToolCall(containers.VerticalGroup):
         if status == "pending":
             header += Content.assemble(" ⌛")
         elif status == "in_progress":
-            pass
+            header += Content.from_markup(" [$text-warning]🔄")
         elif status == "failed":
             header += Content.assemble(" ", pill("failed", "$error-muted", "$error"))
         elif status == "completed":
@@ -202,10 +202,7 @@ class ToolCall(containers.VerticalGroup):
     @on(events.Click, "ToolCallHeader")
     def on_click_tool_call_header(self, event: events.Click) -> None:
         event.stop()
-        if self.has_content:
-            self.expanded = not self.expanded
-        else:
-            self.app.bell()
+        self.expanded = not self.expanded
 
     def _compose_content(
         self, tool_call_content: list[protocol.ToolCallContent]

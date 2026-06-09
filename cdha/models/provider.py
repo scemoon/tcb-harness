@@ -309,6 +309,7 @@ class Provider(ABC):
         messages: list[Message],
         model: str,
         on_text_chunk: Optional[Callable[[str], None]] = None,
+        on_tool_call_delta: Optional[Callable[[str, str, str], None]] = None,
         **kwargs,
     ) -> ChatResponse:
         """Stream with structured ChatResponse return (Clawd-Code style).
