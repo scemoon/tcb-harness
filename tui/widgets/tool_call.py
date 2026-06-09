@@ -8,7 +8,7 @@ from textual.app import ComposeResult
 from textual import getters
 
 from textual.content import Content
-from textual.reactive import reactive, var
+from textual.reactive import var
 from textual.css.query import NoMatches
 from textual import containers
 from textual.widgets import Static, Markdown
@@ -58,6 +58,65 @@ class ToolCallHeader(Static):
     """
 
 
+class ViewMore(Static):
+    DEFAULT_CSS = """
+    ViewMore {
+        width: 1fr;
+        text-align: center;
+        color: $accent;
+        &:hover {
+            color: $text-accent;
+        }
+        visibility: hidden;
+    }
+    ViewMore.-visible {
+        visibility: visible;
+    }
+    """
+
+
+def compose_content_block(content_block: protocol.ContentBlock) -> ComposeResult:
+    match content_block:
+        case {"type": "text", "text": text}:
+            assert isinstance(text, str)
+            if "\x1b" in text:
+                parsed_ansi_text = Text.from_ansi(text)
+                yield TextContent(Content.from_rich_text(parsed_ansi_text))
+            elif "```" in text or re.search(
+                r"^#{1,6}\s.*$", text, re.MULTILINE
+            ):
+                yield MarkdownContent(text)
+            else:
+                yield TextContent(text, markup=False)
+
+
+def compose_tool_content(
+    tool_call_content: list[protocol.ToolCallContent],
+    app: A2TUIApp | None = None,
+) -> ComposeResult:
+    for content in tool_call_content:
+        match content:
+            case {"type": "content", "content": sub_content}:
+                yield from compose_content_block(sub_content)
+            case {
+                "type": "diff",
+                "path": path,
+                "oldText": old_text,
+                "newText": new_text,
+            }:
+                from tui.widgets.diff_view import make_diff
+
+                yield (diff_view := make_diff(path, path, old_text, new_text))
+
+                if isinstance(app, A2TUIApp):
+                    diff_view_setting = app.settings.get("diff.view", str)
+                    diff_view.split = diff_view_setting == "split"
+                    diff_view.auto_split = diff_view_setting == "auto"
+
+            case {"type": "terminal", "terminalId": terminal_id}:
+                pass
+
+
 class ToolCall(containers.VerticalGroup):
     DEFAULT_CLASSES = "block"
 
@@ -77,11 +136,6 @@ class ToolCall(containers.VerticalGroup):
         super().__init__(id=id, classes=classes)
 
     async def update_tool_call(self, tool_call: protocol.ToolCall) -> None:
-        """Update the tool call and recompose the widget.
-
-        Args:
-            tool_call: New Tool call data.
-        """
         self.tool_call = tool_call
         await self.recompose()
 
@@ -125,21 +179,20 @@ class ToolCall(containers.VerticalGroup):
         yield ToolCallHeader(self.tool_call_header_content, markup=False).with_tooltip(
             "Expand to see full title"
         )
-        with containers.VerticalGroup(id="tool-content"):
+        with containers.VerticalScroll(id="tool-content"):
             yield from content_update
+        yield ViewMore(Content.from_markup("[$accent]▼ View more ▼"), id="view-more")
         self.check_expand()
 
     def on_mount(self) -> None:
         self.check_expand()
 
     def check_expand(self) -> None:
-        """Check if the tool call should auto-expand."""
         if not self.has_content:
             return
         tool_call = self.tool_call
         assert tool_call is not None
         if tool_call.get("kind", "") == "read":
-            # Don't auto expand reads, as it can generate a lot of noise
             return
         tool_call_expand = self.app.settings.get("tools.expand", str, expand=False)
         status = tool_call.get("status")
@@ -202,6 +255,8 @@ class ToolCall(containers.VerticalGroup):
             else:
                 tool_content.styles.max_height = None
 
+            self.call_after_refresh(self._check_content_overflow)
+
         from tui.widgets.conversation import Conversation
 
         try:
@@ -211,60 +266,40 @@ class ToolCall(containers.VerticalGroup):
         else:
             self.call_after_refresh(conversation.cursor.update_follow)
 
+    def _check_content_overflow(self) -> None:
+        try:
+            tool_content = self.query_one("#tool-content")
+            view_more = self.query_one("#view-more", ViewMore)
+        except NoMatches:
+            return
+        if not self.expanded or not isinstance(tool_content, containers.VerticalScroll):
+            view_more.remove_class("-visible")
+            return
+        overflowing = tool_content.max_scroll_y > 0
+        view_more.set_class(overflowing, "-visible")
+
     @on(events.Click, "ToolCallHeader")
     def on_click_tool_call_header(self, event: events.Click) -> None:
         event.stop()
         self.expanded = not self.expanded
 
+    @on(events.Click, "ViewMore")
+    def on_click_view_more(self, event: events.Click) -> None:
+        event.stop()
+        from tui.screens.tool_content_screen import ToolContentScreen
+
+        assert self.tool_call is not None
+        self.app.push_screen(ToolContentScreen(self.tool_call))
+
     def _compose_content(
         self, tool_call_content: list[protocol.ToolCallContent]
     ) -> ComposeResult:
-        def compose_content_block(
-            content_block: protocol.ContentBlock,
-        ) -> ComposeResult:
-            match content_block:
-                # TODO: This may need updating
-                # Docs claim this should be "plain" text
-                # However, I have seen simple text, text with ansi escape sequences, and Markdown returned
-                # I think this is a flaw in the spec.
-                # For now I will attempt a heuristic to guess what the content actually contains
-                # https://agentclientprotocol.com/protocol/schema#param-text
-                case {"type": "text", "text": text}:
-                    assert isinstance(text, str)
-                    if "\x1b" in text:
-                        parsed_ansi_text = Text.from_ansi(text)
-                        yield TextContent(Content.from_rich_text(parsed_ansi_text))
-                    elif "```" in text or re.search(
-                        r"^#{1,6}\s.*$", text, re.MULTILINE
-                    ):
-                        yield MarkdownContent(text)
-                    else:
-                        yield TextContent(text, markup=False)
-
-        for content in tool_call_content:
-            match content:
-                case {"type": "content", "content": sub_content}:
-                    yield from compose_content_block(sub_content)
-                    self.has_content = True
-                case {
-                    "type": "diff",
-                    "path": path,
-                    "oldText": old_text,
-                    "newText": new_text,
-                }:
-                    from tui.widgets.diff_view import make_diff
-
-                    yield (diff_view := make_diff(path, path, old_text, new_text))
-
-                    if isinstance(self.app, A2TUIApp):
-                        diff_view_setting = self.app.settings.get("diff.view", str)
-                        diff_view.split = diff_view_setting == "split"
-                        diff_view.auto_split = diff_view_setting == "auto"
-
-                    self.has_content = True
-
-                case {"type": "terminal", "terminalId": terminal_id}:
-                    pass
+        found = False
+        for widget in compose_tool_content(tool_call_content, self.app):
+            yield widget
+            found = True
+        if found:
+            self.has_content = True
 
 
 if __name__ == "__main__":
