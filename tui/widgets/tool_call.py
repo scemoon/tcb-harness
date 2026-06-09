@@ -190,6 +190,18 @@ class ToolCall(containers.VerticalGroup):
             self.query_one(ToolCallHeader).update(self.tool_call_header_content)
         except NoMatches:
             pass
+
+        try:
+            tool_content = self.query_one("#tool-content")
+        except NoMatches:
+            pass
+        else:
+            max_height_pct = self.app.settings.get("tools.max_height", int)
+            if self.expanded and max_height_pct and max_height_pct > 0:
+                tool_content.styles.max_height = f"{max_height_pct}vh"
+            else:
+                tool_content.styles.max_height = None
+
         from tui.widgets.conversation import Conversation
 
         try:

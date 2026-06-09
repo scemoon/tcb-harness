@@ -926,9 +926,10 @@ class AgentEngine:
         for child in self._child_engines:
             child._cancelled = True
 
-    async def chat_stream(self, user_input: str) -> AsyncIterator[StreamEvent | str]:
+    async def chat_stream(self, user_input: str | list[dict]) -> AsyncIterator[StreamEvent | str]:
         self._load_skills()
-        logger.info(f"chat_stream() called with user_input='{user_input[:100]}...'")
+        preview = user_input[:100] if isinstance(user_input, str) else f"[{len(user_input)} content blocks]"
+        logger.info(f"chat_stream() called with user_input='{preview}'")
 
         project_name = getattr(self.app, "current_project", None) or ""
         if project_name:

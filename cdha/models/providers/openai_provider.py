@@ -19,6 +19,29 @@ class OpenAIProvider(Provider):
     def is_anthropic_style(self) -> bool:
         return False
 
+    def prepare_messages(self, messages: list[Message]) -> list[dict]:
+        """Prepare messages for OpenAI API, supporting multimodal (text + image) content."""
+        system_parts = []
+        non_system = []
+
+        for m in messages:
+            if m.role == "system":
+                system_parts.append(m.to_api_content())
+            else:
+                non_system.append(m.to_multimodal_dict())
+
+        if len(system_parts) > 1:
+            combined_system = "\n\n".join(system_parts)
+        elif system_parts:
+            combined_system = system_parts[0]
+        else:
+            combined_system = ""
+
+        if combined_system:
+            non_system.insert(0, {"role": "system", "content": combined_system})
+
+        return non_system
+
     def get_stream_tool_calls(self) -> list[dict]:
         return list(self._stream_tool_calls.values())
 

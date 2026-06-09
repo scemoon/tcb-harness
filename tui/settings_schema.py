@@ -254,7 +254,15 @@ SCHEMA: list[SchemaDict] = [
                     ("Fail only", "fail"),
                     ("Fail and success", "both"),
                 ],
-            }
+            },
+            {
+                "key": "max_height",
+                "title": "Tool content max height",
+                "help": "Max height of expanded tool content as a percentage of viewport height (0 = no limit).",
+                "type": "integer",
+                "default": 60,
+                "validate": [{"type": "minimum", "value": 0}, {"type": "maximum", "value": 100}],
+            },
         ],
     },
     {

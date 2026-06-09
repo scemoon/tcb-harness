@@ -77,8 +77,8 @@ class Agent(AgentBase):
             "loadSession": False,
             "promptCapabilities": {
                 "audio": False,
-                "embeddedContent": False,
-                "image": False,
+                "embeddedContent": True,
+                "image": True,
             },
         }
         self.auth_methods: list[protocol.AuthMethod] = []

@@ -18,6 +18,36 @@ class AnthropicProvider(Provider):
     def is_anthropic_style(self) -> bool:
         return True
 
+    def prepare_messages(self, messages: list[Message]) -> list[dict]:
+        """Prepare messages for Anthropic API.
+
+        Converts OpenAI-format image blocks (image_url) to Anthropic's
+        native image format (image + source).
+        """
+        prepared = super().prepare_messages(messages)
+        for msg in prepared:
+            content = msg.get("content")
+            if isinstance(content, list):
+                new_content = []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "image_url":
+                        url = part["image_url"]["url"]
+                        if url.startswith("data:"):
+                            header, _, encoded = url[5:].partition(",")
+                            mime = header.split(";")[0] if ";" in header else "image/png"
+                            new_content.append({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": mime,
+                                    "data": encoded,
+                                },
+                            })
+                    else:
+                        new_content.append(part)
+                msg["content"] = new_content
+        return prepared
+
     async def chat(
         self, messages: list[Message], model: str = "claude-3-opus-20240229", **kwargs
     ) -> ModelResponse:

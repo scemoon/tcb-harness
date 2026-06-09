@@ -698,8 +698,8 @@ class CDHACPAdapter:
                 "loadSession": True,
                 "promptCapabilities": {
                     "audio": False,
-                    "embeddedContent": False,
-                    "image": False,
+                    "embeddedContent": True,
+                    "image": True,
                 },
             },
             "authMethods": [],
@@ -1086,10 +1086,20 @@ class CDHACPAdapter:
         if self.agent is None:
             return {"stopReason": "error", "message": "No agent initialized"}
 
-        user_message = ""
+        # Collect ALL content blocks from the prompt (text, resource, etc.)
+        # instead of only extracting the text portion.
+        user_content: list[dict] = []
         for block in prompt:
-            if block.get("type") == "text":
-                user_message = block.get("text", "")
+            btype = block.get("type", "text")
+            if btype == "text":
+                user_content.append(block)
+            elif btype == "resource":
+                user_content.append(block)
+            elif btype == "image":
+                user_content.append(block)
+            else:
+                # Pass through unknown types, the context layer will handle them
+                user_content.append(block)
 
         self.agent._cancelled = False
         self.agent.on_text_chunk = self._make_stream_callback()
@@ -1118,7 +1128,7 @@ class CDHACPAdapter:
                 })
 
         self.agent.on_tool_call_delta = _on_tool_call_delta
-        async for event in self.agent.chat_stream(user_message):
+        async for event in self.agent.chat_stream(user_content):
             if event.type == StreamEventType.TEXT_DELTA:
                 self.send_session_update({
                     "sessionUpdate": "agent_message_chunk",

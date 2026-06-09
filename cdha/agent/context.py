@@ -5,6 +5,7 @@ from typing import Any, Optional, Union
 from cdha.models.provider import (
     ContentBlock,
     ContentBlockType,
+    ImageContent,
     Message as ProviderMessage,
     ToolResult as ProviderToolResult,
     ToolUse,
@@ -46,6 +47,12 @@ def _estimate_tokens(text: str) -> int:
 
 def _block_text(block: Any) -> str:
     if isinstance(block, dict):
+        btype = block.get("type", "")
+        if btype == "resource":
+            resource = block.get("resource", {})
+            return resource.get("text", "") or f"[{btype}: {resource.get('mimeType', '')} {len(resource.get('blob', ''))} bytes]"
+        if btype == "image":
+            return f"[image: {block.get('mimeType', block.get('source', {}).get('media_type', 'unknown'))}]"
         return str(block.get("text", "") or block.get("content", ""))
     return str(block)
 
@@ -95,7 +102,7 @@ class ContextManager:
             self._update_token_count()
         return removed
 
-    def add_user(self, content: str) -> None:
+    def add_user(self, content: str | list) -> None:
         self.add_message("user", content)
 
     def add_assistant(self, content: str | list) -> None:
@@ -160,6 +167,9 @@ class ContextManager:
         return "\n".join(content_parts[-20:])
 
     def get_context(self) -> list:
+        def _is_image_mime(mime: str) -> bool:
+            return mime and mime.startswith("image/")
+
         def to_provider_content(msg: Message) -> Union[str, list]:
             if isinstance(msg.content, str):
                 return msg.content
@@ -189,6 +199,35 @@ class ContextManager:
                                 content=block.get("content", ""),
                                 is_error=block.get("is_error", False),
                             ),
+                        ))
+                    elif btype == "resource":
+                        resource = block.get("resource", {})
+                        uri = resource.get("uri", "")
+                        mime = resource.get("mimeType", "")
+                        if resource.get("text") is not None:
+                            blocks.append(ContentBlock(
+                                type=ContentBlockType.TEXT,
+                                text=f"\n\n[File: {uri}]({mime})\n```\n{resource['text']}\n```\n",
+                            ))
+                        elif resource.get("blob") and _is_image_mime(mime):
+                            blocks.append(ContentBlock(
+                                type=ContentBlockType.IMAGE,
+                                image=ImageContent(
+                                    data=resource["blob"],
+                                    mime_type=mime,
+                                ),
+                            ))
+                        elif resource.get("blob"):
+                            blocks.append(ContentBlock(
+                                type=ContentBlockType.TEXT,
+                                text=f"\n\n[Attachment: {uri}]({mime})\n[Binary data, {len(resource['blob'])} base64 bytes]\n",
+                            ))
+                    elif btype == "image":
+                        data = block.get("data", block.get("source", {}).get("data", ""))
+                        mime = block.get("mimeType", block.get("source", {}).get("media_type", "image/png"))
+                        blocks.append(ContentBlock(
+                            type=ContentBlockType.IMAGE,
+                            image=ImageContent(data=data, mime_type=mime),
                         ))
             return blocks
 

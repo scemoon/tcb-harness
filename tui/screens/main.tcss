@@ -208,7 +208,12 @@ Conversation {
         }
         &.-expanded {
             #tool-content {
-                display: block;                
+                display: block;
+                max-height: 60vh;
+                overflow-y: auto;
+                scrollbar-gutter: stable;
+                scrollbar-size-vertical: 2;
+                padding-bottom: 1;
             }
             ToolCallHeader {
                 text-wrap: wrap;

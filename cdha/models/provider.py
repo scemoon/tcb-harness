@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -20,6 +22,7 @@ class ChatResponse:
 
 class ContentBlockType(str, Enum):
     TEXT = "text"
+    IMAGE = "image"
     THINKING = "thinking"
     TOOL_USE = "tool_use"
     TOOL_RESULT = "tool_result"
@@ -56,6 +59,12 @@ class CodeExecutionResult:
 
 
 @dataclass
+class ImageContent:
+    data: str  # base64-encoded image data
+    mime_type: str = "image/png"
+
+
+@dataclass
 class ToolResult:
     tool_use_id: str
     content: str
@@ -68,6 +77,7 @@ class ContentBlock:
     type: ContentBlockType
     text: Optional[str] = None
     thinking: Optional[str] = None
+    image: Optional[ImageContent] = None
     tool_use: Optional[ToolUse] = None
     tool_result: Optional[ToolResult] = None
     server_tool_use: Optional[ServerToolUse] = None
@@ -99,6 +109,12 @@ class Message:
     def add_text(self, text: str) -> None:
         self.content.append(ContentBlock(type=ContentBlockType.TEXT, text=text))
 
+    def add_image(self, data: str, mime_type: str = "image/png") -> None:
+        self.content.append(ContentBlock(
+            type=ContentBlockType.IMAGE,
+            image=ImageContent(data=data, mime_type=mime_type),
+        ))
+
     def add_thinking(self, thinking: str) -> None:
         self.content.append(ContentBlock(type=ContentBlockType.THINKING, thinking=thinking))
 
@@ -109,21 +125,30 @@ class Message:
         self.content.append(ContentBlock(type=ContentBlockType.TOOL_RESULT, tool_result=tool_result))
 
     def to_api_content(self) -> str:
-        """Serialize text/thinking content for OpenAI-style API calls."""
-        return "\n".join(
-            cb.text or cb.thinking or ""
-            for cb in self.content
-            if cb.type in (ContentBlockType.TEXT, ContentBlockType.THINKING)
-        )
+        """Serialize text/thinking content for API calls.
+
+        For image blocks, includes a placeholder describing the image
+        so non-vision providers still get context about attached images.
+        """
+        parts = []
+        for cb in self.content:
+            if cb.type == ContentBlockType.TEXT and cb.text:
+                parts.append(cb.text)
+            elif cb.type == ContentBlockType.THINKING and cb.thinking:
+                parts.append(cb.thinking)
+            elif cb.type == ContentBlockType.IMAGE and cb.image:
+                parts.append(f"[Image: {cb.image.mime_type}]")
+        return "\n".join(parts)
 
     def to_api_dict(self) -> dict:
-        """Serialize to OpenAI-compatible message dict, including tool_calls and tool role."""
+        """Serialize to OpenAI-compatible message dict (text-only).
+
+        For vision-capable providers, use to_multimodal_dict() to include
+        image content as content parts.
+        """
         text = self.to_api_content()
         msg: dict = {"role": self.role}
-        if text:
-            msg["content"] = text
-        else:
-            msg["content"] = None
+        msg["content"] = text if text else None
 
         tool_calls = []
         for cb in self.content:
@@ -145,6 +170,32 @@ class Message:
         if tool_calls:
             msg["tool_calls"] = tool_calls
 
+        return msg
+
+    def to_multimodal_dict(self) -> dict:
+        """Serialize to OpenAI-compatible message dict with image content.
+
+        Returns content as a list of parts (text + image_url) for vision
+        API calls. Falls back to to_api_dict() when no images are present.
+        """
+        has_image = any(cb.type == ContentBlockType.IMAGE and cb.image for cb in self.content)
+        if not has_image:
+            return self.to_api_dict()
+
+        content_parts: list[dict] = []
+        for cb in self.content:
+            if cb.type == ContentBlockType.TEXT and cb.text:
+                content_parts.append({"type": "text", "text": cb.text})
+            elif cb.type == ContentBlockType.IMAGE and cb.image:
+                content_parts.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{cb.image.mime_type};base64,{cb.image.data}",
+                    },
+                })
+
+        msg: dict = self.to_api_dict()
+        msg["content"] = content_parts
         return msg
 
 
@@ -170,6 +221,15 @@ class ModelResponse:
                     cb_type = ContentBlockType(item.get("type", "text"))
                     if cb_type == ContentBlockType.TEXT:
                         self.content.append(ContentBlock(type=cb_type, text=item.get("text", "")))
+                    elif cb_type == ContentBlockType.IMAGE:
+                        source = item.get("source", {})
+                        self.content.append(ContentBlock(
+                            type=cb_type,
+                            image=ImageContent(
+                                data=source.get("data", item.get("data", "")),
+                                mime_type=source.get("media_type", item.get("mimeType", "image/png")),
+                            ),
+                        ))
                     elif cb_type == ContentBlockType.THINKING:
                         self.content.append(ContentBlock(type=cb_type, thinking=item.get("thinking", "")))
                     elif cb_type == ContentBlockType.TOOL_USE:
