@@ -92,8 +92,10 @@ class Plan(containers.Grid):
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
+        placeholder: str = "No plan yet",
     ):
         self.newly_completed: set[Plan.Entry] = set()
+        self._placeholder = placeholder
         super().__init__(name=name, id=id, classes=classes)
         self.set_reactive(Plan.entries, entries)
 
@@ -118,7 +120,7 @@ class Plan(containers.Grid):
 
     def compose(self) -> ComposeResult:
         if not self.entries:
-            yield Static("No plan yet", classes="-no-plan")
+            yield Static(self._placeholder, classes="-no-plan")
             return
         for entry in self.entries:
             classes = f"priority-{entry.priority} status-{entry.status}"

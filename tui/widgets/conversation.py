@@ -1052,10 +1052,21 @@ class Conversation(containers.Vertical):
         # Look up any existing Plan widget anywhere in the conversation
         # tree — checking only ``children[-1]`` would create duplicates if
         # a ToolCall/SubAgent was posted after the Plan.
-        existing_plan = self.query(Plan).first() if entries else None
+        try:
+            existing_plan = self.query(Plan).first()
+        except NoMatches:
+            existing_plan = None
         if existing_plan is not None:
-            existing_plan.entries = entries
-        else:
+            if entries:
+                existing_plan.entries = entries
+            else:
+                # An empty snapshot at the start of a turn means "no
+                # plan yet for this turn".  Remove the stale inline
+                # widget from the previous turn so we don't keep
+                # rendering its "No plan yet" placeholder once a new
+                # turn has begun.
+                await existing_plan.remove()
+        elif entries:
             await self.post(Plan(entries))
 
     @on(acp_messages.ToolCallUpdate)
@@ -1705,7 +1716,13 @@ class Conversation(containers.Vertical):
         prune_height = 0
 
         if low_mark == 0:
-            prune_children = list(contents.children)
+            # Aggressive prune: only act on already-hidden children
+            # (e.g. collapsed blocks).  Wiping every visible widget
+            # would erase the live ToolCall the user is interacting
+            # with.
+            prune_children = [
+                child for child in contents.children if not child.display
+            ]
         else:
             for child in contents.children:
                 if not child.display:
@@ -1723,6 +1740,8 @@ class Conversation(containers.Vertical):
                     break
                 prune_children.append(child)
 
+        if not prune_children:
+            return
         self.cursor_offset = -1
         self.cursor.visible = False
         self.cursor.follow(None)

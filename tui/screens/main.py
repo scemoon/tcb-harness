@@ -140,7 +140,12 @@ class MainScreen(Screen, can_focus=False):
         self.conversation.update_title()
 
     def compose(self) -> ComposeResult:
-        panels: list[SideBar.Panel] = [SideBar.Panel("Plan", Plan([]))]
+        panels: list[SideBar.Panel] = [
+            SideBar.Panel(
+                "Plan",
+                Plan([], placeholder="Waiting for the agent to plan this turn…"),
+            )
+        ]
         if CdhProjectLoader.find_cdh_dir(self.project_path) is not None:
             panels.append(
                 SideBar.Panel(
