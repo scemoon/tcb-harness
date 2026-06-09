@@ -371,3 +371,77 @@ class TestContentToBlocks:
         assert blocks[1].id == "call_1"
         assert type(blocks[2]).__name__ == "ToolResult"
         assert blocks[2].content == "result"
+
+
+class TestStreamingWatchdog:
+    """When a stream is truncated mid-marker (``<thinking>``,
+    ``[TOOL_CALL]``, ``<minimax:tool_call>``, or bare ``{tool => ...}``)
+    the held buffer would otherwise grow without limit and every
+    subsequent chunk is silently swallowed.  The watchdog forces a
+    flush once the buffer exceeds a safety cap, so the user at least
+    sees the held text as a plain message."""
+
+    def test_unclosed_thinking_block_is_flushed(self):
+        adapter, spy = _make_spy_adapter()
+        callback = adapter._make_stream_callback()
+        # Open a <thinking> tag, then push 80 KB of body with no close.
+        callback("<thinking>")
+        callback("x" * (80 * 1024))
+        updates = _collect_updates(spy)
+        # The watchdog should have emitted the held text as a plain
+        # message rather than silently holding it.
+        assert any(
+            u["sessionUpdate"] == "agent_message_chunk"
+            and "x" * 100 in u["content"]["text"]
+            for u in updates
+        ), f"watchdog did not flush; got {updates!r}"
+
+    def test_unclosed_minimax_tool_call_is_flushed(self):
+        adapter, spy = _make_spy_adapter()
+        callback = adapter._make_stream_callback()
+        callback("<minimax:tool_call>")
+        callback("y" * (80 * 1024))
+        updates = _collect_updates(spy)
+        assert any(
+            u["sessionUpdate"] == "agent_message_chunk"
+            and "y" * 100 in u["content"]["text"]
+            for u in updates
+        )
+
+    def test_normal_thinking_block_below_cap_not_flushed(self):
+        """A well-formed small thinking block must NOT be force-flushed
+        as a plain message — it should still go through the
+        ``agent_thought_chunk`` path (which the streaming callback
+        strips from the text buffer)."""
+        adapter, spy = _make_spy_adapter()
+        callback = adapter._make_stream_callback()
+        callback("<thinking>short</thinking>")
+        updates = _collect_updates(spy)
+        # No agent_message_chunk containing the held text should be
+        # emitted; the only chunk for the thinking body goes through
+        # the agent_thought_chunk path.
+        assert not any(
+            u["sessionUpdate"] == "agent_message_chunk"
+            and "short" in u["content"]["text"]
+            for u in updates
+        )
+        assert any(
+            u["sessionUpdate"] == "agent_thought_chunk" for u in updates
+        )
+
+    def test_subsequent_chunks_after_watchdog_emit_normally(self):
+        """Once the watchdog has flushed, the callback must continue
+        processing later chunks as plain text rather than staying
+        stuck in the "held" state."""
+        adapter, spy = _make_spy_adapter()
+        callback = adapter._make_stream_callback()
+        callback("<thinking>")
+        callback("z" * (80 * 1024))     # trips the watchdog
+        callback("after-flush text")
+        updates = _collect_updates(spy)
+        # The "after-flush text" should be visible as a message.
+        assert any(
+            u["sessionUpdate"] == "agent_message_chunk"
+            and "after-flush text" in u["content"]["text"]
+            for u in updates
+        )

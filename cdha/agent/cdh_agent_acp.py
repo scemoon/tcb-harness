@@ -854,12 +854,41 @@ class CDHACPAdapter:
         Tool call notifications are sent by TOOL_CALL_START/TOOL_CALL_COMPLETE
         events from the engine, not from text parsing here.
         """
+        # Safety cap on the held buffer: if a model emits an unclosed
+        # ``<thinking>`` / ``[TOOL_CALL]`` / ``<minimax:tool_call>`` tag
+        # and then the stream is truncated (network drop, cancel,
+        # provider error before the close marker arrives), the buffer
+        # would otherwise grow forever and every subsequent chunk
+        # would be silently swallowed.  When the buffer exceeds this
+        # cap we give up on detecting markers and flush the held text
+        # as a plain message so the user still sees *something*.
+        _MAX_HELD_BYTES = 64 * 1024
+
         text_buffer = ""
         in_thinking = False
         in_tool_call = False
         in_minimax_tool_call = False
         in_bare_tool_call = False
         bare_tool_start = 0
+
+        def _flush_held_buffer() -> None:
+            """Force-emit the held buffer as a plain message and reset
+            all "in marker" flags.  Used by the watchdog below and by
+            the early-exit path when a turn ends without a close
+            marker.
+            """
+            nonlocal text_buffer
+            nonlocal in_thinking, in_tool_call
+            nonlocal in_minimax_tool_call, in_bare_tool_call, bare_tool_start
+            if text_buffer.strip():
+                self.send_session_update({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": text_buffer},
+                })
+            text_buffer = ""
+            in_thinking = in_tool_call = False
+            in_minimax_tool_call = in_bare_tool_call = False
+            bare_tool_start = 0
 
         def _emit_message(text: str) -> None:
             if not text:
@@ -885,6 +914,22 @@ class CDHACPAdapter:
             nonlocal text_buffer, in_thinking, in_tool_call
             nonlocal in_minimax_tool_call, in_bare_tool_call, bare_tool_start
             text_buffer += text
+
+            # Watchdog: if a marker opened but the close never arrived
+            # and the buffer has grown past the safety cap, give up
+            # and emit the held text as a plain message.  The model
+            # is either malformed or the stream was truncated; either
+            # way the user should see *something* rather than a
+            # silently held buffer that never resolves.
+            if (
+                in_thinking
+                or in_tool_call
+                or in_minimax_tool_call
+                or in_bare_tool_call
+            ) and len(text_buffer) > _MAX_HELD_BYTES:
+                _flush_held_buffer()
+                # After flushing, fall through into the normal
+                # scanning loop on the now-empty buffer.
 
             while text_buffer:
                 if in_thinking:
