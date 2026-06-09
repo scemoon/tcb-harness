@@ -723,6 +723,7 @@ class CDHACPAdapter:
         """Create new session."""
         cfg = load_config()
         self.agent = _create_engine(cwd)
+        self.agent.set_agent(cfg.default_mode)
 
         session = AgentSession()
         session.name = "New Session"

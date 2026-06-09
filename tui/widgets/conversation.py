@@ -875,6 +875,11 @@ class Conversation(containers.Vertical):
     async def _auto_name_session(self, prompt: str) -> None:
         if self._auto_named_session or self.agent is None:
             return
+
+        if self._agent_session_title not in ("", "New Session", "Untitled"):
+            self._auto_named_session = True
+            return
+
         self._auto_named_session = True
         name = prompt.strip().split("\n")[0][:60].strip()
         if name:

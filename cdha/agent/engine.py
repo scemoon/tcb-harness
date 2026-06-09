@@ -1030,6 +1030,7 @@ class AgentEngine:
                     model=model_name,
                     on_text_chunk=stream_cb,
                     on_tool_call_delta=self.on_tool_call_delta,
+                    tools=self._tool_registry.make_openai_schemas(),
                 )
                 response_text = chat_response.content
                 tool_uses = chat_response.tool_uses

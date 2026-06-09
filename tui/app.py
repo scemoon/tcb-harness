@@ -913,7 +913,8 @@ class A2TUIApp(App, inherit_bindings=False):
         if not session_id:
             return None
         from tui.message_log import sanitize_filename
-        path = paths.get_log() / "messages" / f"{sanitize_filename(session_id)}.jsonl"
+        agent_name = getattr(conv, "agent_title", None) or "unknown"
+        path = paths.get_log() / "messages" / f"{sanitize_filename(agent_name)}_{sanitize_filename(session_id)}.jsonl"
         return path if path.exists() else None
 
     def action_quit(self) -> None:

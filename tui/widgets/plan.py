@@ -21,14 +21,13 @@ class Plan(containers.Grid):
     DEFAULT_CLASSES = "block"
     DEFAULT_CSS = """
 
-    Plan {        
-        # border: panel $secondary;
-        border-top: ascii $secondary;            
+    Plan {
+        border-top: ascii $secondary;
         border-bottom: ascii $secondary;
-        background: black 10%;        
-        margin: 1 0 1 0 !important;   # Special case because the tall border reduces the apparent width           
-        padding: 0 1 0 1;        
-        height: auto;                        
+        background: black 10%;
+        margin: 1 0 1 0 !important;
+        padding: 0 1 0 1;
+        height: auto;
         grid-size: 2;
         grid-columns: auto 1fr;
         grid-rows: auto;
@@ -40,20 +39,37 @@ class Plan(containers.Grid):
 
         .plan {
             color: $text-secondary;
+            padding: 1 0 1 0;
         }
+
         .status {
-            padding: 0 0 0 0;
+            padding: 1 0 1 0;
             color: $text-secondary;
         }
-        .priority {
-            padding: 0 0 0 0;
+
+        .priority-high {
+            color: $text-error;
         }
-        .status.status-completed {
-            color: $text-success;            
+
+        .priority-medium {
+            color: $text-warning;
         }
+
+        .priority-low {
+            color: $text-secondary;
+        }
+
+        .status-in_progress {
+            background: $primary 15%;
+        }
+
+        .status-completed {
+            color: $text-success;
+        }
+
         .status-pending {
             opacity: 0.7;
-        }          
+        }
     }
 
     """

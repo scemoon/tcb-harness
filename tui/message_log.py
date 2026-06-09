@@ -27,7 +27,7 @@ class MessageLog:
         self._agent_name = agent_name
         dir = (log_dir or paths.get_log()) / "messages"
         dir.mkdir(parents=True, exist_ok=True)
-        self._path = dir / f"{sanitize_filename(session_id)}.jsonl"
+        self._path = dir / f"{sanitize_filename(agent_name)}_{sanitize_filename(session_id)}.jsonl"
         self._file: Any = None
 
     def _write(self, event: str, data: dict[str, Any]) -> None:
