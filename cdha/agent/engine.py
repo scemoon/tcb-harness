@@ -630,7 +630,7 @@ class AgentEngine:
         for todo in self._task_manager.list_todos():
             entries.append({
                 "content": todo.get("text", ""),
-                "status": "completed" if todo.get("completed") else "pending",
+                "status": "completed" if todo.get("done") else "pending",
                 "priority": "low",
             })
         return [StreamEvent.plan(entries)]
@@ -931,17 +931,28 @@ class AgentEngine:
         provider_name = self.app.current_provider
         model_name = self.app.current_model
         logger.info(f"Using provider='{provider_name}', model='{model_name}'")
+        logger.info(
+            "chat_stream engine state: project=%s agent=%s tasks=%d todos=%d context_msgs=%d ctx_tokens=%d",
+            project_name or "(none)",
+            self.current_agent.name if self.current_agent else "None",
+            len(self._task_manager.list_tasks()),
+            len(self._task_manager.list_todos()),
+            len(self.context.messages),
+            self.context._token_count,
+        )
 
         provider_cls = ProviderRegistry.get(provider_name)
         if not provider_cls:
-            error_msg = f"Provider '{provider_name}' not available."
+            available = list(ProviderRegistry._registry.keys()) if hasattr(ProviderRegistry, '_registry') else "unknown"
+            error_msg = f"Provider '{provider_name}' not available. Available: {available}"
             logger.error(error_msg)
             yield StreamEvent.error(error_msg)
             return
 
         config = self.app.config.providers.get(provider_name)
         if config is None:
-            error_msg = f"Provider '{provider_name}' not configured."
+            available = list(self.app.config.providers.keys())
+            error_msg = f"Provider '{provider_name}' not configured. Available providers: {available}"
             logger.error(error_msg)
             yield StreamEvent.error(error_msg)
             return
@@ -1057,8 +1068,14 @@ class AgentEngine:
                     yield StreamEvent.error(str(e))
                     break
             except Exception as e:
-                logger.exception(f"Error during chat_stream_response turn {turn+1}: {e}")
-                yield StreamEvent.error(str(e))
+                ctx_msgs = len(self.context.messages)
+                ctx_tokens = self.context._token_count
+                logger.exception(
+                    f"Error during chat_stream_response turn {turn+1}: {e}\n"
+                    f"  provider={provider_name} model={model_name} "
+                    f"context_msgs={ctx_msgs} ctx_tokens={ctx_tokens}"
+                )
+                yield StreamEvent.error(f"Provider error (turn {turn+1}): {e}")
                 break
 
             # Track usage
@@ -1531,8 +1548,11 @@ class AgentEngine:
 
     def save_session(self) -> None:
         if self._session:
-            self._session.messages = self.context.to_session_format()
-            self._session.save()
+            try:
+                self._session.messages = self.context.to_session_format()
+                self._session.save()
+            except Exception as e:
+                logger.exception("Failed to save session: %s", e)
 
     def load_session(self, session_id: str) -> bool:
         session = AgentSession(session_id)

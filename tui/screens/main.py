@@ -8,10 +8,10 @@ from textual import getters
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider, DiscoveryHit
 from textual.content import Content
-from textual.events import ScreenResume
+from textual.events import ScreenResume, Click
 from textual.screen import Screen
 from textual.reactive import var, reactive
-from textual.widgets import Footer, OptionList, DirectoryTree, Tree
+from textual.widgets import Footer, OptionList, DirectoryTree, Tree, Static
 from textual import containers
 from textual.widget import Widget
 
@@ -147,7 +147,8 @@ class MainScreen(Screen, can_focus=False):
                 Plan([], placeholder="no plan yet"),
             )
         ]
-        if CdhProjectLoader.find_cdh_dir(self.project_path) is not None:
+        cdh_dir = CdhProjectLoader.find_cdh_dir(self.project_path)
+        if cdh_dir is not None:
             panels.append(
                 SideBar.Panel(
                     "Project",
@@ -157,6 +158,17 @@ class MainScreen(Screen, can_focus=False):
                     ),
                     flex=True,
                     id="project-panel",
+                ),
+            )
+        else:
+            panels.append(
+                SideBar.Panel(
+                    "No Project",
+                    Static(
+                        "[bold]No .cdh project[/]\n\nClick to initialize .cdh in this directory",
+                        id="init-cdh-hint",
+                    ),
+                    id="no-project-panel",
                 ),
             )
         panels.append(
@@ -203,6 +215,7 @@ class MainScreen(Screen, can_focus=False):
         sidebar = self.query_one(SideBar)
         cdh_dir = CdhProjectLoader.find_cdh_dir(self.project_path)
         if cdh_dir is not None:
+            sidebar.remove_panel("no-project-panel")
             if not sidebar.has_panel("project-panel"):
                 collapsible = await sidebar.add_panel(
                     SideBar.Panel(
@@ -224,8 +237,54 @@ class MainScreen(Screen, can_focus=False):
                 await tree.reload()
         else:
             sidebar.remove_panel("project-panel")
+            if not sidebar.has_panel("no-project-panel"):
+                await sidebar.add_panel(
+                    SideBar.Panel(
+                        "No Project",
+                        Static(
+                            "[bold]No .cdh project[/]\n\nClick to initialize .cdh in this directory",
+                            id="init-cdh-hint",
+                        ),
+                        id="no-project-panel",
+                    ),
+                )
         if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
             mf.refresh_files()
+
+    @on(Click, "#init-cdh-hint")
+    def on_init_cdh_click(self) -> None:
+        from pathlib import Path
+        from cdha.config_screen import EditFieldScreen
+        from cdha.agent.cdh_loader import CdhProjectLoader
+
+        default_path = str(self.project_path.resolve())
+        self.app.push_screen(
+            EditFieldScreen("Directory to initialize .cdh", default_path),
+            self._on_init_cdh_path,
+        )
+
+    def _on_init_cdh_path(self, path_str: str | None) -> None:
+        from pathlib import Path
+        from cdha.agent.cdh_loader import CdhProjectLoader
+
+        if not path_str:
+            return
+        try:
+            target = Path(path_str).expanduser().resolve()
+            if not target.is_dir():
+                self.notify(f"Not a directory: {target}", severity="error")
+                return
+        except Exception:
+            self.notify("Invalid path", severity="error")
+            return
+        existing = CdhProjectLoader.find_cdh_dir(target)
+        if existing is not None:
+            self.notify(f".cdh already exists at {existing}", severity="warning")
+            return
+        name = target.name
+        CdhProjectLoader.init_project(target, name)
+        self.notify(f"Initialized .cdh in {target}")
+        self.post_message(messages.ProjectDirectoryUpdated())
 
     @on(DirectoryTree.FileSelected, "ProjectDirectoryTree")
     def on_project_directory_tree_selected(self, event: Tree.NodeSelected):

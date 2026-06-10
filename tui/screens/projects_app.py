@@ -104,6 +104,7 @@ class ProjectsApp(App):
         ("down", "cursor_down", "Down"),
         ("enter", "confirm", "Select"),
         ("n", "new_project", "New"),
+        ("i", "init_project", "Init"),
         ("d", "delete_project", "Delete"),
         ("ctrl+q", "quit", "Quit"),
         ("escape", "dismiss_modal", "Cancel"),
@@ -121,10 +122,11 @@ class ProjectsApp(App):
             yield Static("Project Management", id="header")
             with Widget(id="content"):
                 pass
-            yield Label("↑↓ Select  ↵ Load  n New  d Delete  Ctrl+Q Quit", id="shortcuts")
+            yield Label("↑↓ Select  ↵ Load  n New  i Init  d Delete  Ctrl+Q Quit", id="shortcuts")
             with Horizontal(id="button-row"):
                 yield Button("Load (↵)", id="load")
                 yield Button("New (n)", id="new", variant="primary")
+                yield Button("Init .cdh (i)", id="init")
                 yield Button("Delete (d)", id="delete")
 
     def _rebuild_items(self) -> None:
@@ -189,6 +191,9 @@ class ProjectsApp(App):
     def action_new_project(self) -> None:
         self._new_project()
 
+    def action_init_project(self) -> None:
+        self._init_project()
+
     def action_delete_project(self) -> None:
         self._delete_project()
 
@@ -204,6 +209,8 @@ class ProjectsApp(App):
             self._new_project()
         elif btn_id == "load":
             self._load_project()
+        elif btn_id == "init":
+            self._init_project()
         elif btn_id == "delete":
             self._delete_project()
 
@@ -230,6 +237,31 @@ class ProjectsApp(App):
         save_config(cfg)
         self.notify(f"Created project '{name}' at {ws}")
         self._refresh()
+
+    def _init_project(self) -> None:
+        self.push_screen(
+            EditFieldScreen("Directory to initialize .cdh", str(Path.cwd().resolve())),
+            self._on_init_project_path,
+        )
+
+    def _on_init_project_path(self, path_str: str | None) -> None:
+        if not path_str:
+            return
+        try:
+            target = Path(path_str).expanduser().resolve()
+            if not target.is_dir():
+                self.notify(f"Not a directory: {target}", severity="error")
+                return
+        except Exception:
+            self.notify("Invalid path", severity="error")
+            return
+        existing = CdhProjectLoader.find_cdh_dir(target)
+        if existing is not None:
+            self.notify(f".cdh already exists at {existing}", severity="warning")
+            return
+        name = target.name
+        CdhProjectLoader.init_project(target, name)
+        self.notify(f"Initialized .cdh in {target}")
 
     def _load_project(self) -> None:
         item = self._current_item

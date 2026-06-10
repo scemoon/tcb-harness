@@ -19,8 +19,7 @@ from tui.paths import get_log
 
 
 _TAG_RE = re.compile(r"^\[(client|agent|error)\]\s*(.*)$", re.DOTALL)
-_PREVIEW_BYTES = 4000
-_MAX_ENTRIES = 2000
+_PAGE_SIZE = 50
 
 
 def _find_log_file() -> Path | None:
@@ -246,22 +245,23 @@ class LogEntry(Static):
 # ── LogScreen ──────────────────────────────────────────────────────
 
 class LogScreen(ModalScreen[None]):
-    """Real-time tail of the agent's JSON-RPC log; per-message collapsible."""
+    """Page-based log viewer (F4). Shows all log entries with 50 per page."""
 
     BINDINGS = [
         Binding("escape,f4", "dismiss", "Close"),
-        # Navigation
-        Binding("down,j", "next_entry", "Next", show=False),
-        Binding("up,k", "prev_entry", "Prev", show=False),
-        Binding("home,g", "first_entry", "First", show=False),
-        Binding("end,G", "last_entry", "Last", show=False),
+        # Entry navigation within current page
+        Binding("down,j", "next_entry", "Next entry"),
+        Binding("up,k", "prev_entry", "Prev entry"),
+        # Page navigation
+        Binding("pagedown,n", "next_page", "Next page", show=False),
+        Binding("pageup,p", "prev_page", "Prev page", show=False),
+        Binding("home,g", "first_page", "First page", show=False),
+        Binding("end,G", "last_page", "Last page", show=False),
         # Toggle current
         Binding("enter,space,l", "toggle_current", "Toggle", show=False),
         Binding("o", "open_current", "Open", show=False),
         Binding("O", "expand_all", "Open all"),
         Binding("C", "collapse_all", "Close all"),
-        # Order
-        Binding("r", "toggle_reversed", "Reverse"),
         # Misc
         Binding("c", "copy_all", "Copy"),
     ]
@@ -288,7 +288,6 @@ class LogScreen(ModalScreen[None]):
     LogScreen VerticalScroll {
         height: 1fr;
         background: $surface;
-        scrollbar-gutter: stable;
     }
     """
 
@@ -297,17 +296,9 @@ class LogScreen(ModalScreen[None]):
         self._log_path = log_path
         self._file_pos = 0
         self._poll_timer: object = None
-        self._entry_count = 0
-        self._entries: list[LogEntry] = []
+        self._entries: list[tuple[str, str]] = []
+        self._current_page: int = 1
         self._current_index: int = -1
-        self._reversed: bool = True
-        # Tracks whether the target log file has been observed to exist
-        # at least once.  When the F4 handler is pressed on a brand-new
-        # session the path is known but the file does not exist yet
-        # (the cdh-agent-acp subprocess has not been spawned, or
-        # ``acp_new_session`` has not yet renamed the file).  In that
-        # case we show a "waiting" placeholder and start a poller that
-        # detects the file's appearance and auto-resumes tailing.
         self._file_was_present: bool = False
 
     def compose(self) -> ComposeResult:
@@ -322,9 +313,6 @@ class LogScreen(ModalScreen[None]):
             self._append_system("No log file yet. Start an agent to begin logging.")
             return
         if not self._log_path.exists():
-            # The file path is known (per-session log) but the
-            # subprocess has not yet created it.  Show a hint and
-            # poll for the file to appear.
             self._append_system(
                 f"⌛ Waiting for log file to be created…\n   {self._log_path}"
             )
@@ -332,23 +320,49 @@ class LogScreen(ModalScreen[None]):
             return
         self._begin_tailing()
 
+    # ── Page helpers ───────────────────────────────────────────────
+
+    def _total_pages(self) -> int:
+        return max(1, (len(self._entries) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+
+    def _page_range(self) -> tuple[int, int]:
+        start = (self._current_page - 1) * _PAGE_SIZE
+        end = min(start + _PAGE_SIZE, len(self._entries))
+        return start, end
+
+    def _render_page(self) -> None:
+        scroller = self.query_one("#log-list", VerticalScroll)
+        scroller.remove_children()
+        start, end = self._page_range()
+        page_entries = self._entries[start:end]
+        for tag, raw in page_entries:
+            scroller.mount(LogEntry(tag, raw))
+        self._current_index = 0 if page_entries else -1
+        self._apply_selection()
+        self._refresh_header()
+
+    def _navigate_to_page(self, page: int) -> None:
+        total = self._total_pages()
+        self._current_page = max(1, min(page, total))
+        self._render_page()
+
+    # ── File loading ───────────────────────────────────────────────
+
     def _begin_tailing(self) -> None:
-        """Open the log file, ingest a tail-window of history, and start polling."""
+        """Read entire log file and start polling."""
         assert self._log_path is not None
         try:
-            size = self._log_path.stat().st_size
-            start = max(0, size - _PREVIEW_BYTES)
-            with self._log_path.open("rb") as f:
-                if start > 0:
-                    f.seek(start)
-                    f.readline()
-                data = f.read().decode("utf-8", errors="replace")
+            with self._log_path.open("r", encoding="utf-8", errors="replace") as f:
+                data = f.read()
             self._file_pos = self._log_path.stat().st_size
-            self._ingest(data, scroll=False)
         except OSError as e:
             self._append_system(f"Failed to open log: {e}")
             return
         self._file_was_present = True
+        self._entries = []
+        self._ingest(data)
+        self._current_page = self._total_pages()
+        self._render_page()
         if self._poll_timer is None:
             self._poll_timer = self.set_interval(0.2, self._poll_new_lines)
 
@@ -360,13 +374,15 @@ class LogScreen(ModalScreen[None]):
             self._poll_timer = None
 
     def _header_text(self) -> str:
-        path = self._log_path
-        order = "⏷ reverse" if self._reversed else "⏵ forward"
+        total = len(self._entries)
+        pages = self._total_pages()
+        start, end = self._page_range()
+        display_start = start + 1 if total > 0 else 0
         return (
-            f"📋 Session log — {path}  [dim]│  {order}  │  "
-            f"{self._entry_count} msgs  │  j/k nav · ⏎ toggle · r reverse · "
-            f"O open all · C close all · F4/Esc close[/dim]"
-            if path
+            f"📋 Session log — Page {self._current_page}/{pages} · "
+            f"Showing {display_start}-{end} of {total} entries  │  "
+            f"↑↓: entry · n/p: page · g/G: first/last · ⏎ toggle · F4/Esc close"
+            if self._log_path
             else "📋 Session log — (no log file found)"
         )
 
@@ -376,93 +392,30 @@ class LogScreen(ModalScreen[None]):
         except Exception:
             pass
 
-    def _scroll_to_end(self) -> None:
-        scroller = self.query_one("#log-list", VerticalScroll)
-        # In reverse mode, the "end" visually is the top of the scroller
-        if self._reversed:
-            scroller.scroll_home(animate=False)
-        else:
-            scroller.scroll_end(animate=False)
-
-    def _scroll_to_index(self, idx: int) -> None:
-        if not (0 <= idx < len(self._entries)):
-            return
-        try:
-            self.query_one("#log-list", VerticalScroll).scroll_to_widget(
-                self._entries[idx], animate=False
-            )
-        except Exception:
-            pass
-
-    def _trim_if_needed(self) -> None:
-        if self._entry_count <= _MAX_ENTRIES:
-            return
-        scroller = self.query_one("#log-list", VerticalScroll)
-        to_remove = max(1, _MAX_ENTRIES // 10)
-        # Remove from the "oldest" side: bottom in forward, top in reverse
-        if self._reversed:
-            victims = list(scroller.children)[-to_remove:]
-        else:
-            victims = list(scroller.children)[:to_remove]
-        for child in victims:
-            child.remove()
-            if child in self._entries:
-                self._entries.remove(child)
-        self._entry_count -= to_remove
-        if self._current_index >= len(self._entries):
-            self._current_index = len(self._entries) - 1
-            self._apply_selection()
-
-    def _append_entry(self, tag: str, raw: str, *, scroll: bool = True) -> None:
-        self._trim_if_needed()
-        scroller = self.query_one("#log-list", VerticalScroll)
-        entry = LogEntry(tag, raw)
-        # Was the user "following the tail" (i.e., on the newest entry)?
-        following_tail = (
-            self._current_index < 0
-            or (not self._reversed and self._current_index == len(self._entries) - 1)
-            or (self._reversed and self._current_index == 0)
-        )
-        if self._reversed:
-            scroller.mount(entry, before=0)
-            self._entries.insert(0, entry)
-            if self._current_index >= 0:
-                self._current_index += 1
-        else:
-            scroller.mount(entry)
-            self._entries.append(entry)
-        self._entry_count += 1
-        if following_tail and self._entries:
-            self._current_index = 0 if self._reversed else len(self._entries) - 1
-            self._apply_selection()
-        self._refresh_header()
-        if scroll:
-            self.call_after_refresh(self._scroll_to_end)
-
     def _apply_selection(self) -> None:
-        for i, entry in enumerate(self._entries):
-            entry.selected = (i == self._current_index)
-        if 0 <= self._current_index < len(self._entries):
-            self._scroll_to_index(self._current_index)
+        scroller = self.query_one("#log-list", VerticalScroll)
+        for i, child in enumerate(scroller.children):
+            if isinstance(child, LogEntry):
+                child.selected = (i == self._current_index)
 
     @on(LogEntryClicked)
     def on_log_entry_clicked(self, event: LogEntryClicked) -> None:
-        if event.entry in self._entries:
-            self._current_index = self._entries.index(event.entry)
-            self._apply_selection()
+        scroller = self.query_one("#log-list", VerticalScroll)
+        for i, child in enumerate(scroller.children):
+            if child is event.entry:
+                self._current_index = i
+                self._apply_selection()
+                return
 
     def _append_system(self, msg: str) -> None:
         scroller = self.query_one("#log-list", VerticalScroll)
         scroller.mount(Static(f"[dim]{msg}[/dim]"))
 
+    # ── Polling for new lines ──────────────────────────────────────
+
     def _poll_new_lines(self) -> None:
         if self._log_path is None:
             return
-        # "File appeared" transition: the F4 handler was called on a
-        # brand-new session whose log file did not exist yet, so we
-        # are still in the "waiting" state.  When the subprocess
-        # finally creates the file, switch into the normal tailing
-        # path.
         if not self._log_path.exists():
             return
         if not self._file_was_present:
@@ -473,22 +426,25 @@ class LogScreen(ModalScreen[None]):
             size = self._log_path.stat().st_size
             if size < self._file_pos:
                 self._file_pos = 0
-                self._append_system("── log rotated ──")
             if size == self._file_pos:
                 return
-            with self._log_path.open("rb") as f:
+            with self._log_path.open("r", encoding="utf-8", errors="replace") as f:
                 f.seek(self._file_pos)
-                data = f.read().decode("utf-8", errors="replace")
+                new_text = f.read()
             self._file_pos = size
-            self._ingest(data, scroll=True)
+            if new_text:
+                self._ingest(new_text)
         except OSError:
             pass
 
-    def _ingest(self, chunk: str, *, scroll: bool) -> None:
+    def _ingest(self, chunk: str) -> None:
+        was_on_last_page = (
+            len(self._entries) == 0
+            or self._current_page == self._total_pages()
+        )
         for line in chunk.splitlines():
             if not line.strip():
                 continue
-            # Try MessageLog JSONL format first
             try:
                 record = json.loads(line)
                 if isinstance(record, dict) and "event" in record:
@@ -499,57 +455,64 @@ class LogScreen(ModalScreen[None]):
                         tag = "agent"
                     else:
                         tag = "error"
-                    self._append_entry(tag, line, scroll=scroll)
+                    self._entries.append((tag, line))
                     continue
             except (json.JSONDecodeError, ValueError):
                 pass
-            # Legacy [tag] json format
             m = _TAG_RE.match(line)
             if m:
-                self._append_entry(m.group(1), m.group(2), scroll=scroll)
+                self._entries.append((m.group(1), m.group(2)))
             else:
-                self._append_entry("error", line, scroll=scroll)
+                self._entries.append(("error", line))
+        if was_on_last_page:
+            self._current_page = self._total_pages()
+            self._render_page()
+        else:
+            self._refresh_header()
 
     # ── Actions ────────────────────────────────────────────────────
 
     def _current_entry(self) -> LogEntry | None:
-        if 0 <= self._current_index < len(self._entries):
-            return self._entries[self._current_index]
+        scroller = self.query_one("#log-list", VerticalScroll)
+        for i, child in enumerate(scroller.children):
+            if isinstance(child, LogEntry) and i == self._current_index:
+                return child
         return None
 
+    def action_next_page(self) -> None:
+        if self._current_page < self._total_pages():
+            self._navigate_to_page(self._current_page + 1)
+
+    def action_prev_page(self) -> None:
+        if self._current_page > 1:
+            self._navigate_to_page(self._current_page - 1)
+
+    def action_first_page(self) -> None:
+        self._navigate_to_page(1)
+
+    def action_last_page(self) -> None:
+        self._navigate_to_page(self._total_pages())
+
     def action_next_entry(self) -> None:
-        if not self._entries:
+        scroller = self.query_one("#log-list", VerticalScroll)
+        count = sum(1 for c in scroller.children if isinstance(c, LogEntry))
+        if count == 0:
             return
         if self._current_index < 0:
-            # No selection yet: in forward mode start from end (newest),
-            # in reverse mode start from 0 (newest).
-            self._current_index = 0 if self._reversed else len(self._entries) - 1
+            self._current_index = 0
         else:
-            step = 1
-            self._current_index = min(len(self._entries) - 1, self._current_index + step)
+            self._current_index = min(count - 1, self._current_index + 1)
         self._apply_selection()
 
     def action_prev_entry(self) -> None:
-        if not self._entries:
+        scroller = self.query_one("#log-list", VerticalScroll)
+        count = sum(1 for c in scroller.children if isinstance(c, LogEntry))
+        if count == 0:
             return
         if self._current_index < 0:
-            self._current_index = 0 if self._reversed else len(self._entries) - 1
+            self._current_index = count - 1
         else:
             self._current_index = max(0, self._current_index - 1)
-        self._apply_selection()
-
-    def action_first_entry(self) -> None:
-        if not self._entries:
-            return
-        # "First" in display order = index 0 when forward, last when reversed
-        self._current_index = len(self._entries) - 1 if self._reversed else 0
-        self._apply_selection()
-
-    def action_last_entry(self) -> None:
-        if not self._entries:
-            return
-        # "Last" in display order = last when forward, 0 when reversed
-        self._current_index = 0 if self._reversed else len(self._entries) - 1
         self._apply_selection()
 
     def action_toggle_current(self) -> None:
@@ -563,29 +526,16 @@ class LogScreen(ModalScreen[None]):
             entry.expanded = True
 
     def action_expand_all(self) -> None:
-        for entry in self._entries:
-            entry.expanded = True
+        scroller = self.query_one("#log-list", VerticalScroll)
+        for child in scroller.children:
+            if isinstance(child, LogEntry):
+                child.expanded = True
 
     def action_collapse_all(self) -> None:
-        for entry in self._entries:
-            entry.expanded = False
-
-    async def action_toggle_reversed(self) -> None:
-        new_reversed = not self._reversed
-        self._reversed = new_reversed
-        self._refresh_header()
-        # The internal _entries list mirrors the display order, so flip it
-        # whenever the order toggles. (Forward = oldest-first.)
-        self._entries = list(reversed(self._entries)) if new_reversed else list(reversed(self._entries))
         scroller = self.query_one("#log-list", VerticalScroll)
-        for entry in list(self._entries):
-            await entry.remove()
-        for entry in self._entries:
-            await scroller.mount(entry)
-        if self._entries:
-            self._current_index = 0 if new_reversed else len(self._entries) - 1
-            self._apply_selection()
-            self.call_after_refresh(self._scroll_to_end)
+        for child in scroller.children:
+            if isinstance(child, LogEntry):
+                child.expanded = False
 
     def action_copy_all(self) -> None:
         try:

@@ -1088,7 +1088,13 @@ class CDHACPAdapter:
     async def session_prompt(self, prompt: list, session_id: str):
         """Send prompt to agent and stream results."""
         if self.agent is None:
+            debug_log("session_prompt called but self.agent is None")
             return {"stopReason": "error", "message": "No agent initialized"}
+
+        debug_log(
+            "session_prompt start session=%s prompt_blocks=%d",
+            session_id, len(prompt),
+        )
 
         # Collect ALL content blocks from the prompt (text, resource, etc.)
         # instead of only extracting the text portion.
@@ -1132,252 +1138,274 @@ class CDHACPAdapter:
                 })
 
         self.agent.on_tool_call_delta = _on_tool_call_delta
-        async for event in self.agent.chat_stream(user_content):
-            if event.type == StreamEventType.TEXT_DELTA:
-                self.send_session_update({
-                    "sessionUpdate": "agent_message_chunk",
-                    "content": {"type": "text", "text": event.text},
-                })
-            elif event.type == StreamEventType.THINKING:
-                thought_text = f"```thinking\n{event.thinking}\n```"
-                self.send_session_update({
-                    "sessionUpdate": "agent_thought_chunk",
-                    "content": {"type": "text", "text": thought_text},
-                })
-            elif event.type == StreamEventType.TOOL_CALL_START:
-                tool_kind = _kind_for_category(event.tool_category)
-                existing = self.tool_calls.get(event.tool_id, {})
-                self.tool_calls[event.tool_id] = {
-                    "sessionUpdate": "tool_call",
-                    "toolCallId": event.tool_id,
-                    "title": event.tool_name,
-                    "kind": tool_kind,
-                    "status": "in_progress",
-                    "content": existing.get("content", []),
-                }
-                self.send_session_update(self.tool_calls[event.tool_id])
-            elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
-                if event.tool_id in self.tool_calls:
-                    title = event.tool_name
-                    if event.tool_args:
-                        if path := event.tool_args.get("path", ""):
-                            title = f"{event.tool_name}: {_short_path(path, self.agent._project_dir)}"
-                        elif event.tool_name == "Bash":
-                            cmd = str(event.tool_args.get("command", ""))[:60]
-                            title = f"Bash: {cmd}"
-                        content = _build_tool_call_content(
-                            event.tool_name, event.tool_args
-                        )
-                        debug_log(
-                            "TOOL_CALL_COMPLETE %s id=%s args_keys=%s title=%s content_blocks=%d",
-                            event.tool_name, event.tool_id,
-                            list(event.tool_args.keys()), title,
-                            len(content),
-                        )
-                    else:
-                        content = []
-                        debug_log(
-                            "TOOL_CALL_COMPLETE %s id=%s NO args",
-                            event.tool_name, event.tool_id,
-                        )
-                    self.tool_calls[event.tool_id].update({
-                        "sessionUpdate": "tool_call_update",
-                        "toolCallId": event.tool_id,
-                        "title": title,
-                        "status": "pending",
-                        "content": content,
+        try:
+            async for event in self.agent.chat_stream(user_content):
+                if event.type == StreamEventType.TEXT_DELTA:
+                    self.send_session_update({
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": event.text},
                     })
-                    self.send_session_update(self.tool_calls[event.tool_id])
-            elif event.type == StreamEventType.TOOL_RESULT:
-                status = "failed" if event.result_is_error else "completed"
-                display_text = _format_tui_display_text(event.result_content or "")
-
-                # Update title with path from result if not already set
-                if event.result_content and event.tool_id in self.tool_calls:
-                    try:
-                        parsed = json.loads(event.result_content)
-                    except json.JSONDecodeError:
-                        pass
-                    else:
-                        if isinstance(parsed, dict) and parsed.get("success") is True:
-                            current_title = self.tool_calls[event.tool_id].get("title", "")
-                            if ":" not in current_title:
-                                if path := parsed.get("path"):
-                                    self.tool_calls[event.tool_id]["title"] = f"{current_title}: {_short_path(path, self.agent._project_dir)}"
-
-                # TUI now renders all text content as Markdown.
-                # Wrap multi-line results in a fenced code block so they
-                # display as a code block rather than a raw paragraph.
-                # Skip if already contains a code fence to avoid nesting.
-                if display_text and "\n" in display_text and "```" not in display_text:
-                    display_text = f"```\n{display_text}\n```"
-                content_block = [{
-                    "type": "content",
-                    "content": {"type": "text", "text": display_text},
-                }] if display_text else []
-                if event.tool_id in self.tool_calls:
-                    existing_content = self.tool_calls[event.tool_id].get("content", [])
-                else:
-                    existing_content = []
-                debug_log(
-                    "TOOL_RESULT id=%s status=%s result_len=%d display_len=%d existing_blocks=%d new_blocks=%d",
-                    event.tool_id, status,
-                    len(event.result_content or ""), len(display_text),
-                    len(existing_content), len(content_block),
-                )
-                update = {
-                    "sessionUpdate": "tool_call_update",
-                    "toolCallId": event.tool_id,
-                    "status": status,
-                    "content": existing_content + content_block,
-                }
-                if event.tool_id in self.tool_calls:
-                    self.tool_calls[event.tool_id].update(update)
-                else:
+                elif event.type == StreamEventType.THINKING:
+                    thought_text = f"```thinking\n{event.thinking}\n```"
+                    self.send_session_update({
+                        "sessionUpdate": "agent_thought_chunk",
+                        "content": {"type": "text", "text": thought_text},
+                    })
+                elif event.type == StreamEventType.TOOL_CALL_START:
+                    tool_kind = _kind_for_category(event.tool_category)
+                    existing = self.tool_calls.get(event.tool_id, {})
                     self.tool_calls[event.tool_id] = {
                         "sessionUpdate": "tool_call",
                         "toolCallId": event.tool_id,
-                        "title": "Tool call",
-                        "kind": "other",
-                        "status": status,
-                        **update,
-                    }
-                self.send_session_update(self.tool_calls[event.tool_id])
-            elif event.type == StreamEventType.ERROR:
-                self.send_session_update({
-                    "sessionUpdate": "agent_message_chunk",
-                    "content": {"type": "text", "text": f"Error: {event.error_message}"},
-                })
-                self.agent.save_session()
-                return {"stopReason": "error", "message": event.error_message}
-            elif event.type == StreamEventType.SUBAGENT_START:
-                self.send_session_update({
-                    "sessionUpdate": "subagent_start",
-                    "subagentId": event.subagent_id,
-                    "agentType": event.subagent_type,
-                })
-            elif event.type == StreamEventType.SUBAGENT_CHUNK:
-                self.send_session_update({
-                    "sessionUpdate": "subagent_chunk",
-                    "subagentId": event.subagent_id,
-                    "text": event.subagent_text,
-                })
-            elif event.type == StreamEventType.SUBAGENT_END:
-                self.send_session_update({
-                    "sessionUpdate": "subagent_end",
-                    "subagentId": event.subagent_id,
-                    "agentType": event.subagent_type,
-                })
-            elif event.type == StreamEventType.PLAN:
-                self.send_session_update({
-                    "sessionUpdate": "plan",
-                    "entries": event.plan_entries,
-                })
-            elif event.type == StreamEventType.ASK_USER:
-                # Build tool call content for the permission request
-                tool_kind = _kind_for_category(get_tool_category(event.ask_action))
-                pending = (self.agent._pending_approval or {}).get("tool_call", {})
-                tool_args = pending.get("input", {}) if pending else {}
-                tool_content = _build_tool_call_content(
-                    event.ask_action, tool_args
-                ) if tool_args else []
-
-                # Prepend the question as a visible content block so the TUI
-                # permission dialog shows *what* the agent wants to do instead
-                # of an empty ``_meta`` that the TUI ignores.
-                question_block = {
-                    "type": "content",
-                    "content": {"type": "text", "text": f"❓ {event.ask_question}"},
-                }
-                tool_content = [question_block] + tool_content
-
-                # Guard against orphan permission requests: if the engine
-                # didn't supply a tool id, fall back to the pending approval
-                # id; if that's also empty, log and skip the request so the
-                # TUI doesn't render a dialog with no associated tool widget.
-                tool_call_id = event.tool_id or pending.get("id", "")
-                if not tool_call_id:
-                    debug_log(
-                        "ASK_USER skipped: no tool_id (action=%s question=%s)",
-                        event.ask_action, event.ask_question,
-                    )
-                    continue
-
-                permission_params = {
-                    "sessionId": session_id,
-                    "options": [
-                        {"name": "Allow once", "optionId": "allow_once", "kind": "allow_once"},
-                        {"name": "Allow always", "optionId": "allow_always", "kind": "allow_always"},
-                        {"name": "Reject once", "optionId": "reject_once", "kind": "reject_once"},
-                        {"name": "Reject always", "optionId": "reject_always", "kind": "reject_always"},
-                    ],
-                    "toolCall": {
-                        "toolCallId": tool_call_id,
-                        "title": event.ask_action,
+                        "title": event.tool_name,
                         "kind": tool_kind,
-                        "content": tool_content,
-                        "status": "pending",
-                    },
-                }
-                try:
-                    perm_future = self.send_request(
-                        "session/request_permission", permission_params
-                    )
-                    perm_response = await perm_future
-                    outcome = perm_response.get("outcome", {})
-                    option_id = outcome.get("optionId", "reject_once")
-                    approved = option_id in ("allow_once", "allow_always")
+                        "status": "in_progress",
+                        "content": existing.get("content", []),
+                    }
+                    self.send_session_update(self.tool_calls[event.tool_id])
+                elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
+                    if event.tool_id in self.tool_calls:
+                        title = event.tool_name
+                        if event.tool_args:
+                            if path := event.tool_args.get("path", ""):
+                                title = f"{event.tool_name}: {_short_path(path, self.agent._project_dir)}"
+                            elif event.tool_name == "Bash":
+                                cmd = str(event.tool_args.get("command", ""))[:60]
+                                title = f"Bash: {cmd}"
+                            content = _build_tool_call_content(
+                                event.tool_name, event.tool_args
+                            )
+                            debug_log(
+                                "TOOL_CALL_COMPLETE %s id=%s args_keys=%s title=%s content_blocks=%d",
+                                event.tool_name, event.tool_id,
+                                list(event.tool_args.keys()), title,
+                                len(content),
+                            )
+                        else:
+                            content = []
+                            debug_log(
+                                "TOOL_CALL_COMPLETE %s id=%s NO args",
+                                event.tool_name, event.tool_id,
+                            )
+                        self.tool_calls[event.tool_id].update({
+                            "sessionUpdate": "tool_call_update",
+                            "toolCallId": event.tool_id,
+                            "title": title,
+                            "status": "pending",
+                            "content": content,
+                        })
+                        self.send_session_update(self.tool_calls[event.tool_id])
+                elif event.type == StreamEventType.TOOL_RESULT:
+                    status = "failed" if event.result_is_error else "completed"
+                    display_text = _format_tui_display_text(event.result_content or "")
 
-                    if option_id == "allow_always":
-                        from cdha.agent.agents.types import AgentPermission
-                        perm_key = self.agent._TOOL_NAME_TO_PERM_KEY.get(event.ask_action)
-                        if perm_key:
-                            attr_name = f"permission_{perm_key}"
-                            setattr(self.agent.current_agent, attr_name, AgentPermission.ALLOW)
-                            self._perm_store.set_override(perm_key, AgentPermission.ALLOW)
-                    elif option_id == "reject_always":
-                        from cdha.agent.agents.types import AgentPermission
-                        perm_key = self.agent._TOOL_NAME_TO_PERM_KEY.get(event.ask_action)
-                        if perm_key:
-                            attr_name = f"permission_{perm_key}"
-                            setattr(self.agent.current_agent, attr_name, AgentPermission.DENY)
-                            self._perm_store.set_override(perm_key, AgentPermission.DENY)
-                except Exception:
-                    approved = False
+                    # Update title with path from result if not already set
+                    if event.result_content and event.tool_id in self.tool_calls:
+                        try:
+                            parsed = json.loads(event.result_content)
+                        except json.JSONDecodeError:
+                            pass
+                        else:
+                            if isinstance(parsed, dict) and parsed.get("success") is True:
+                                current_title = self.tool_calls[event.tool_id].get("title", "")
+                                if ":" not in current_title:
+                                    if path := parsed.get("path"):
+                                        self.tool_calls[event.tool_id]["title"] = f"{current_title}: {_short_path(path, self.agent._project_dir)}"
 
-                result = await self.agent.resolve_approval(approved)
-                if result:
-                    result_str = result.get("content", "") or ""
-                    is_error = result.get("is_error", False)
-                    tid = result.get("tool_use_id", "") or tool_call_id
-                    status = "failed" if is_error else "completed"
+                    # TUI now renders all text content as Markdown.
+                    # Wrap multi-line results in a fenced code block so they
+                    # display as a code block rather than a raw paragraph.
+                    # Skip if already contains a code fence to avoid nesting.
+                    if display_text and "\n" in display_text and "```" not in display_text:
+                        display_text = f"```\n{display_text}\n```"
                     content_block = [{
                         "type": "content",
-                        "content": {"type": "text", "text": result_str},
-                    }] if result_str else []
-                    self.send_session_update({
-                        "sessionUpdate": "tool_call_update",
-                        "toolCallId": tid,
-                        "status": status,
-                        "content": content_block,
-                    })
-                    # Add result to LLM context
-                    self.agent.context.add_message(
-                        "tool",
-                        [{"type": "tool_result", "tool_use_id": tid,
-                          "content": result_str, "is_error": is_error}],
-                        name=tid,
+                        "content": {"type": "text", "text": display_text},
+                    }] if display_text else []
+                    if event.tool_id in self.tool_calls:
+                        existing_content = self.tool_calls[event.tool_id].get("content", [])
+                    else:
+                        existing_content = []
+                    debug_log(
+                        "TOOL_RESULT id=%s status=%s result_len=%d display_len=%d existing_blocks=%d new_blocks=%d",
+                        event.tool_id, status,
+                        len(event.result_content or ""), len(display_text),
+                        len(existing_content), len(content_block),
                     )
-                verb = "Approved" if approved else "Rejected"
-                self.send_session_update({
-                    "sessionUpdate": "agent_message_chunk",
-                    "content": {
-                        "type": "text",
-                        "text": f"⚡ {verb}: {event.ask_action} — {event.ask_question}",
-                    },
-                })
+                    update = {
+                        "sessionUpdate": "tool_call_update",
+                        "toolCallId": event.tool_id,
+                        "status": status,
+                        "content": existing_content + content_block,
+                    }
+                    if event.tool_id in self.tool_calls:
+                        self.tool_calls[event.tool_id].update(update)
+                    else:
+                        self.tool_calls[event.tool_id] = {
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": event.tool_id,
+                            "title": "Tool call",
+                            "kind": "other",
+                            "status": status,
+                            **update,
+                        }
+                    self.send_session_update(self.tool_calls[event.tool_id])
+                elif event.type == StreamEventType.ERROR:
+                    self.send_session_update({
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": f"Error: {event.error_message}"},
+                    })
+                    try:
+                        self.agent.save_session()
+                    except Exception:
+                        debug_log("Failed to save session on error", exc_info=True)
+                    return {"stopReason": "error", "message": event.error_message}
+                elif event.type == StreamEventType.SUBAGENT_START:
+                    self.send_session_update({
+                        "sessionUpdate": "subagent_start",
+                        "subagentId": event.subagent_id,
+                        "agentType": event.subagent_type,
+                    })
+                elif event.type == StreamEventType.SUBAGENT_CHUNK:
+                    self.send_session_update({
+                        "sessionUpdate": "subagent_chunk",
+                        "subagentId": event.subagent_id,
+                        "text": event.subagent_text,
+                    })
+                elif event.type == StreamEventType.SUBAGENT_END:
+                    self.send_session_update({
+                        "sessionUpdate": "subagent_end",
+                        "subagentId": event.subagent_id,
+                        "agentType": event.subagent_type,
+                    })
+                elif event.type == StreamEventType.PLAN:
+                    self.send_session_update({
+                        "sessionUpdate": "plan",
+                        "entries": event.plan_entries,
+                    })
+                elif event.type == StreamEventType.ASK_USER:
+                    # Build tool call content for the permission request
+                    tool_kind = _kind_for_category(get_tool_category(event.ask_action))
+                    pending = (self.agent._pending_approval or {}).get("tool_call", {})
+                    tool_args = pending.get("input", {}) if pending else {}
+                    tool_content = _build_tool_call_content(
+                        event.ask_action, tool_args
+                    ) if tool_args else []
 
-        self.agent.save_session()
+                    # Prepend the question as a visible content block so the TUI
+                    # permission dialog shows *what* the agent wants to do instead
+                    # of an empty ``_meta`` that the TUI ignores.
+                    question_block = {
+                        "type": "content",
+                        "content": {"type": "text", "text": f"❓ {event.ask_question}"},
+                    }
+                    tool_content = [question_block] + tool_content
+
+                    # Guard against orphan permission requests: if the engine
+                    # didn't supply a tool id, fall back to the pending approval
+                    # id; if that's also empty, log and skip the request so the
+                    # TUI doesn't render a dialog with no associated tool widget.
+                    tool_call_id = event.tool_id or pending.get("id", "")
+                    if not tool_call_id:
+                        debug_log(
+                            "ASK_USER skipped: no tool_id (action=%s question=%s)",
+                            event.ask_action, event.ask_question,
+                        )
+                        continue
+
+                    permission_params = {
+                        "sessionId": session_id,
+                        "options": [
+                            {"name": "Allow once", "optionId": "allow_once", "kind": "allow_once"},
+                            {"name": "Allow always", "optionId": "allow_always", "kind": "allow_always"},
+                            {"name": "Reject once", "optionId": "reject_once", "kind": "reject_once"},
+                            {"name": "Reject always", "optionId": "reject_always", "kind": "reject_always"},
+                        ],
+                        "toolCall": {
+                            "toolCallId": tool_call_id,
+                            "title": event.ask_action,
+                            "kind": tool_kind,
+                            "content": tool_content,
+                            "status": "pending",
+                        },
+                    }
+                    try:
+                        perm_future = self.send_request(
+                            "session/request_permission", permission_params
+                        )
+                        perm_response = await perm_future
+                        outcome = perm_response.get("outcome", {})
+                        option_id = outcome.get("optionId", "reject_once")
+                        approved = option_id in ("allow_once", "allow_always")
+
+                        if option_id == "allow_always":
+                            from cdha.agent.agents.types import AgentPermission
+                            perm_key = self.agent._TOOL_NAME_TO_PERM_KEY.get(event.ask_action)
+                            if perm_key:
+                                attr_name = f"permission_{perm_key}"
+                                setattr(self.agent.current_agent, attr_name, AgentPermission.ALLOW)
+                                self._perm_store.set_override(perm_key, AgentPermission.ALLOW)
+                        elif option_id == "reject_always":
+                            from cdha.agent.agents.types import AgentPermission
+                            perm_key = self.agent._TOOL_NAME_TO_PERM_KEY.get(event.ask_action)
+                            if perm_key:
+                                attr_name = f"permission_{perm_key}"
+                                setattr(self.agent.current_agent, attr_name, AgentPermission.DENY)
+                                self._perm_store.set_override(perm_key, AgentPermission.DENY)
+                    except Exception:
+                        approved = False
+
+                    result = await self.agent.resolve_approval(approved)
+                    if result:
+                        result_str = result.get("content", "") or ""
+                        is_error = result.get("is_error", False)
+                        tid = result.get("tool_use_id", "") or tool_call_id
+                        status = "failed" if is_error else "completed"
+                        content_block = [{
+                            "type": "content",
+                            "content": {"type": "text", "text": result_str},
+                        }] if result_str else []
+                        self.send_session_update({
+                            "sessionUpdate": "tool_call_update",
+                            "toolCallId": tid,
+                            "status": status,
+                            "content": content_block,
+                        })
+                        # Add result to LLM context
+                        self.agent.context.add_message(
+                            "tool",
+                            [{"type": "tool_result", "tool_use_id": tid,
+                              "content": result_str, "is_error": is_error}],
+                            name=tid,
+                        )
+                    verb = "Approved" if approved else "Rejected"
+                    self.send_session_update({
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {
+                            "type": "text",
+                            "text": f"⚡ {verb}: {event.ask_action} — {event.ask_question}",
+                        },
+                    })
+
+        except Exception:
+            import traceback
+            tb = traceback.format_exc()
+            debug_log("Unhandled exception in chat_stream:\n%s", tb, exc_info=True)
+            print(f"[cdh-agent-acp] ERROR in chat_stream:\n{tb}", file=sys.stderr, flush=True)
+            self.send_session_update({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": f"Error: internal error"},
+            })
+            try:
+                self.agent.save_session()
+            except Exception:
+                pass
+            return {"stopReason": "error", "message": "Internal agent error"}
+
+        try:
+            self.agent.save_session()
+        except Exception:
+            debug_log("Failed to save session at turn end", exc_info=True)
         stop_reason = "cancelled" if self.agent._cancelled else "end_turn"
         usage = self._build_session_usage()
         return {
@@ -1566,6 +1594,10 @@ async def _main():
             result = await server._handle_session_prompt(req.get("params", {}))
             return {"jsonrpc": "2.0", "result": result, "id": req.get("id")}
         except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print(f"[cdh-agent-acp] ERROR in _run_prompt:\n{tb}", file=sys.stderr, flush=True)
+            debug_log("_run_prompt failed: %s\n%s", e, tb, exc_info=True)
             return {"jsonrpc": "2.0", "error": {"code": -32603, "message": str(e)}, "id": req.get("id")}
 
     while True:
@@ -1602,8 +1634,12 @@ async def _main():
                 # Run prompt in background so main loop stays responsive
                 # to cancel notifications on stdin
                 prompt_task = asyncio.create_task(_run_prompt(req))
-                def _on_prompt_done(t):
-                    resp = t.result()
+                def _on_prompt_done(t, req=req):
+                    try:
+                        resp = t.result()
+                    except Exception as exc:
+                        debug_log(f"Prompt task raised unhandled exception: {exc}", exc_info=True)
+                        resp = {"jsonrpc": "2.0", "error": {"code": -32603, "message": str(exc)}, "id": req.get("id")}
                     if resp.get("id") is not None:
                         print(json.dumps(resp), flush=True)
                 prompt_task.add_done_callback(_on_prompt_done)

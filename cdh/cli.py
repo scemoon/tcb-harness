@@ -143,7 +143,7 @@ def _interactive_select_project():
 
 
 @cli.command(short_help="Project management (TUI)")
-@click.argument("action", type=click.Choice(["list", "show", "new", "load", "select"]), default="select")
+@click.argument("action", type=click.Choice(["list", "show", "new", "init", "load", "select"]), default="select")
 @click.argument("name", required=False)
 @click.argument("path", required=False, default=".")
 def project(action, name, path):
@@ -159,6 +159,7 @@ def project(action, name, path):
       list           List all projects
       show <name>    Show project details
       new <name> [path]   Create a new project
+      init [path]    Initialize .cdh in an existing directory (no registration)
       load <name>    Load a project (set as current)
     """
     import yaml
@@ -206,6 +207,12 @@ def project(action, name, path):
         cfg.current_project_path = str(ws)
         save_config(cfg)
         click.echo(f"Created project '{name}' at {ws}")
+    elif action == "init":
+        from cdha.agent.cdh_loader import CdhProjectLoader
+        target = Path(name or ".").expanduser().resolve()
+        project_name = target.name
+        CdhProjectLoader.init_project(target, project_name)
+        click.echo(f"Initialized .cdh in {target}")
     elif action == "load":
         if not name:
             click.echo("Usage: cdh project load <name>")

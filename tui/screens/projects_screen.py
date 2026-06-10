@@ -29,6 +29,7 @@ class ProjectsScreen(ModalScreen[str]):
         Binding("escape", "dismiss", "Dismiss"),
         Binding("d", "delete_project", "Delete"),
         Binding("n", "new_project", "New"),
+        Binding("i", "init_project", "Init"),
     ]
 
     app: getters.app[A2TUIApp] = getters.app(A2TUIApp)
@@ -42,6 +43,7 @@ class ProjectsScreen(ModalScreen[str]):
         yield ProjectGridSelect()
         with containers.Center():
             yield widgets.Button("+ New Project", id="new-project", variant="primary")
+            yield widgets.Button("Init .cdh (i)", id="init-project")
         yield widgets.Footer()
 
     @property
@@ -89,6 +91,39 @@ class ProjectsScreen(ModalScreen[str]):
     def action_new_project(self) -> None:
         self.dismiss("__new__")
 
+    def action_init_project(self) -> None:
+        from pathlib import Path
+        from cdha.config_screen import EditFieldScreen
+        from cdha.agent.cdh_loader import CdhProjectLoader
+
+        default_path = str(Path.cwd().resolve())
+        self.app.push_screen(
+            EditFieldScreen("Directory to initialize .cdh", default_path),
+            self._on_init_path,
+        )
+
+    def _on_init_path(self, path_str: str | None) -> None:
+        from pathlib import Path
+        from cdha.agent.cdh_loader import CdhProjectLoader
+
+        if not path_str:
+            return
+        try:
+            target = Path(path_str).expanduser().resolve()
+            if not target.is_dir():
+                self.notify(f"Not a directory: {target}", severity="error")
+                return
+        except Exception:
+            self.notify("Invalid path", severity="error")
+            return
+        existing = CdhProjectLoader.find_cdh_dir(target)
+        if existing is not None:
+            self.notify(f".cdh already exists at {existing}", severity="warning")
+            return
+        name = target.name
+        CdhProjectLoader.init_project(target, name)
+        self.notify(f"Initialized .cdh in {target}")
+
     @on(GridSelect.Selected)
     def on_selected(self, event: GridSelect.Selected) -> None:
         if (
@@ -99,3 +134,7 @@ class ProjectsScreen(ModalScreen[str]):
     @on(widgets.Button.Pressed, "#new-project")
     def on_new_project(self) -> None:
         self.dismiss("__new__")
+
+    @on(widgets.Button.Pressed, "#init-project")
+    def on_init_project(self) -> None:
+        self.action_init_project()
