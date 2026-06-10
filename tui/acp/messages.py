@@ -22,6 +22,13 @@ class AgentMessage(Message):
 
 
 @dataclass
+class ContextUpdate(AgentMessage):
+    """Context token usage update from the engine."""
+    used: int
+    size: int
+
+
+@dataclass
 class Thinking(AgentMessage):
     type: str
     text: str

@@ -21,6 +21,7 @@ from tui import messages
 from tui.agent_schema import Agent
 from tui.acp import messages as acp_messages
 
+from tui.widgets.context_stats import ContextStats
 from tui.widgets.modified_files import ModifiedFiles
 from tui.widgets.plan import Plan
 from tui.widgets.throbber import Throbber
@@ -145,7 +146,13 @@ class MainScreen(Screen, can_focus=False):
             SideBar.Panel(
                 "Plan",
                 Plan([], placeholder="no plan yet"),
-            )
+            ),
+            SideBar.Panel(
+                "Context",
+                ContextStats(id="context-stats"),
+                collapsed=False,
+                id="context-panel",
+            ),
         ]
         cdh_dir = CdhProjectLoader.find_cdh_dir(self.project_path)
         if cdh_dir is not None:

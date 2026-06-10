@@ -1406,6 +1406,17 @@ class CDHACPAdapter:
             self.agent.save_session()
         except Exception:
             debug_log("Failed to save session at turn end", exc_info=True)
+
+        # Send context usage stats to TUI sidebar
+        ctx = self.agent.context
+        used = ctx._token_count if ctx else 0
+        size = ctx.config.max_tokens if ctx else 0
+        self.send_session_update({
+            "sessionUpdate": "usage_update",
+            "used": used,
+            "size": size,
+        })
+
         stop_reason = "cancelled" if self.agent._cancelled else "end_turn"
         usage = self._build_session_usage()
         return {

@@ -9,7 +9,7 @@ from typing import Optional
 
 @dataclass
 class OffloadConfig:
-    enabled: bool = False
+    enabled: bool = True
     mild_ratio: float = 0.5
     aggressive_ratio: float = 0.85
     mmd_max_token_ratio: float = 0.2

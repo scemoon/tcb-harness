@@ -238,6 +238,14 @@ class Agent(AgentBase):
                     self.post_message(messages.ToolCall(deepcopy(current_tool_call)))
 
             case {
+                "sessionUpdate": "usage_update",
+            }:
+                self.post_message(messages.ContextUpdate(
+                    used=update.get("used", 0),
+                    size=update.get("size", 0),
+                ))
+
+            case {
                 "sessionUpdate": "available_commands_update",
                 "availableCommands": available_commands,
             }:

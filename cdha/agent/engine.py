@@ -794,8 +794,11 @@ class AgentEngine:
 
         self.context.add_user(user_input)
 
+        self.context.config.model = self.app.current_model
         if self.context.should_compact():
-            self.context.compact()
+            level = self.context.compact()
+            if level not in ("none",):
+                logger.info("Context compaction applied: %s", level)
 
         provider_cls = ProviderRegistry.get(self.app.current_provider)
         if not provider_cls:
@@ -969,8 +972,11 @@ class AgentEngine:
         # Gate fires reactively when agent tries execution tools without a plan.
         self._plan_gate_mode = self._resolve_plan_gate_mode()
 
+        self.context.config.model = self.app.current_model
         if self.context.should_compact():
-            self.context.compact()
+            level = self.context.compact()
+            if level not in ("none",):
+                logger.info("Context compaction at turn start: %s", level)
 
         provider_name = self.app.current_provider
         model_name = self.app.current_model
@@ -1019,8 +1025,11 @@ class AgentEngine:
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                 return
 
+            self.context.config.model = self.app.current_model
             if self.context.should_compact():
-                self.context.compact()
+                level = self.context.compact()
+                if level not in ("none",):
+                    logger.info("Context compaction at turn %d: %s", turn, level)
 
             turn_usage: dict[str, int] = {}
             response_text = ""

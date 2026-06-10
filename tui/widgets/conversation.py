@@ -988,6 +988,13 @@ class Conversation(containers.Vertical):
         if (throbber := self.query_one_optional("#throbber")) is not None:
             throbber.set_class(busy > 0, "-busy")
 
+    @on(acp_messages.ContextUpdate)
+    async def on_context_update(self, message: acp_messages.ContextUpdate):
+        message.stop()
+        from tui.widgets.context_stats import ContextStats
+        if stats := self.screen.query_one_optional("#context-stats", ContextStats):
+            stats.update_stats(message.used, message.size)
+
     @on(acp_messages.UpdateStatusLine)
     async def on_update_status_line(self, message: acp_messages.UpdateStatusLine):
         self.status = message.status_line
