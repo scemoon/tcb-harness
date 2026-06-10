@@ -13,14 +13,14 @@ class TaskCreateTool:
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="TaskCreate",
-            description="Create a task with dependency tracking. Returns task id.",
+            description="Create a fine-grained task (1-3 tool calls each). For large work, split into multiple smaller tasks with dependencies. Returns task id.",
             input_schema={
                 "type": "object",
                 "properties": {
-                    "subject": {"type": "string", "description": "Task subject/title"},
-                    "description": {"type": "string", "description": "Detailed task description"},
+                    "subject": {"type": "string", "description": "Short, action-oriented title (verb + noun, e.g. 'Create User model')"},
+                    "description": {"type": "string", "description": "What needs to be done + acceptance criteria"},
                     "activeForm": {"type": "string", "description": "Active form description"},
-                    "metadata": {"type": "object", "description": "Optional metadata"},
+                    "metadata": {"type": "object", "description": 'Optional metadata. Supports priority (high/medium/low) and effort (small/medium/large)'},
                 },
                 "required": ["subject", "description"],
             },
@@ -110,7 +110,7 @@ class TaskUpdateTool:
                     "addBlocks": {"type": "array", "items": {"type": "string"}, "description": "Task IDs this task blocks"},
                     "addBlockedBy": {"type": "array", "items": {"type": "string"}, "description": "Task IDs that block this"},
                     "metadata": {"type": "object"},
-                    "output": {"type": "string"},
+                    "output": {"type": "string", "description": "Key results to pass to downstream tasks"},
                 },
                 "required": ["taskId"],
             },

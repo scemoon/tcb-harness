@@ -88,16 +88,16 @@ class TaskTool:
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="Task",
-            description="Spawn a subagent to handle a subtask asynchronously.",
+            description="Delegate a subtask to a specialized subagent. Use for large, independent, or specialized work that benefits from a focused sub-agent.",
             input_schema={
                 "type": "object",
                 "properties": {
                     "agent_type": {
                         "type": "string",
                         "enum": list(self.VALID_AGENT_TYPES),
-                        "description": "Subagent type. Valid: general, explore, scout, build, plan, solo.",
+                        "description": "general (implementation) | explore (code search) | scout (research) | build (full dev) | plan (analysis) | solo (autonomous). Default: general. Choose based on subtask nature.",
                     },
-                    "prompt": {"type": "string", "description": "Task description for the subagent"},
+                    "prompt": {"type": "string", "description": "Detailed task description for the subagent. Include context, goals, and expected output format."},
                 },
                 "required": ["prompt"],
             },

@@ -84,7 +84,7 @@ def config():
 
 @config.group("mode")
 def config_mode():
-    """Manage default agent mode (agent, plan, solo)."""
+    """Manage default agent mode (build, plan, solo)."""
     pass
 
 
@@ -92,11 +92,11 @@ def config_mode():
 def config_mode_get():
     """Show current mode."""
     cfg = load_config()
-    click.echo(f"mode = {cfg.default_mode}  (agent | plan | solo)")
+    click.echo(f"mode = {cfg.default_mode}  (build | plan | solo)")
 
 
 @config_mode.command("set")
-@click.argument("value", default="agent")
+@click.argument("value", default="build")
 def config_mode_set(value):
     """Set default agent mode."""
     cfg = load_config()

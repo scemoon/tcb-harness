@@ -271,7 +271,7 @@ class ConfigScreen(App):
     ]
 
     MODE_OPTIONS = [
-        ("Agent", "agent"),
+        ("Build", "build"),
         ("Plan", "plan"),
         ("Solo", "solo"),
     ]

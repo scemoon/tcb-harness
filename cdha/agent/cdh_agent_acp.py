@@ -96,9 +96,9 @@ def _kind_for_category(cat: ToolCategory) -> str:
 
 
 _DEFAULT_MODES = {
-    "currentModeId": "agent",
+    "currentModeId": "build",
     "availableModes": [
-        {"id": "agent", "name": "Agent", "description": "Full development agent. Edits and shell commands require user approval."},
+        {"id": "build", "name": "Build", "description": "Full development agent. Edits and shell commands require user approval."},
         {"id": "plan",  "name": "Plan",  "description": "Read-only planning and analysis. Edits and shell commands require approval."},
         {"id": "solo",  "name": "Solo",  "description": "Independent mode with plan-first workflow. Edits allowed, shell commands require approval."},
     ],

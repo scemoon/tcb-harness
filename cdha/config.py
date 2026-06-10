@@ -58,7 +58,7 @@ class ModelAutoConfig:
 
 @dataclass
 class GlobalConfig:
-    default_mode: str = "agent"
+    default_mode: str = "build"
     default_provider: str = "minimaxi"
     default_model: str = "MiniMax-M2.7"
 
@@ -124,7 +124,7 @@ def load_config() -> GlobalConfig:
 
 def _write_default_config():
     default = {
-        "default_mode": "agent",
+        "default_mode": "build",
         "default_provider": "minimaxi",
         "default_model": "MiniMax-M2.7",
         "providers": {

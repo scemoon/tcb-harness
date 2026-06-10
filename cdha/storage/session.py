@@ -26,7 +26,7 @@ class SessionRecord(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), default="Untitled")
-    mode = Column(String(50), default="agent")
+    mode = Column(String(50), default="build")
     project = Column(String(255), default="")
     model = Column(String(255), default="")
     provider = Column(String(255), default="")
@@ -49,7 +49,7 @@ class SessionStore:
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 
-    def create(self, name: str = "Untitled", mode: str = "agent", project: str = "") -> SessionRecord:
+    def create(self, name: str = "Untitled", mode: str = "build", project: str = "") -> SessionRecord:
         with self.Session() as session:
             record = SessionRecord(name=name, mode=mode, project=project)
             session.add(record)

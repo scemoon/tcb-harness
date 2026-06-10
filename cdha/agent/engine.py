@@ -420,6 +420,12 @@ class TaskManager:
         return self._plan
 
 
+# Tools that require a task plan before execution (plan gate)
+_EXECUTION_TOOLS: frozenset[str] = frozenset({
+    "Write", "Edit", "Insert", "ApplyPatch", "Bash",
+})
+
+
 class AgentEngine:
     def __init__(self, app, project_dir: Path | None = None):
         from cdha.agent.tools.file_ops import ToolFactory
@@ -485,6 +491,13 @@ class AgentEngine:
         # Subagent engines spawned by this engine — we track them so
         # cancelling the parent also cancels in-flight subagents.
         self._child_engines: list[AgentEngine] = []
+
+        # Plan gate: mode-aware enforcement based on agent type
+        # "hard" (plan mode) rejects execution tools without plan
+        # "soft" (build/solo mode) suggests planning but doesn't block
+        # "off" (agents with permission_task=DENY) no enforcement
+        self._plan_gate_mode: str = "off"
+        self._plan_gate_fired: bool = False
 
     def _build_tool_registry(self) -> ToolRegistry:
         from cdha.agent.tools.registry import ToolRegistry
@@ -559,6 +572,30 @@ class AgentEngine:
         if self._config_tool_write:
             registry.register(self._config_tool_write)
         return registry
+
+    def _resolve_plan_gate_mode(self) -> str:
+        """Determine plan gate strictness based on current agent type.
+        
+        Returns "hard" (reject execution tools without plan), "soft" (nudge only),
+        or "off" (no enforcement).
+        """
+        from cdha.agent.agents.types import AgentPermission
+        if self.current_agent.permission_task == AgentPermission.DENY:
+            return "off"
+        if self.current_agent.name == "plan":
+            return "hard"
+        return "soft"
+
+    def _plan_gate_first_turn(self) -> bool:
+        """Returns True only on the first turn where no plan exists yet.
+        
+        Once tasks are created or the gate has fired, subsequent turns
+        proceed without gate intervention.
+        """
+        if self._plan_gate_fired:
+            return False
+        self._plan_gate_fired = True
+        return True
 
     def _notify_event(self, event: ToolEvent) -> None:
         """Emit a ToolEvent to the registered callback (Clawd-Code pattern)."""
@@ -884,6 +921,10 @@ class AgentEngine:
 
         self.context.add_user(user_input)
 
+        # Plan gate: activate based on agent mode, not content heuristics.
+        # Gate fires reactively when agent tries execution tools without a plan.
+        self._plan_gate_mode = self._resolve_plan_gate_mode()
+
         if self.context.should_compact():
             self.context.compact()
 
@@ -1097,28 +1138,66 @@ class AgentEngine:
                 # content to render.  The Task tool's spec is (agent_type,
                 # prompt); we read them from the tool input.
                 if tu["name"] == "Task":
-                    subagent_type = tu["input"].get("agent_type", "general")
-                    subagent_prompt = tu["input"].get("prompt", "")
-                    yield StreamEvent.subagent_start(subagent_type, tu["id"])
-                    accumulated: list[str] = []
-                    async for sub_event, sub_text in self._spawn_subagent_async_streaming(
-                        subagent_type, subagent_prompt
-                    ):
-                        if sub_text and sub_event.type == StreamEventType.SUBAGENT_END:
-                            accumulated.append(sub_text)
-                        elif sub_text:
-                            accumulated.append(sub_text)
-                            yield StreamEvent.subagent_chunk(tu["id"], sub_text)
-                    yield StreamEvent.subagent_end(tu["id"])
-                    formatted = self._format_subagent_output(
-                        subagent_type, subagent_prompt, "".join(accumulated)
-                    )
-                    result = {
-                        "tool_use_id": tu["id"],
-                        "is_error": False,
-                        "category": "task",
-                        "content": formatted,
-                    }
+                    # Permission check
+                    denied = self._check_tool_permission("Task", tu["input"])
+                    if denied:
+                        result = {
+                            "tool_use_id": tu["id"],
+                            "is_error": True,
+                            "category": "task",
+                            "content": denied,
+                        }
+                    else:
+                        subagent_type = tu["input"].get("agent_type", "general")
+                        subagent_prompt = tu["input"].get("prompt", "")
+                        yield StreamEvent.subagent_start(subagent_type, tu["id"])
+                        accumulated: list[str] = []
+                        async for sub_event, sub_text in self._spawn_subagent_async_streaming(
+                            subagent_type, subagent_prompt
+                        ):
+                            if sub_text and sub_event.type == StreamEventType.SUBAGENT_END:
+                                accumulated.append(sub_text)
+                            elif sub_text:
+                                accumulated.append(sub_text)
+                                yield StreamEvent.subagent_chunk(tu["id"], sub_text)
+                        yield StreamEvent.subagent_end(tu["id"])
+                        formatted = self._format_subagent_output(
+                            subagent_type, subagent_prompt, "".join(accumulated)
+                        )
+                        result = {
+                            "tool_use_id": tu["id"],
+                            "is_error": False,
+                            "category": "task",
+                            "content": formatted,
+                        }
+                elif (self._plan_gate_mode != "off"
+                      and not self._task_manager.list_tasks()
+                      and tu["name"] in _EXECUTION_TOOLS
+                      and self._plan_gate_first_turn()):
+                    if self._plan_gate_mode == "hard":
+                        result = {
+                            "tool_use_id": tu["id"],
+                            "is_error": True,
+                            "category": "task",
+                            "content": json.dumps({
+                                "success": False,
+                                "error": (
+                                    "Plan required. You must create a task plan using "
+                                    "task_create() before using execution tools. "
+                                    "Break down the request into fine-grained tasks "
+                                    "(1-3 tool calls each) with dependencies."
+                                ),
+                            }),
+                        }
+                    else:
+                        # Soft gate: execute but inject a reminder for next turn
+                        self.context.add_system(
+                            "<!-- PLAN_REMINDER -->\n"
+                            "Note: You started execution without a task plan. "
+                            "If this is a complex task, consider using task_create() "
+                            "to organize your work into fine-grained steps."
+                        )
+                        result = await self._execute_tool(tu)
                 else:
                     result = await self._execute_tool(tu)
                 result_str = str(result.get("content", ""))
@@ -1377,8 +1456,12 @@ class AgentEngine:
                 f"BLOCKERS:\n{e}"
             )
             yield StreamEvent.subagent_end(""), err_text
-            return
-        yield StreamEvent.subagent_end(""), "".join(parts)
+        else:
+            yield StreamEvent.subagent_end(""), "".join(parts)
+        finally:
+            # Clean up completed subagent to prevent memory leak
+            if sub_engine in self._child_engines:
+                self._child_engines.remove(sub_engine)
     
     def _format_subagent_output(self, agent_type: str, prompt: str, result: str) -> str:
         """Format sub-agent output in DeepSeek-TUI structured contract format.

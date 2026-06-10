@@ -12,8 +12,8 @@ async def _mode(conversation: Conversation, parameters: str) -> None:
     from cdha.config import load_config, save_config
 
     mode = parameters.strip().lower()
-    if mode not in ("agent", "plan", "solo"):
-        conversation.notify("Mode must be: agent, plan, or solo", title="/mode", severity="error")
+    if mode not in ("build", "plan", "solo"):
+        conversation.notify("Mode must be: build, plan, or solo", title="/mode", severity="error")
         return
     cfg = load_config()
     cfg.default_mode = mode

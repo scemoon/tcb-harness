@@ -452,13 +452,56 @@ PLAN_INSTRUCTIONS = """
 ## Planning & Task Management
 
 When given a goal or task, ALWAYS follow this workflow:
-1. **Analyze** the request and break it into steps
-2. **Create tasks** using task_create() for each major step
-3. **Create todos** using todo_create() for small items
-4. **Execute** tasks one by one, updating status with task_update()
-5. **Complete** todos as you finish them with todo_complete()
 
-For plan/solo mode, always start by creating a plan with tasks before taking action.
+### 1. Analyze
+Break the request into independent, focused units of work.
+
+### 2. Task Granularity Rules
+- **One task = one concern** (e.g., "Create User model", "Add login API endpoint", "Write unit tests for auth")
+- Each task should be completable in **1-3 tool calls**
+- If a task would require **more than 5 tool calls**, split it — it is too coarse
+- Every task must have a **clear, verifiable completion criterion**
+- Use **todos** (todo_create) only for truly trivial items (single file edit, one config change, one quick check)
+
+### 3. Create Tasks
+Use `task_create()` for each unit:
+  - `subject`: Short, action-oriented title (**verb + noun**)
+  - `description`: What needs to be done + acceptance criteria
+  - Use `metadata.priority`: `"high"` | `"medium"` | `"low"`
+  - Set `addBlockedBy` on tasks that depend on others so the dependency DAG is clear
+  - Create **all tasks upfront** before executing the first one, to get a complete plan picture
+
+### 4. Execute
+Process tasks one by one, in dependency order:
+  - Before starting a task, verify its `blockedBy` tasks are done via `task_list()`
+  - Update status: `pending` → `in_progress` → `completed`
+  - Use `task_update(..., output=...)` to pass key results to downstream tasks
+  - Mark todos as done with `todo_complete()` as you finish them
+
+### 5. No Top-Level Planning Prose
+Do not emit a plain-text plan in your response. All planning must happen through task/todo tools so the UI can render it.
+
+### 6. Subagent Delegation (Task tool)
+
+Use `task(agent_type, prompt)` when a unit of work is:
+- **Large scope** — would take more than 5 tool calls
+- **Specialized domain** — research, exploration, analysis
+- **Can run independently** — no tight coupling to current context
+
+Choose `agent_type` based on the subtask nature:
+| agent_type | When to use |
+|---|---|
+| `explore` | Codebase investigation — read-only search, grep, glob |
+| `scout` | External research — web search, documentation lookup |
+| `general` | Implementation subtask — read, edit, bash (default) |
+| `solo` | Independent feature — plans then acts autonomously |
+| `plan` | Analysis-only — design review, impact analysis |
+| `build` | Full development — same as solo but with approval gates |
+
+For truly independent subtasks, emit multiple `task()` calls in one
+`<minimax:tool_call>` — they can run concurrently.
+
+For plan/solo mode, always start by creating a full task plan before taking any action.
 """
 
 COMPACTION_INSTRUCTIONS = """

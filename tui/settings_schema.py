@@ -390,10 +390,10 @@ SCHEMA: list[SchemaDict] = [
             {
                 "key": "mode",
                 "title": "Default Mode",
-                "help": "Startup mode: agent, plan, or solo",
+                "help": "Startup mode: build, plan, or solo",
                 "type": "choices",
-                "default": "agent",
-                "choices": ["agent", "plan", "solo"],
+                "default": "build",
+                "choices": ["build", "plan", "solo"],
             },
             {
                 "key": "provider",

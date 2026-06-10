@@ -15,7 +15,7 @@ logger = logging.getLogger("cdha.session")
 class SessionData:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     name: str = "Untitled"
-    mode: str = "agent"
+    mode: str = "build"
     project: str = ""
     model: str = ""
     provider: str = ""
@@ -43,7 +43,7 @@ class SessionData:
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             name=data.get("name", "Untitled"),
-            mode=data.get("mode", "agent"),
+            mode=data.get("mode", "build"),
             project=data.get("project", ""),
             model=data.get("model", ""),
             provider=data.get("provider", ""),
