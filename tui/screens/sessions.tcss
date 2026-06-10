@@ -22,13 +22,10 @@ SessionsScreen {
     }
 
 
-    SessionGridSelect {   
-        &:empty {
-            visibility: hidden;
-        }              
+    SessionGridSelect {
         width: 1fr;
         margin: 0 1 1 1;
-        padding: 1 0 !important;                
+        padding: 1 0 !important;
     }
 
     SessionSummary {       

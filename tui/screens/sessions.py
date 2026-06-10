@@ -17,7 +17,10 @@ from cdha.config import CLOUD_DEV_HARNESS_DIR
 from tui.app import A2TUIApp
 from tui.db import DB
 from tui.widgets.grid_select import GridSelect
-from tui.widgets.session_grid_select import SessionGridSelect
+from tui.widgets.session_grid_select import (
+    SessionGridSelect,
+    PAGE_INDICATOR_ID,
+)
 from tui.widgets.session_summary import SessionSummary
 from tui.session_tracker import SessionDetails
 
@@ -41,7 +44,8 @@ class SessionsScreen(ModalScreen[str]):
         with containers.Center(id="title-container"):
             yield widgets.Label("Sessions")
         yield widgets.Static(INSTRUCTIONS_NO_SESSIONS, classes="instructions")
-        yield SessionGridSelect(self.app.session_tracker)
+        yield widgets.Static("", id=PAGE_INDICATOR_ID)
+        yield SessionGridSelect(self.app.session_tracker, id="session-grid")
         yield widgets.Footer()
 
     @property
@@ -100,33 +104,42 @@ class SessionsScreen(ModalScreen[str]):
         self.notify(f"Deleted session: {title}")
 
     async def _load_historical_sessions(self) -> None:
+        seen_pks: set[int] = set()
+        merged: list[SessionDetails] = []
+
+        for session in self.app.session_tracker.ordered_sessions:
+            if session.session_pk is not None and session.session_pk in seen_pks:
+                continue
+            if session.session_pk is not None:
+                seen_pks.add(session.session_pk)
+            merged.append(session)
+
         db = DB()
         sessions = await db.session_get_recent(max_results=20)
-        if not sessions:
-            return
-        for session in sessions:
+        for session in sessions or []:
             session_id = session["id"]
-            mode_name = f"session-{session_id}"
-            if self.app.session_tracker.get_session(mode_name):
+            if session_id in seen_pks:
                 continue
+            seen_pks.add(session_id)
             cwd = ""
             if meta_json := session.get("meta_json"):
                 try:
                     cwd = json.loads(meta_json).get("cwd", "")
                 except Exception:
                     pass
-            session_details = SessionDetails(
-                index=session_id,
-                mode_name=mode_name,
-                session_pk=session_id,
-                title=session.get("title", "Untitled") or "Untitled",
-                subtitle=session.get("agent", ""),
-                path=cwd,
-                state="idle",
+            merged.append(
+                SessionDetails(
+                    index=session_id,
+                    mode_name=f"session-{session_id}",
+                    session_pk=session_id,
+                    title=session.get("title", "Untitled") or "Untitled",
+                    subtitle=session.get("agent", ""),
+                    path=cwd,
+                    state="idle",
+                )
             )
-            await self.session_grid_select.mount(
-                SessionSummary(session_details, id=mode_name)
-            )
+
+        self.session_grid_select.set_sessions(merged)
 
     def on_mount(self) -> None:
         self.run_worker(self._load_historical_sessions())

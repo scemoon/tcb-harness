@@ -26,7 +26,7 @@ class SessionSummary(containers.VerticalGroup):
 
     title = getters.query_one(".title", widgets.Label)
     subtitle = getters.query_one(".subtitle", widgets.Label)
-    current = reactive(True, toggle_class="-current", init=False, recompose=True)
+    current = reactive(False, toggle_class="-current", init=False, recompose=True)
     blink = reactive(False, toggle_class="-blink")
 
     def __init__(

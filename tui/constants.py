@@ -56,3 +56,6 @@ ACP_INITIALIZE: Final[bool] = _get_environ_bool("TOAD_ACP_INITIALIZE", True)
 
 DEBUG: Final[bool] = _get_environ_bool("DEBUG", False)
 """Debug flag."""
+
+SESSION_GRID_PAGE_SIZE: Final[int] = 12
+"""Number of sessions to display per page in the sessions grid."""
