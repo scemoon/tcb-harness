@@ -464,6 +464,9 @@ class AgentEngine:
         self._config_tool_read = ConfigReadTool(app_config) if app_config else None
         self._config_tool_write = ConfigWriteTool(app_config) if app_config else None
 
+        # Codebase engine (lazy init)
+        self._codebase_engine: Optional["CodebaseEngine"] = None
+
         # Tool registry (Clawd-Code pattern)
         self._tool_registry = self._build_tool_registry()
         self._send_message_tool = SendMessageTool()
@@ -571,6 +574,10 @@ class AgentEngine:
             registry.register(self._config_tool_read)
         if self._config_tool_write:
             registry.register(self._config_tool_write)
+
+        # Codebase search tool (lazy — engine initialised on first search)
+        from cdha.codebase.tools import CodebaseSearchTool
+        registry.register(CodebaseSearchTool(lambda: self._codebase_engine))
         return registry
 
     def _resolve_plan_gate_mode(self) -> str:
@@ -756,6 +763,28 @@ class AgentEngine:
 
         self.context.add_system("\n".join(context_parts))
 
+    def _should_retrieve_codebase(self) -> bool:
+        try:
+            cfg = self.app.config.codebase
+            return cfg.enabled and cfg.auto_retrieve
+        except Exception:
+            return False
+
+    async def _get_codebase_engine(self):
+        if self._codebase_engine is not None:
+            return self._codebase_engine
+        try:
+            cfg = self.app.config.codebase
+            if not cfg.enabled:
+                return None
+            from cdha.codebase import CodebaseEngine
+            self._codebase_engine = CodebaseEngine(self._project_dir, cfg)
+            await self._codebase_engine.ensure_indexed()
+            return self._codebase_engine
+        except Exception as e:
+            logger.warning("Failed to init codebase engine: %s", e)
+            return None
+
     async def chat(self, user_input: str) -> str:
         self._load_skills()
 
@@ -918,6 +947,21 @@ class AgentEngine:
         for event in self._emit_plan_update():
             yield event
         self._plan_dirty = False
+
+        # ── Codebase auto-retrieval ──
+        if isinstance(user_input, str) and self._should_retrieve_codebase():
+            try:
+                engine = await self._get_codebase_engine()
+                if engine:
+                    chunks = await engine.retrieve(user_input)
+                    ctx_text = engine.format_context(
+                        chunks, max_tokens=self.app.config.codebase.max_chunk_tokens
+                    )
+                    if ctx_text:
+                        if not self.context.replace_system_section("CODEBASE", ctx_text):
+                            self.context.add_system(f"<!-- CODEBASE -->\n{ctx_text}")
+            except Exception as e:
+                logger.warning("Codebase retrieval failed: %s", e)
 
         self.context.add_user(user_input)
 

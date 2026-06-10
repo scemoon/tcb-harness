@@ -57,6 +57,36 @@ class ModelAutoConfig:
 
 
 @dataclass
+class CodebaseConfig:
+    enabled: bool = True
+    auto_retrieve: bool = True
+    chunk_strategy: str = "line"
+    chunk_lines: int = 50
+    chunk_overlap: int = 10
+    retriever: str = "bm25"
+    embedding_provider: str = ""
+    embedding_model: str = ""
+    top_k: int = 5
+    max_chunk_tokens: int = 500
+    exclude_patterns: list[str] = field(default_factory=lambda: [
+        "node_modules/**", "__pycache__/**", ".git/**",
+        ".venv/**", "venv/**", "dist/**", "build/**",
+        "*.min.*", "*.pyc", "*.egg-info/**", ".cdh/**",
+        ".opencode/**", ".claude/**", ".agents/**",
+        ".idea/**", ".vscode/**", ".DS_Store",
+    ])
+    include_extensions: list[str] = field(default_factory=lambda: [
+        ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs",
+        ".java", ".rb", ".php", ".c", ".cpp", ".h", ".hpp",
+        ".swift", ".kt", ".scala",
+        ".sql", ".yaml", ".yml", ".json", ".toml",
+        ".md", ".css", ".scss", ".html", ".svelte", ".vue",
+        ".sh", ".bash", ".zsh", ".fish",
+        ".tf", ".tfvars",
+    ])
+
+
+@dataclass
 class GlobalConfig:
     default_mode: str = "build"
     default_provider: str = "minimaxi"
@@ -71,6 +101,7 @@ class GlobalConfig:
     current_project_path: str = ""
     log_level: str = "info"
     session_auto_save: bool = True
+    codebase: CodebaseConfig = field(default_factory=CodebaseConfig)
 
 
 def _dict_to_dataclass(cls, data: dict):
@@ -192,6 +223,32 @@ def _write_default_config():
         "current_project_path": "",
         "log_level": "info",
         "session_auto_save": True,
+        "codebase": {
+            "enabled": True,
+            "auto_retrieve": True,
+            "chunk_strategy": "line",
+            "chunk_lines": 50,
+            "chunk_overlap": 10,
+            "retriever": "bm25",
+            "top_k": 5,
+            "max_chunk_tokens": 500,
+            "exclude_patterns": [
+                "node_modules/**", "__pycache__/**", ".git/**",
+                ".venv/**", "venv/**", "dist/**", "build/**",
+                "*.min.*", "*.pyc", "*.egg-info/**", ".cdh/**",
+                ".opencode/**", ".claude/**", ".agents/**",
+                ".idea/**", ".vscode/**", ".DS_Store",
+            ],
+            "include_extensions": [
+                ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs",
+                ".java", ".rb", ".php", ".c", ".cpp", ".h", ".hpp",
+                ".swift", ".kt", ".scala",
+                ".sql", ".yaml", ".yml", ".json", ".toml",
+                ".md", ".css", ".scss", ".html", ".svelte", ".vue",
+                ".sh", ".bash", ".zsh", ".fish",
+                ".tf", ".tfvars",
+            ],
+        },
     }
     GLOBAL_CONFIG_PATH.write_text(yaml.dump(default, default_flow_style=False))
 

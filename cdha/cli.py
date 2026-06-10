@@ -599,6 +599,128 @@ def config_mcp_disable(name):
         click.echo(f"Error: {err}")
     else:
         click.echo(f"MCP server '{name}' disabled.")
+
+
+@cli.group(invoke_without_command=True)
+def codebase():
+    """Manage codebase index and search.
+
+    \b
+    The codebase index enables semantic and keyword search over project files.
+    Use `cdh codebase index` to build or update the index, then the agent
+    can automatically retrieve relevant code when answering questions.
+    """
+    pass
+
+
+@codebase.command("index")
+@click.option("--force", is_flag=True, help="Rebuild index from scratch")
+@click.option("--path", default=".", help="Project directory", show_default=True)
+def codebase_index(force: bool, path: str):
+    """Index project files for codebase search."""
+    import asyncio
+    from cdha.codebase import CodebaseEngine, CodebaseConfig
+
+    project_dir = Path(path).resolve()
+    if not project_dir.is_dir():
+        click.echo(f"Error: {path} is not a valid directory")
+        return
+
+    cfg = load_config()
+    engine = CodebaseEngine(project_dir, cfg.codebase)
+    result = asyncio.run(engine.ensure_indexed(force=force))
+
+    total = result.total_files if hasattr(result, 'total_files') else 0
+    click.echo(
+        f"Indexed {project_dir.name}: "
+        f"{result.indexed_files} files, "
+        f"{result.total_chunks} chunks"
+        f"{' (forced rebuild)' if force else ''}"
+    )
+    if result.failed_files:
+        click.echo(f"  Failed: {result.failed_files}")
+        for err in result.errors[:5]:
+            click.echo(f"    {err}")
+
+
+@codebase.command("status")
+@click.option("--path", default=".", help="Project directory", show_default=True)
+def codebase_status(path: str):
+    """Show codebase index status."""
+    from cdha.codebase import CodebaseStorage
+
+    project_dir = Path(path).resolve()
+    if not project_dir.is_dir():
+        click.echo(f"Error: {path} is not a valid directory")
+        return
+
+    storage = CodebaseStorage(project_dir)
+    chunk_count = storage.chunk_count()
+    file_count = storage.file_count()
+
+    click.echo(f"Codebase index for {project_dir.name}:")
+    click.echo(f"  Files: {file_count}")
+    click.echo(f"  Chunks: {chunk_count}")
+    if chunk_count == 0:
+        click.echo("  (not indexed yet — run `cdh codebase index`)")
+
+
+@codebase.command("search")
+@click.argument("query")
+@click.option("--top-k", default=5, help="Number of results", show_default=True)
+@click.option("--path", default=".", help="Project directory", show_default=True)
+def codebase_search(query: str, top_k: int, path: str):
+    """Search indexed codebase."""
+    import asyncio
+    from cdha.codebase import CodebaseEngine
+
+    project_dir = Path(path).resolve()
+    if not project_dir.is_dir():
+        click.echo(f"Error: {path} is not a valid directory")
+        return
+
+    cfg = load_config()
+    engine = CodebaseEngine(project_dir, cfg.codebase)
+    chunks = asyncio.run(engine.retrieve(query, top_k=top_k))
+
+    if not chunks:
+        click.echo("No results found.")
+        return
+
+    click.echo(f"Top {len(chunks)} results for: {query}\n")
+    for i, c in enumerate(chunks, 1):
+        click.echo(f"[{i}] {c.file_path}:{c.start_line}-{c.end_line}")
+        click.echo("```")
+        click.echo(c.content[:300])
+        if len(c.content) > 300:
+            click.echo("...")
+        click.echo("```")
+        click.echo()
+
+
+@codebase.command("reindex")
+@click.option("--path", default=".", help="Project directory", show_default=True)
+def codebase_reindex(path: str):
+    """Force rebuild the codebase index (alias for index --force)."""
+    import asyncio
+    from cdha.codebase import CodebaseEngine
+
+    project_dir = Path(path).resolve()
+    if not project_dir.is_dir():
+        click.echo(f"Error: {path} is not a valid directory")
+        return
+
+    cfg = load_config()
+    engine = CodebaseEngine(project_dir, cfg.codebase)
+    result = asyncio.run(engine.ensure_indexed(force=True))
+
+    click.echo(
+        f"Reindexed {project_dir.name}: "
+        f"{result.indexed_files} files, "
+        f"{result.total_chunks} chunks"
+    )
+
+
 @cli.command()
 @click.argument("command", required=False)
 @click.option("--list", "list_commands", is_flag=True, help="List all available commands")
