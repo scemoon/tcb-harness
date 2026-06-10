@@ -28,6 +28,7 @@ class ProjectsScreen(ModalScreen[str]):
     BINDINGS = [
         Binding("escape", "dismiss", "Dismiss"),
         Binding("d", "delete_project", "Delete"),
+        Binding("n", "new_project", "New"),
     ]
 
     app: getters.app[A2TUIApp] = getters.app(A2TUIApp)
@@ -84,6 +85,9 @@ class ProjectsScreen(ModalScreen[str]):
             return
         widget.remove()
         self.notify(f"Deleted project: {project_name}")
+
+    def action_new_project(self) -> None:
+        self.dismiss("__new__")
 
     @on(GridSelect.Selected)
     def on_selected(self, event: GridSelect.Selected) -> None:

@@ -1323,6 +1323,19 @@ class CDHACPAdapter:
                     outcome = perm_response.get("outcome", {})
                     option_id = outcome.get("optionId", "reject_once")
                     approved = option_id in ("allow_once", "allow_always")
+
+                    if option_id == "allow_always":
+                        from cdha.agent.agents.types import AgentPermission
+                        perm_key = self.agent._TOOL_NAME_TO_PERM_KEY.get(event.ask_action)
+                        if perm_key:
+                            attr_name = f"permission_{perm_key}"
+                            setattr(self.agent.current_agent, attr_name, AgentPermission.ALLOW)
+                    elif option_id == "reject_always":
+                        from cdha.agent.agents.types import AgentPermission
+                        perm_key = self.agent._TOOL_NAME_TO_PERM_KEY.get(event.ask_action)
+                        if perm_key:
+                            attr_name = f"permission_{perm_key}"
+                            setattr(self.agent.current_agent, attr_name, AgentPermission.DENY)
                 except Exception:
                     approved = False
 

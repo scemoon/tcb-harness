@@ -21,6 +21,7 @@ from tui import messages
 from tui.agent_schema import Agent
 from tui.acp import messages as acp_messages
 
+from tui.widgets.modified_files import ModifiedFiles
 from tui.widgets.plan import Plan
 from tui.widgets.throbber import Throbber
 from tui.widgets.conversation import Conversation
@@ -158,6 +159,14 @@ class MainScreen(Screen, can_focus=False):
                     id="project-panel",
                 ),
             )
+        panels.append(
+            SideBar.Panel(
+                "Modified Files",
+                ModifiedFiles(self.project_path, id="modified_files"),
+                collapsed=True,
+                id="modified-files-panel",
+            ),
+        )
         with containers.Center():
             yield SideBar(*panels)
             yield Conversation(
@@ -215,6 +224,8 @@ class MainScreen(Screen, can_focus=False):
                 await tree.reload()
         else:
             sidebar.remove_panel("project-panel")
+        if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
+            mf.refresh_files()
 
     @on(DirectoryTree.FileSelected, "ProjectDirectoryTree")
     def on_project_directory_tree_selected(self, event: Tree.NodeSelected):
@@ -286,6 +297,8 @@ class MainScreen(Screen, can_focus=False):
                 tree.data_bind(path=MainScreen.project_path)
             for tree in self.query(DirectoryTree):
                 tree.guide_depth = 3
+        mf = self.query_one("#modified_files", ModifiedFiles)
+        mf.data_bind(path=MainScreen.project_path)
 
     @on(OptionList.OptionHighlighted)
     def on_option_list_option_highlighted(
