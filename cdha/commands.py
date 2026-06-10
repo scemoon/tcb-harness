@@ -8,18 +8,6 @@ if TYPE_CHECKING:
     from tui.widgets.conversation import Conversation
 
 
-async def _harness(conversation: Conversation, parameters: str) -> None:
-    from tui.widgets.markdown_note import MarkdownNote
-    from cdha.config import load_config
-
-    cfg = load_config()
-    info = f"""CDH Harness Info:
-Provider: {cfg.default_provider}
-Model: {cfg.default_model}
-Mode: {cfg.default_mode}"""
-    await conversation.post(MarkdownNote(info))
-
-
 async def _mode(conversation: Conversation, parameters: str) -> None:
     from cdha.config import load_config, save_config
 

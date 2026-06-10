@@ -8,7 +8,6 @@ import yaml
 
 CLOUD_DEV_HARNESS_DIR = Path.home() / ".cdh"
 GLOBAL_CONFIG_PATH = CLOUD_DEV_HARNESS_DIR / "cdh.config.yaml"
-HARNESS_DIR = Path(__file__).resolve().parent.parent / "cloud-harness"
 
 
 @dataclass

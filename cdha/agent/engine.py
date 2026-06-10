@@ -445,7 +445,6 @@ class AgentEngine:
         self._task_manager = TaskManager(on_change=self._on_task_change)
         self._plan_dirty: bool = False
         self._project_config: dict = {}
-        self._harness_mode = False
         self._project_context_loaded = False
         self._pending_approval: dict | None = None  # {tool_call, result_key}
         self._last_user_msg: str | None = None  # Last SendMessage visible to user
@@ -613,50 +612,6 @@ class AgentEngine:
     def _workspace(self) -> Path:
         return self._project_dir
 
-    def _detect_harness_mode(self) -> bool:
-        """Detect if any harness projects exist in workspace."""
-        projects_dir = self._workspace / "projects"
-        if projects_dir.exists():
-            for d in projects_dir.iterdir():
-                if d.is_dir() and (d / ".harness").exists():
-                    return True
-        return False
-
-    def _load_project_config(self, project_name: str) -> dict:
-        """Load project config into memory."""
-        base = self._workspace / "projects" / project_name / ".harness"
-        config_path = base / "config.json"
-        if config_path.exists():
-            try:
-                self._project_config = json.loads(config_path.read_text(encoding="utf-8"))
-                return self._project_config
-            except Exception:
-                pass
-        state_path = base / "state.json"
-        if state_path.exists():
-            try:
-                return json.loads(state_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        return {}
-
-    def _auto_init_harness(self) -> str:
-        """Auto-initialize harness mode if project detected but not initialized."""
-        if self._detect_harness_mode():
-            self._harness_mode = True
-            return ""
-        ws = self._workspace
-        projects_dir = ws / "projects"
-        if projects_dir.exists() and any(projects_dir.iterdir()):
-            self._harness_mode = True
-            # Projects exist but none is set as current — user should switch
-            return "Projects exist. Use `/harness switch <name>` to select one."
-        has_code = any(ws.glob("*.json")) or any(ws.glob("*.py")) or any(ws.glob("*.js"))
-        if has_code:
-            self._harness_mode = True
-            return "Project detected. Run `/harness init <name> --platform <mp|web|oa|hybrid>` to initialize harness mode."
-        return ""
-
     def set_agent(self, agent_type: str) -> None:
         from cdha.agent.agents.types import (
             AgentPermission,
@@ -699,19 +654,6 @@ class AgentEngine:
             "The visible answer is only the final user-facing summary.\n"
         )
 
-        if self._harness_mode:
-            system_parts.append(
-                "\n## Harness Mode Active\n"
-                "You are in harness development mode. Follow the pipeline:\n"
-                "1. **Init**: Project scaffold, cloud environment config\n"
-                "2. **Spec**: EARS requirements, validate with spec guide\n"
-                "3. **Design**: UI components, API contracts, data models\n"
-                "4. **Coding**: TDD cycle (RED → GREEN → REFACTOR)\n"
-                "5. **Testing**: Generate test cases, verify coverage ≥80%\n"
-                "6. **Deploy**: Deploy to cloud, verify all components\n"
-                "Use `/harness status` to check current phase.\n"
-            )
-
         tool_desc = filter_tool_descriptions(
             allowlist=self.current_agent.tools or None,
             denylist=self.current_agent.disallowed_tools or None,
@@ -743,15 +685,6 @@ class AgentEngine:
             tagged = f"<!-- SKILL:{skill.name} -->\n{skill.content}"
             self.context.add_system(tagged)
 
-        # Also load harness skill if applicable
-        from cdha.agent.harness_skill import HarnessSkill
-        harness_content = HarnessSkill.load_skill_for_project(
-            self._workspace,
-            getattr(self.app, "current_project", None) or "",
-        )
-        if harness_content:
-            self.context.add_system(f"<!-- SKILL:harness -->\n{harness_content}")
-
         # Load project .cdh/ state into context
         from cdha.agent.cdh_loader import CdhProjectLoader
         cdh_content = CdhProjectLoader.load_for_workspace(self._workspace)
@@ -760,14 +693,12 @@ class AgentEngine:
 
     def _inject_project_context(self, project_name: str) -> None:
         if not project_name:
-            self._auto_init_harness()
             return
         if self._project_context_loaded:
             return
 
         self._project_context_loaded = True
-        self._harness_mode = True
-        self._project_config = self._load_project_config(project_name)
+        self._project_config = {}
 
         context_parts = [
             f"Project: {project_name}",
@@ -940,10 +871,7 @@ class AgentEngine:
                     f"\n📋 项目: {project_name}\n继续开发中...\n\n"
                 )
         else:
-            init_msg = self._auto_init_harness()
-            if init_msg:
-                logger.info(f"Harness auto-init: {init_msg}")
-                yield StreamEvent.text_delta(f"\n{init_msg}\n\n")
+            pass
 
         # Emit initial plan so the TUI Plan widget is mounted (or refreshed
         # to the current snapshot) at the start of every turn.  This is
@@ -1412,14 +1340,13 @@ class AgentEngine:
         payload at the end so callers that only care about the final output
         can ignore the intermediate chunks.
 
-        Inherits project context, harness mode, and skills from the parent
+        Inherits project context and skills from the parent
         engine so the subagent does not start from a blank slate.
         """
         sub_engine = AgentEngine(self.app, project_dir=self._project_dir)
 
-        # Inherit parent context: project info, harness mode, skills
+        # Inherit parent context: project info, skills
         sub_engine._project_context_loaded = self._project_context_loaded
-        sub_engine._harness_mode = self._harness_mode
         sub_engine._project_config = dict(self._project_config)
         sub_engine._skills_loaded = True
         for skill in self._skill_loader.get_enabled():
