@@ -2,15 +2,11 @@ from __future__ import annotations
 
 import os
 import subprocess
-from enum import Enum
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional
 
-
-class Permission(Enum):
-    ALLOW = "allow"
-    ASK = "ask"
-    DENY = "deny"
+from cdha.agent.permissions import PermissionChecker, PermissionSet, create_safe_permission_set
+from cdha.agent.tools.sandbox import Sandbox, SandboxConfig, SandboxMode, ResourceLimits, create_sandbox
 
 
 class FileOps:
@@ -149,35 +145,25 @@ class FileOps:
             return False
 
 
-from cdha.agent.permissions import PermissionChecker, PermissionSet, create_safe_permission_set
-from cdha.agent.tools.sandbox import Sandbox, SandboxConfig, SandboxMode, ResourceLimits, create_sandbox
-
-
 class ShellTool:
+    """Shell execution with safety checks.
+
+    Permission (ALLOW / ASK / DENY) is handled at the engine level via
+    ``_check_tool_permission``.  This class only enforces command-level
+    safety rules (dangerous patterns, sandboxing).
+    """
+
     def __init__(
         self,
         workspace: Optional[Path] = None,
-        permission: Permission = Permission.ALLOW,
         permission_set: Optional[PermissionSet] = None,
         sandbox_mode: str = "auto",
     ):
         self.workspace = workspace or Path.cwd()
-        self.permission = permission
         self._checker = PermissionChecker(permission_set or create_safe_permission_set())
         self._sandbox = create_sandbox(self.workspace, mode=sandbox_mode)
 
     def exec(self, cmd: str, cwd: Optional[str] = None, timeout: int = 60) -> dict:
-        if self.permission == Permission.DENY:
-            return {"success": False, "error": "Shell denied", "requires_approval": False}
-
-        if self.permission == Permission.ASK:
-            result = self._checker.check_command(cmd)
-            if result.value == "deny":
-                return {"success": False, "error": "Command not allowed", "requires_approval": False}
-            if result.value == "ask":
-                return {"success": False, "error": "Command requires approval", "requires_approval": True}
-            return {"success": False, "error": "Shell requires approval", "requires_approval": True}
-
         result = self._checker.check_command(cmd)
         if result.value == "deny":
             return {"success": False, "error": "Command not allowed", "requires_approval": False}
@@ -197,5 +183,5 @@ class ToolFactory:
         return FileOps(workspace)
 
     @staticmethod
-    def create_shell(workspace: Optional[Path] = None, permission: Permission = Permission.ALLOW) -> ShellTool:
-        return ShellTool(workspace, permission)
+    def create_shell(workspace: Optional[Path] = None) -> ShellTool:
+        return ShellTool(workspace)

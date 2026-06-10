@@ -54,7 +54,9 @@ class ModifiedFiles(containers.Vertical):
         classes: str | None = None,
     ) -> None:
         super().__init__(name=name, id=id, classes=classes)
-        self.set_reactive(ModifiedFiles.path, path)
+        # Initial value is set via data_bind in main.py on_mount.
+        # Don't use set_reactive here — let _initialize_reactive trigger
+        # watch_path properly on first reactive access.
 
     def watch_path(self, path: Path | None) -> None:
         """Run git status when path changes."""

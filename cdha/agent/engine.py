@@ -422,7 +422,7 @@ class TaskManager:
 
 class AgentEngine:
     def __init__(self, app, project_dir: Path | None = None):
-        from cdha.agent.tools.file_ops import ToolFactory, Permission
+        from cdha.agent.tools.file_ops import ToolFactory
         from cdha.agent.agents.types import BuildAgent
         from cdha.agent.hooks import HookManager
         from cdha.skills.loader import SkillLoader
@@ -435,7 +435,7 @@ class AgentEngine:
         self._project_dir = (project_dir or Path.cwd()).resolve()
         self.context = ContextManager()
         self.file_ops = ToolFactory.create_file_ops(self._project_dir)
-        self.shell = ToolFactory.create_shell(self._project_dir, Permission.ALLOW)
+        self.shell = ToolFactory.create_shell(self._project_dir)
         self.current_agent: AgentConfig = BuildAgent()
         self.iterations = 0
         self.total_tokens = 0

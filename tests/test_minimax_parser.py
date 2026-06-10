@@ -365,7 +365,7 @@ class TestSandboxResourceLimits:
         """A trivial ``echo`` should return ``success=True`` with stdout."""
         from cdha.agent.tools.file_ops import ShellTool
 
-        sh = ShellTool(tmp_path, "allow")
+        sh = ShellTool(tmp_path)
         result = sh.exec("echo hello-from-cdh-sandbox-test", timeout=10)
         assert result.get("success") is True, (
             f"Shell tool failed: {result!r} — this is the regression where "
@@ -387,7 +387,7 @@ class TestSandboxResourceLimits:
         from cdha.agent.tools.file_ops import ShellTool
 
         before = resource.getrlimit(resource.RLIMIT_AS)
-        sh = ShellTool(tmp_path, "allow")
+        sh = ShellTool(tmp_path)
         sh.exec("true", timeout=5)
         after = resource.getrlimit(resource.RLIMIT_AS)
         assert before == after, (

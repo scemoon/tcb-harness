@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-from cdha.agent.tools.file_ops import FileOps, Permission
+from cdha.agent.tools.file_ops import FileOps
 from cdha.agent.tools.protocol import ToolResult
 from cdha.agent.tools.registry import ToolSpec
 

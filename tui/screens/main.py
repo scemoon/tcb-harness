@@ -163,7 +163,7 @@ class MainScreen(Screen, can_focus=False):
             SideBar.Panel(
                 "Modified Files",
                 ModifiedFiles(self.project_path, id="modified_files"),
-                collapsed=True,
+                collapsed=False,
                 id="modified-files-panel",
             ),
         )

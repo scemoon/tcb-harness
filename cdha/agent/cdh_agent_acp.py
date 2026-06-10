@@ -42,6 +42,7 @@ def debug_log(*args, **kwargs):
         print("[cdha]", *args, file=sys.stderr, flush=True)
 
 from cdha.agent.engine import AgentEngine
+from cdha.agent.permissions_store import PermissionStore
 from cdha.agent.session import AgentSession
 from cdha.config import load_config
 from cdha.models.provider import ProviderRegistry
@@ -517,6 +518,7 @@ class CDHACPAdapter:
         self.in_thinking = False
         self._pending_requests: dict[str, asyncio.Future[dict]] = {}
         self._request_seq = 0
+        self._perm_store = PermissionStore()
 
     @staticmethod
     def _content_to_blocks(content: str | list) -> list:
@@ -724,6 +726,7 @@ class CDHACPAdapter:
         cfg = load_config()
         self.agent = _create_engine(cwd)
         self.agent.set_agent(cfg.default_mode)
+        self._perm_store.apply_to(self.agent.current_agent)
 
         session = AgentSession()
         session.name = "New Session"
@@ -753,6 +756,7 @@ class CDHACPAdapter:
         loaded = self.agent.load_session(session_id)
         cfg = load_config()
         self.agent.set_agent(cfg.default_mode)
+        self._perm_store.apply_to(self.agent.current_agent)
         self._send_available_commands()
         if not loaded:
             return {"modes": _DEFAULT_MODES}
@@ -1330,12 +1334,14 @@ class CDHACPAdapter:
                         if perm_key:
                             attr_name = f"permission_{perm_key}"
                             setattr(self.agent.current_agent, attr_name, AgentPermission.ALLOW)
+                            self._perm_store.set_override(perm_key, AgentPermission.ALLOW)
                     elif option_id == "reject_always":
                         from cdha.agent.agents.types import AgentPermission
                         perm_key = self.agent._TOOL_NAME_TO_PERM_KEY.get(event.ask_action)
                         if perm_key:
                             attr_name = f"permission_{perm_key}"
                             setattr(self.agent.current_agent, attr_name, AgentPermission.DENY)
+                            self._perm_store.set_override(perm_key, AgentPermission.DENY)
                 except Exception:
                     approved = False
 
@@ -1415,6 +1421,7 @@ class CDHACPAdapter:
         """Set session mode — propagates to engine and notifies TUI."""
         if self.agent:
             self.agent.set_agent(mode_id)
+            self._perm_store.apply_to(self.agent.current_agent)
             self.send_session_update({
                 "sessionUpdate": "current_mode_update",
                 "currentModeId": mode_id,
