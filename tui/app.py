@@ -346,6 +346,8 @@ class A2TUIApp(App, inherit_bindings=False):
         self._exit_metrics: dict[str, object] | None = None
         self.start_time = monotonic()
         """Time app was started."""
+        self._system_theme_timer: Timer | None = None
+        self._last_resolved_theme: str | None = None
 
     def _capture_exit_metrics(self) -> None:
         from tui.widgets.conversation import Conversation
@@ -658,7 +660,15 @@ class A2TUIApp(App, inherit_bindings=False):
                 self.column_width = value
         elif key == "ui.theme":
             if isinstance(value, str):
-                self.theme = value
+                if value == "system":
+                    resolved = self._resolve_system_theme()
+                    if resolved != self._last_resolved_theme:
+                        self.theme = resolved
+                        self._last_resolved_theme = resolved
+                    self._start_system_theme_polling()
+                else:
+                    self._stop_system_theme_polling()
+                    self.theme = value
         elif key == "ui.scrollbar":
             if isinstance(value, str):
                 self.scrollbar = value
@@ -700,6 +710,66 @@ class A2TUIApp(App, inherit_bindings=False):
             save_config(cfg)
         except Exception:
             pass
+
+    def _start_system_theme_polling(self) -> None:
+        if self._system_theme_timer is not None:
+            return
+        self._system_theme_timer = self.set_interval(3, self._poll_system_theme)
+
+    def _stop_system_theme_polling(self) -> None:
+        if self._system_theme_timer is not None:
+            self._system_theme_timer.stop()
+            self._system_theme_timer = None
+
+    def _poll_system_theme(self) -> None:
+        resolved = self._resolve_system_theme()
+        if resolved != self._last_resolved_theme:
+            self.theme = resolved
+            self._last_resolved_theme = resolved
+
+    def search_themes(self) -> None:
+        """Show theme picker with System first, then all Textual themes."""
+        from textual.command import CommandPalette, SimpleProvider
+
+        themes = self.available_themes
+
+        def set_system():
+            self.settings.set("ui.theme", "system")
+
+        commands: list[tuple[str, Callable[[], None], str]] = [
+            ("System", set_system, "Follow system dark/light mode"),
+        ]
+
+        from operator import attrgetter
+        for theme in sorted(themes.values(), key=attrgetter("name")):
+            def set_app_theme(name: str = theme.name):
+                self.settings.set("ui.theme", name)
+            commands.append((theme.name, set_app_theme, ""))
+
+        self.push_screen(
+            CommandPalette(
+                providers=[SimpleProvider(self.screen, commands)],
+                placeholder="Search for themes…",
+            ),
+        )
+
+    @staticmethod
+    def _resolve_system_theme() -> str:
+        """Detect system dark/light mode and return a matching theme."""
+        if platform.system() == "Darwin":
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                    capture_output=True, text=True,
+                )
+                if result.stdout.strip() == "Dark":
+                    return "dracula"
+                else:
+                    return "catppuccin-latte"
+            except Exception:
+                pass
+        return "dracula"
 
     def _load_cdh_config(self) -> None:
         """Load cdh config into tui settings on startup."""

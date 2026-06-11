@@ -289,7 +289,11 @@ Tap escape *twice* to exit.
         if self.state.alternate_screen:
             height += self.state.alternate_buffer.height
         self.virtual_size = Size(min(self.state.buffer.max_line_width, width), height)
-        if self._anchored and not self._anchor_released:
+        was_at_bottom = self.scroll_y >= self.max_scroll_y
+        if was_at_bottom:
+            self.anchor()
+            self.scroll_y = self.max_scroll_y
+        elif self._anchored:
             self.scroll_y = self.max_scroll_y
 
         scroll_y = int(self.scroll_y)

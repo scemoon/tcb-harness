@@ -31,7 +31,7 @@ class AgentThought(Vertical, can_focus=True):
 """
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("ctrl+x", "toggle", "Toggle", show=False),
+        Binding("ctrl+x", "toggle", "Toggle", show=False, priority=True),
         Binding("up", "scroll_up", "Scroll Up", show=False),
         Binding("down", "scroll_down", "Scroll Down", show=False),
         Binding("left", "scroll_left", "Scroll Left", show=False),

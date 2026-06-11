@@ -146,7 +146,7 @@ Conversation {
     }
 
     AgentThought > #thought-header {
-        color: $text-secondary;
+        color: $text;
         text-style: bold;
         padding: 0 2;
         height: 1;

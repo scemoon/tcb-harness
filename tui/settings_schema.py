@@ -10,10 +10,11 @@ SCHEMA: list[SchemaDict] = [
             {
                 "key": "theme",
                 "title": "Theme",
-                "help": "One of the builtin Textual themes.",
+                "help": "Follow system or pick a builtin Textual theme.",
                 "type": "choices",
-                "default": "dracula",
+                "default": "system",
                 "choices": [
+                    ("System", "system"),
                     "atom-one-dark",
                     "atom-one-light",
                     "catppuccin-latte",

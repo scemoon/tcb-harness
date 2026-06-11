@@ -252,9 +252,9 @@ class LogScreen(ModalScreen[None]):
         # Entry navigation within current page
         Binding("down,j", "next_entry", "Next entry"),
         Binding("up,k", "prev_entry", "Prev entry"),
-        # Page navigation
-        Binding("pagedown,n", "next_page", "Next page", show=False),
-        Binding("pageup,p", "prev_page", "Prev page", show=False),
+        # Page navigation (log is newest-first, so PageDown = older entries)
+        Binding("pagedown,n", "prev_page", "Prev page", show=False),
+        Binding("pageup,p", "next_page", "Next page", show=False),
         Binding("home,g", "first_page", "First page", show=False),
         Binding("end,G", "last_page", "Last page", show=False),
         # Toggle current
