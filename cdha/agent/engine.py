@@ -1268,10 +1268,11 @@ class AgentEngine:
                             "content": json.dumps({
                                 "success": False,
                                 "error": (
-                                    "Plan required. You must create a task plan using "
-                                    "task_create() before using execution tools. "
-                                    "Break down the request into fine-grained tasks "
-                                    "(1-3 tool calls each) with dependencies."
+                                    "Plan required. You are in plan mode (ReAct: Thought → Action → Observation). "
+                                    "You MUST create a task plan using task_create() before using execution tools. "
+                                    "First Think (analyze/explore), then Act by creating ALL tasks upfront "
+                                    "with dependencies, present the plan for user review, "
+                                    "and only then proceed to execute."
                                 ),
                             }),
                         }

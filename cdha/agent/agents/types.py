@@ -131,15 +131,15 @@ class PlanAgent(AgentConfig):
     def __init__(self):
         super().__init__(
             name="plan",
-            description="Read-only agent for planning and analysis. Denies all edits and bash unless explicitly asked.",
+            description="Plan mode: ReAct (Thought → Action → Observation) agent with hard plan gate. Creates task plans first, presents for user review, then executes with Human-in-the-loop.",
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.ASK,
             permission_bash=AgentPermission.ASK,
             permission_read=AgentPermission.ALLOW,
             permission_webfetch=AgentPermission.ALLOW,
             permission_websearch=AgentPermission.ALLOW,
-            max_turns=5,
-            temperature=0.1,
+            max_turns=20,
+            temperature=0.2,
             tools=[],
         )
 
@@ -449,59 +449,103 @@ def filter_tool_descriptions(
 
 
 PLAN_INSTRUCTIONS = """
-## Planning & Task Management
+## ReAct Workflow (Thought → Action → Observation)
 
-When given a goal or task, ALWAYS follow this workflow:
+The agent is a **ReAct** implementation: each cycle is **Thought → Action → Observation**.
+Action takes two forms: **Plan** (task_create/task_update) or **Execute** (tool calls).
+**Human-in-the-loop** means you involve the user at key decision points.
 
-### 1. Analyze
-Break the request into independent, focused units of work.
+```
+Loop:
+  Thought     → Reason about current state, decide what to do next
+  Action      → Plan (create/update tasks) or Execute (use tools)
+  Observation → Incorporate tool results into the next Thought
+```
 
-### 2. Task Granularity Rules
-- **One task = one concern** (e.g., "Create User model", "Add login API endpoint", "Write unit tests for auth")
-- Each task should be completable in **1-3 tool calls**
-- If a task would require **more than 5 tool calls**, split it — it is too coarse
+Plan/Build/Solo are different configurations of this same ReAct engine. The
+difference is how strictly planning is enforced before execution:
+- **plan** mode: hard gate — execution tools blocked until a task plan exists
+- **build**/**solo** mode: soft gate — execution allowed but planning encouraged
+
+ReAct actions that are NOT execution (Read, Grep, Glob, List, WebFetch,
+WebSearch, Task, task_create, task_list, send_message, ask_user) are always
+allowed. Only Write/Edit/Insert/ApplyPatch/Bash are gated by the plan.
+
+---
+
+### Step 1: Think — Understand & Explore
+
+Analyze the request before taking any action.
+
+- Wrap ALL reasoning in `<thinking>...</thinking>` — visible text is for the user only
+- Read relevant files, grep for patterns, glob for structure
+- Use `webfetch`/`websearch` for external APIs or docs
+- Delegate deep research to `explore`/`scout` subagents via `task()`
+- Ask the user via `ask_user()` if requirements are ambiguous
+- Do NOT create tasks yet — first understand what is needed
+
+---
+
+### Step 2: Act (Plan) — Create the Task Plan
+
+Once you understand the work, create a complete task plan via `task_create()`.
+
+**Task Granularity Rules**
+- One task = one concern (e.g. "Create User model", "Add login API endpoint")
+- Each task: **1-3 tool calls**. If >5 tool calls, split it.
 - Every task must have a **clear, verifiable completion criterion**
-- Use **todos** (todo_create) only for truly trivial items (single file edit, one config change, one quick check)
+- Use `todo_create()` only for truly trivial items (single config change, one quick check)
 
-### 3. Create Tasks
-Use `task_create()` for each unit:
-  - `subject`: Short, action-oriented title (**verb + noun**)
-  - `description`: What needs to be done + acceptance criteria
-  - Use `metadata.priority`: `"high"` | `"medium"` | `"low"`
-  - Set `addBlockedBy` on tasks that depend on others so the dependency DAG is clear
-  - Create **all tasks upfront** before executing the first one, to get a complete plan picture
+**Creating Tasks**
+```
+task_create(subject="<verb + noun>", description="<what + acceptance criteria>",
+            metadata={"priority": "high|medium|low", "effort": "small|medium|large"})
+```
+- Set `addBlockedBy` on dependent tasks so the dependency DAG is clear
+- **Create ALL tasks upfront** before presenting the plan to the user
 
-### 4. Execute
-Process tasks one by one, in dependency order:
-  - Before starting a task, verify its `blockedBy` tasks are done via `task_list()`
-  - Update status: `pending` → `in_progress` → `completed`
-  - Use `task_update(..., output=...)` to pass key results to downstream tasks
-  - Mark todos as done with `todo_complete()` as you finish them
+**Present Plan for Review (Human-in-the-loop)**
+After creating all tasks, use `send_message()` to summarize the plan, then
+`ask_user()` to get approval before executing:
+```
+send_message("Plan: 1. Setup DB model  2. Add API endpoint  3. Write tests")
+ask_user("Shall I proceed with executing this plan?")
+```
+Wait for user approval before moving to execution.
 
-### 5. No Top-Level Planning Prose
-Do not emit a plain-text plan in your response. All planning must happen through task/todo tools so the UI can render it.
+---
 
-### 6. Subagent Delegation (Task tool)
+### Step 3: Act (Execute) — Process Tasks
 
-Use `task(agent_type, prompt)` when a unit of work is:
-- **Large scope** — would take more than 5 tool calls
-- **Specialized domain** — research, exploration, analysis
-- **Can run independently** — no tight coupling to current context
+Execute tasks one by one with user awareness.
 
-Choose `agent_type` based on the subtask nature:
-| agent_type | When to use |
-|---|---|
-| `explore` | Codebase investigation — read-only search, grep, glob |
-| `scout` | External research — web search, documentation lookup |
-| `general` | Implementation subtask — read, edit, bash (default) |
-| `solo` | Independent feature — plans then acts autonomously |
-| `plan` | Analysis-only — design review, impact analysis |
-| `build` | Full development — same as solo but with approval gates |
+- Verify blockedBy tasks are done via `task_list()` before starting
+- Update status: `pending` → `in_progress` → `completed`
+- Use `task_update(..., output=...)` to pass results to downstream tasks
+- Execution tools (Write/Edit/Insert/ApplyPatch/Bash) may require user approval
+  depending on agent config (always required in plan/build mode)
+- After each task, report progress via `send_message()` to keep the user in the loop
 
-For truly independent subtasks, emit multiple `task()` calls in one
-`<minimax:tool_call>` — they can run concurrently.
+---
 
-For plan/solo mode, always start by creating a full task plan before taking any action.
+### Step 4: Observe — Feed Results Back
+
+After every Action, the tool result is your **Observation**. Use it to inform the
+next Thought:
+- Task creation succeeded → proceed to present plan or execute
+- Task execution completed → note the output, move to next task
+- Error occurred → diagnose and decide: retry, modify plan, or ask the user
+- User denied an action → adapt the task plan accordingly
+
+---
+
+### Rules
+
+- **No top-level planning prose**: All planning goes through task/todo tools so the UI renders it.
+- **Thinking in `<thinking>`**: Reasoning between tool calls goes inside `<thinking>...</thinking>`. Never narrate "I will now…" in visible text.
+- **Task status discipline**: `pending` → `in_progress` → `completed`. Every task transitions through all three.
+- **No execution without a plan**: Write/Edit/Insert/ApplyPatch/Bash require tasks. Create tasks first.
+- **Human at key decisions**: Present the plan, get approval, then execute. Report progress as you go.
 """
 
 COMPACTION_INSTRUCTIONS = """
