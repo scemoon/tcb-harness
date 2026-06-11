@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -508,6 +509,86 @@ def _create_engine(cwd: str) -> AgentEngine:
     return AgentEngine(MinimalApp(), project_dir=project_dir)
 
 
+class TextChunker:
+    """对文本流按语义边界分组后发送，减少 ACP 消息频率。
+
+    三种模式:
+    - "words": 每 N 个分隔符（空格/换行/tab）切一次
+    - "line":  每遇到换行切一次
+    - "auto":  自动检测 ``` 代码块：代码块内用 line，外部用 words
+
+    Args:
+        send_fn: 收到完整文本块时的回调
+        mode: "words" | "line" | "auto"
+        words: words 模式下的分隔符计数阈值
+        line_max: line 模式下无换行时的强制截断长度
+        word_max: words 模式下无分隔符时的强制截断长度
+    """
+
+    def __init__(
+        self,
+        send_fn: Callable[[str], None],
+        mode: str = "auto",
+        words: int = 5,
+        line_max: int = 500,
+        word_max: int = 100,
+    ):
+        self._buf = ""
+        self._send = send_fn
+        self._mode = mode
+        self._words = words
+        self._line_max = line_max
+        self._word_max = word_max
+
+    def append(self, text: str) -> None:
+        if not text:
+            return
+        self._buf += text
+        self._process()
+
+    def flush(self) -> None:
+        if self._buf:
+            self._send(self._buf)
+            self._buf = ""
+
+    def _process(self) -> None:
+        while self._buf:
+            in_code = False
+            if self._mode == "auto":
+                in_code = (self._buf.count("```") % 2 == 1)
+
+            if in_code or self._mode == "line":
+                n = self._buf.find("\n")
+                if n >= 0:
+                    n += 1
+                elif len(self._buf) >= self._line_max:
+                    n = self._line_max
+                else:
+                    break
+            else:
+                n = self._buf.find("\n")
+                if n >= 0:
+                    n += 1
+                else:
+                    sep_count = 0
+                    for i, ch in enumerate(self._buf):
+                        if ch in (' ', '\n', '\t'):
+                            sep_count += 1
+                            if sep_count >= self._words:
+                                n = i + 1
+                                break
+                    if n < 0:
+                        if len(self._buf) >= self._word_max:
+                            n = self._word_max
+                        else:
+                            break
+
+            chunk = self._buf[:n]
+            self._buf = self._buf[n:].lstrip()
+            if chunk:
+                self._send(chunk)
+
+
 class CDHACPAdapter:
     """Adapter that translates ACP protocol to CDH AgentEngine."""
 
@@ -793,7 +874,7 @@ class CDHACPAdapter:
                         if filtered_thought.strip():
                             self.send_session_update({
                                 "sessionUpdate": "agent_thought_chunk",
-                                "content": {"type": "text", "text": f"```thinking\n{filtered_thought}\n```"},
+                                "content": {"type": "text", "text": filtered_thought},
                             })
                     elif isinstance(block, MsgToolCall):
                         tool_kind = _kind_for_category(get_tool_category(block.name))
@@ -880,6 +961,8 @@ class CDHACPAdapter:
         # as a plain message so the user still sees *something*.
         _MAX_HELD_BYTES = 64 * 1024
 
+        chunker = getattr(self, "_text_chunker", None)
+        _direct_send = self.send_session_update  # fallback when chunker not configured
         text_buffer = ""
         in_thinking = False
         in_tool_call = False
@@ -896,8 +979,10 @@ class CDHACPAdapter:
             nonlocal text_buffer
             nonlocal in_thinking, in_tool_call
             nonlocal in_minimax_tool_call, in_bare_tool_call, bare_tool_start
+            if chunker:
+                chunker.flush()
             if text_buffer.strip():
-                self.send_session_update({
+                _direct_send({
                     "sessionUpdate": "agent_message_chunk",
                     "content": {"type": "text", "text": text_buffer},
                 })
@@ -909,10 +994,13 @@ class CDHACPAdapter:
         def _emit_message(text: str) -> None:
             if not text:
                 return
-            self.send_session_update({
-                "sessionUpdate": "agent_message_chunk",
-                "content": {"type": "text", "text": text},
-            })
+            if chunker:
+                chunker.append(text)
+            else:
+                _direct_send({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": text},
+                })
 
         def _safe_start(s: str) -> str:
             """Return text before any partial <thinking / <think or [TOOL_CALL] or
@@ -962,9 +1050,17 @@ class CDHACPAdapter:
                     if idx >= 0:
                         thinking = text_buffer[:idx]
                         if thinking:
+                            # Persist to the engine so it lands in the
+                            # context and survives session reload.
+                            on_thinking = getattr(self.agent, "on_thinking", None)
+                            if on_thinking is not None:
+                                try:
+                                    on_thinking(thinking)
+                                except Exception:
+                                    debug_log("on_thinking callback failed", exc_info=True)
                             self.send_session_update({
                                 "sessionUpdate": "agent_thought_chunk",
-                                "content": {"type": "text", "text": f"```thinking\n{thinking}\n```"},
+                                "content": {"type": "text", "text": thinking},
                             })
                         text_buffer = text_buffer[idx + close_len:]
                         in_thinking = False
@@ -1112,15 +1208,42 @@ class CDHACPAdapter:
                 user_content.append(block)
 
         self.agent._cancelled = False
+
+        # Create chunkers for agent_message_chunk and agent_thought_chunk
+        self._text_chunker = TextChunker(
+            send_fn=lambda text: self.send_session_update({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": text},
+            }),
+            mode="auto",
+            words=5,
+        )
+        self._thought_chunker = TextChunker(
+            send_fn=lambda text: self.send_session_update({
+                "sessionUpdate": "agent_thought_chunk",
+                "content": {"type": "text", "text": text},
+            }),
+            mode="auto",
+            words=5,
+        )
         self.agent.on_text_chunk = self._make_stream_callback()
+        # Persist thinking blocks into the engine's context so they survive
+        # session reload (otherwise the TUI only sees them during streaming).
+        self.agent.on_thinking = lambda text: self.agent._pending_thinking_blocks.append(text)
 
         # Track in-progress tool call args for incremental display
         _incremental_args: dict[str, str] = {}
+        _last_sent_len: dict[str, int] = {}
+        _ARGS_THROTTLE_CHARS = 50
 
         def _on_tool_call_delta(call_id: str, name: str, args_delta: str) -> None:
             if args_delta:
                 _incremental_args[call_id] = _incremental_args.get(call_id, "") + args_delta
                 display_args = _incremental_args[call_id]
+                # Throttle: only send when accumulated enough new chars
+                if len(display_args) - _last_sent_len.get(call_id, 0) < _ARGS_THROTTLE_CHARS:
+                    return
+                _last_sent_len[call_id] = len(display_args)
                 try:
                     parsed = json.loads(display_args)
                     display_text = json.dumps(parsed, indent=2, ensure_ascii=False)
@@ -1141,17 +1264,12 @@ class CDHACPAdapter:
         try:
             async for event in self.agent.chat_stream(user_content):
                 if event.type == StreamEventType.TEXT_DELTA:
-                    self.send_session_update({
-                        "sessionUpdate": "agent_message_chunk",
-                        "content": {"type": "text", "text": event.text},
-                    })
+                    self._text_chunker.append(event.text)
                 elif event.type == StreamEventType.THINKING:
-                    thought_text = f"```thinking\n{event.thinking}\n```"
-                    self.send_session_update({
-                        "sessionUpdate": "agent_thought_chunk",
-                        "content": {"type": "text", "text": thought_text},
-                    })
+                    self._thought_chunker.append(event.thinking)
                 elif event.type == StreamEventType.TOOL_CALL_START:
+                    self._text_chunker.flush()
+                    self._thought_chunker.flush()
                     tool_kind = _kind_for_category(event.tool_category)
                     existing = self.tool_calls.get(event.tool_id, {})
                     self.tool_calls[event.tool_id] = {
@@ -1251,6 +1369,8 @@ class CDHACPAdapter:
                         }
                     self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.ERROR:
+                    self._text_chunker.flush()
+                    self._thought_chunker.flush()
                     self.send_session_update({
                         "sessionUpdate": "agent_message_chunk",
                         "content": {"type": "text", "text": f"Error: {event.error_message}"},
@@ -1261,6 +1381,8 @@ class CDHACPAdapter:
                         debug_log("Failed to save session on error", exc_info=True)
                     return {"stopReason": "error", "message": event.error_message}
                 elif event.type == StreamEventType.SUBAGENT_START:
+                    self._text_chunker.flush()
+                    self._thought_chunker.flush()
                     self.send_session_update({
                         "sessionUpdate": "subagent_start",
                         "subagentId": event.subagent_id,
@@ -1284,6 +1406,8 @@ class CDHACPAdapter:
                         "entries": event.plan_entries,
                     })
                 elif event.type == StreamEventType.ASK_USER:
+                    self._text_chunker.flush()
+                    self._thought_chunker.flush()
                     # Build tool call content for the permission request
                     tool_kind = _kind_for_category(get_tool_category(event.ask_action))
                     pending = (self.agent._pending_approval or {}).get("tool_call", {})
@@ -1392,6 +1516,8 @@ class CDHACPAdapter:
             tb = traceback.format_exc()
             debug_log("Unhandled exception in chat_stream:\n%s", tb, exc_info=True)
             print(f"[cdh-agent-acp] ERROR in chat_stream:\n{tb}", file=sys.stderr, flush=True)
+            self._text_chunker.flush()
+            self._thought_chunker.flush()
             self.send_session_update({
                 "sessionUpdate": "agent_message_chunk",
                 "content": {"type": "text", "text": f"Error: internal error"},
@@ -1401,6 +1527,9 @@ class CDHACPAdapter:
             except Exception:
                 pass
             return {"stopReason": "error", "message": "Internal agent error"}
+
+        self._text_chunker.flush()
+        self._thought_chunker.flush()
 
         try:
             self.agent.save_session()

@@ -35,6 +35,12 @@ class Thinking(AgentMessage):
 
 
 @dataclass
+class SessionReplay(AgentMessage):
+    """Marks the start/end of a session replay (loading historical messages)."""
+    active: bool
+
+
+@dataclass
 class UpdateStatusLine(AgentMessage):
     status_line: str
 

@@ -139,38 +139,44 @@ Conversation {
     }
 
     AgentThought {
-        background: $primary-muted 10%;
-        color: $text-disabled;        
-        min-height: 1;        
-        margin: 1 1 1 0;              
-        padding:  0 1 0 1;
-        border-left: $secondary 60%;
-        overflow-x: auto;
-        scrollbar-size-horizontal: 0;
-        layout: stream;
+        min-height: 1;
+        margin: 1 1 1 0;
+        padding: 0;
+    }
 
-        MarkdownBlock:last-child {
-            margin-bottom: 0;
-        }
-       
-        &.-loading {            
-            background: transparent !important;
-            padding: 0;
-            margin: 0;            
-        }
-        overflow-y: auto;
-        scrollbar-visibility: hidden;        
+    AgentThought > #thought-header {
+        color: $text;
+        text-style: bold;
+        padding: 0 2;
+        height: 1;
+        background: $primary-muted 50%;
+        border-left: tall $secondary;
+    }
 
-        &.-maximized {
-            margin: 1 2;
-            scrollbar-visibility: visible;
-            &>* {                
-                padding-right: 1;
-            }
-        }
-        &:focus-within {
-            border-left: $secondary;
-        }
+    AgentThought > #thought-header:hover {
+        background: $primary-muted 70%;
+    }
+
+    AgentThought > #thought-content {
+        color: $text-disabled;
+        margin: 0;
+        padding: 0 1 0 2;
+        border-left: tall $secondary 40%;
+        height: auto;
+        min-height: 1;
+    }
+
+    AgentThought:focus-within > #thought-header {
+        color: $secondary;
+        background: $primary-muted 80%;
+    }
+
+    AgentThought.-maximized {
+        margin: 1 2;
+    }
+
+    AgentThought.-maximized > #thought-content {
+        scrollbar-visibility: visible;
     }
 
     ToolCall {    

@@ -478,7 +478,9 @@ class AgentEngine:
         self.on_event: ToolEventHandler | None = None
         self.on_text_chunk: Callable[[str], None] | None = None
         self.on_tool_call_delta: Callable[[str, str, str], None] | None = None
+        self.on_thinking: Callable[[str], None] | None = None
         self._streaming_used: bool = False
+        self._pending_thinking_blocks: list[str] = []
 
         # Cancellation support
         self._cancelled: bool = False
@@ -1025,6 +1027,8 @@ class AgentEngine:
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                 return
 
+            self._pending_thinking_blocks = []
+
             self.context.config.model = self.app.current_model
             if self.context.should_compact():
                 level = self.context.compact()
@@ -1136,12 +1140,18 @@ class AgentEngine:
             if turn_usage:
                 self.total_tokens += turn_usage.get("total_tokens", 0)
 
-            # Extract thinking blocks from response
-            thinking_blocks = []
+            # Extract thinking blocks from response. In the streaming path
+            # the adapter's _make_stream_callback already stripped <thinking>
+            # markers from the text and routed them through self.on_thinking
+            # (which appends to _pending_thinking_blocks). The non-streaming
+            # fallback still has the markers inline, so we parse them here.
+            thinking_blocks = list(self._pending_thinking_blocks)
             clean_text = response_text
             for match in THINKING_RE.finditer(response_text):
-                thinking_blocks.append(match.group(1))
-            if thinking_blocks:
+                tb = match.group(1)
+                if tb not in thinking_blocks:
+                    thinking_blocks.append(tb)
+            if thinking_blocks or self._pending_thinking_blocks:
                 clean_text = THINKING_RE.sub('', response_text).strip()
                 if not self._streaming_used:
                     for tb in thinking_blocks:
@@ -1163,9 +1173,15 @@ class AgentEngine:
                 self._streaming_used,
             )
 
-            # Add assistant response to context with proper content blocks
-            if tool_uses:
-                assistant_blocks: list = [{"type": "text", "text": clean_text}] if clean_text else []
+            # Add assistant response to context with proper content blocks.
+            # Persist thinking blocks so they survive session reload — the
+            # TUI replays them as collapsible Thought widgets.
+            if tool_uses or thinking_blocks:
+                assistant_blocks: list = []
+                for tb in thinking_blocks:
+                    assistant_blocks.append({"type": "thinking", "thinking": tb})
+                if clean_text:
+                    assistant_blocks.append({"type": "text", "text": clean_text})
                 for tu in tool_uses:
                     assistant_blocks.append({
                         "type": "tool_use",

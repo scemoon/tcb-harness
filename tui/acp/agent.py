@@ -744,7 +744,11 @@ class Agent(AgentBase):
 
         with self.request():
             session_load_response = api.session_load(cwd, [], self.session_id)
-        response = await session_load_response.wait()
+        self.post_message(messages.SessionReplay(active=True))
+        try:
+            response = await session_load_response.wait()
+        finally:
+            self.post_message(messages.SessionReplay(active=False))
 
         if (modes := response.get("modes", None)) is not None:
             current_mode = modes["currentModeId"]

@@ -375,6 +375,7 @@ class Conversation(containers.Vertical):
         self._loading: Loading | None = None
         self._agent_response: AgentResponse | None = None
         self._agent_thought: AgentThought | None = None
+        self._replay: bool = False
         self._last_escape_time: float = monotonic()
         self._agent_data = agent
         self._agent_session_id = agent_session_id
@@ -681,14 +682,20 @@ class Conversation(containers.Vertical):
                 await self._agent_response.append_fragment(fragment)
             return self._agent_response
 
-    async def post_agent_thought(self, thought_fragment: str) -> AgentThought | None:
+    def _complete_thought(self) -> None:
+        """Mark the current thought widget as completed and drop the reference."""
+        if self._agent_thought is not None:
+            self._agent_thought.mark_completed()
+            self._agent_thought = None
+
+    async def post_agent_thought(self, thought_fragment: str, *, replay: bool = False) -> AgentThought | None:
         """Get or create an agent thought widget."""
         from tui.widgets.agent_thought import AgentThought
 
         async with self._post_lock:
             if self._agent_thought is None:
                 if thought_fragment.strip():
-                    self._agent_thought = AgentThought(thought_fragment)
+                    self._agent_thought = AgentThought(thought_fragment, replay=replay)
                     await self.post(self._agent_thought, new_block=False)
             else:
                 await self._agent_thought.append_fragment(thought_fragment)
@@ -908,12 +915,10 @@ class Conversation(containers.Vertical):
             stop_reason: The stop reason returned from the Agent, or `None`.
         """
         self.turn = "client"
-        if self._agent_thought is not None and self._agent_thought.loading:
-            await self._agent_thought.remove()
         if self._loading is not None:
             await self._loading.remove()
         self._agent_response = None
-        self._agent_thought = None
+        self._complete_thought()
 
         if self._directory_changed or not self.is_watching_directory:
             self._directory_changed = False
@@ -1002,14 +1007,14 @@ class Conversation(containers.Vertical):
     @on(acp_messages.Update)
     async def on_acp_agent_message(self, message: acp_messages.Update):
         message.stop()
-        self._agent_thought = None
+        self._complete_thought()
         if self._msg_log is not None:
             self._msg_log.agent_output(message.text, self._turn_count)
         await self.post_agent_response(message.text)
 
     @on(acp_messages.UserMessage)
     async def on_acp_user_message(self, message: acp_messages.UserMessage):
-        self._agent_thought = None
+        self._complete_thought()
         self._agent_response = None
         message.stop()
         await self.post(UserInput(message.text))
@@ -1019,7 +1024,18 @@ class Conversation(containers.Vertical):
         message.stop()
         if self._msg_log is not None:
             self._msg_log.agent_thought(message.text, self._turn_count)
-        await self.post_agent_thought(message.text)
+        await self.post_agent_thought(message.text, replay=self._replay)
+
+    @on(acp_messages.SessionReplay)
+    def on_acp_session_replay(self, message: acp_messages.SessionReplay):
+        """Mark a session replay boundary so thought chunks are shown as completed."""
+        message.stop()
+        was_replay = self._replay
+        self._replay = message.active
+        # When the replay just ended, complete any pending thought so the
+        # header transitions to "- Thought" instead of staying at "⏳".
+        if was_replay and not message.active:
+            self._complete_thought()
 
     @on(acp_messages.RequestPermission)
     async def on_acp_request_permission(self, message: acp_messages.RequestPermission):
@@ -1034,7 +1050,7 @@ class Conversation(containers.Vertical):
             message.tool_call,
         )
         self._agent_response = None
-        self._agent_thought = None
+        self._complete_thought()
 
     @on(acp_messages.Plan)
     async def on_acp_plan(self, message: acp_messages.Plan):
@@ -1111,7 +1127,7 @@ class Conversation(containers.Vertical):
                 self._tool_call_failed += 1
 
         if status == "completed":
-            self._agent_thought = None
+            self._complete_thought()
             self._agent_response = None
 
         try:
@@ -1655,7 +1671,7 @@ class Conversation(containers.Vertical):
 
     def new_block(self) -> None:
         """Start a new block for agent response."""
-        self._agent_thought = None
+        self._complete_thought()
         self._agent_response = None
 
     async def post[WidgetType: Widget](
