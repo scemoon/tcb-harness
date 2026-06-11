@@ -156,13 +156,13 @@ class AgentThought(Vertical, can_focus=True):
         self.query_one(Markdown).scroll_end()
 
     def action_page_up(self) -> None:
-        self.query_one(Markdown).page_up()
+        self.query_one(Markdown).scroll_page_up()
 
     def action_page_down(self) -> None:
-        self.query_one(Markdown).page_down()
+        self.query_one(Markdown).scroll_page_down()
 
     def action_page_left(self) -> None:
-        self.query_one(Markdown).page_left()
+        self.query_one(Markdown).scroll_page_left()
 
     def action_page_right(self) -> None:
-        self.query_one(Markdown).page_right()
+        self.query_one(Markdown).scroll_page_right()

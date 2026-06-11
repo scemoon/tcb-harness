@@ -408,6 +408,10 @@ class RequestPermissionResponse(TypedDict, total=False, extra_items=Any):
     _meta: dict
     outcome: Required[RequestPermissionOutcome]
 
+class AskUserResponse(TypedDict, total=False, extra_items=Any):
+    answer: str
+    cancelled: bool
+
 
 # https://agentclientprotocol.com/protocol/schema#createterminalresponse
 class CreateTerminalResponse(TypedDict, total=False, extra_items=Any):

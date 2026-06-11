@@ -1310,6 +1310,20 @@ class AgentEngine:
                     ))
                     continue
 
+                # Handle AskUser — trigger user interaction dialog, don't add to LLM context yet
+                if tu["name"] == "AskUser":
+                    parsed = json.loads(result_str) if result_str else {}
+                    question = parsed.get("question", "")
+                    self._pending_approval = {"tool_call": tu, "category": category, "ask_user": True}
+                    yield StreamEvent.ask_user(
+                        call_id=tu["id"],
+                        action="AskUser",
+                        question=question,
+                        context=result_str,
+                        action_type="ask_user",
+                    )
+                    continue
+
                 # Detect ASK permission denial
                 requires_approval = False
                 try:
@@ -1387,8 +1401,10 @@ class AgentEngine:
         """Check if there's a pending approval request from ASK permission."""
         return self._pending_approval is not None
 
-    async def resolve_approval(self, approved: bool) -> dict | None:
+    async def resolve_approval(self, approved: bool, answer: str = "") -> dict | None:
         """Execute the pending action if approved, or return denial.
+
+        For AskUser, ``answer`` is the user's free-text response.
 
         Returns the tool result dict, or None if no pending approval.
         """
@@ -1397,7 +1413,24 @@ class AgentEngine:
             return None
         
         tc = self._pending_approval["tool_call"]
+        is_ask_user = self._pending_approval.get("ask_user", False)
         self._pending_approval = None
+
+        # Handle AskUser — return user's answer as tool result
+        if is_ask_user:
+            if not approved:
+                return {
+                    "tool_use_id": tc["id"],
+                    "content": json.dumps({"answer": "", "error": "User cancelled"}),
+                    "is_error": True,
+                    "category": tc.get("category", "unknown"),
+                }
+            return {
+                "tool_use_id": tc["id"],
+                "content": json.dumps({"answer": answer}),
+                "is_error": False,
+                "category": tc.get("category", "unknown"),
+            }
         
         if not approved:
             return {

@@ -66,6 +66,13 @@ class RequestPermission(AgentMessage):
 
 
 @dataclass
+class AskUser(AgentMessage):
+    question: str
+    context: str
+    result_future: Future[dict]
+
+
+@dataclass
 class Plan(AgentMessage):
     entries: list[protocol.PlanEntry]
 

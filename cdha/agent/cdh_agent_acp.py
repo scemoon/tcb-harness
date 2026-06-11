@@ -1381,6 +1381,10 @@ class CDHACPAdapter:
                             **update,
                         }
                     self.send_session_update(self.tool_calls[event.tool_id])
+                    try:
+                        self.agent.save_session()
+                    except Exception:
+                        debug_log("Failed to save session after tool result", exc_info=True)
                 elif event.type == StreamEventType.ERROR:
                     self._text_chunker.flush()
                     self._thought_chunker.flush()
@@ -1421,6 +1425,47 @@ class CDHACPAdapter:
                 elif event.type == StreamEventType.ASK_USER:
                     self._text_chunker.flush()
                     self._thought_chunker.flush()
+
+                    # Handle AskUser tool — show text input dialog via session/ask_user RPC
+                    if event.ask_action == "AskUser":
+                        try:
+                            ask_response = await self.send_request("session/ask_user", {
+                                "sessionId": session_id,
+                                "question": event.ask_question,
+                                "context": event.ask_context or "",
+                            })
+                            answer = ask_response.get("answer", "")
+                            cancelled = ask_response.get("cancelled", False)
+                        except Exception:
+                            answer = ""
+                            cancelled = True
+                        result = await self.agent.resolve_approval(
+                            approved=not cancelled, answer=answer,
+                        )
+                        if result:
+                            tid = result.get("tool_use_id", "") or event.tool_id
+                            rstr = result.get("content", "") or ""
+                            ierr = result.get("is_error", False)
+                            self.agent.context.add_message(
+                                "tool",
+                                [{"type": "tool_result", "tool_use_id": tid,
+                                  "content": rstr, "is_error": ierr}],
+                                name=tid,
+                            )
+                            # Update TUI tool call status
+                            status = "failed" if ierr else "completed"
+                            content_block = [{
+                                "type": "content",
+                                "content": {"type": "text", "text": rstr},
+                            }] if rstr else []
+                            self.send_session_update({
+                                "sessionUpdate": "tool_call_update",
+                                "toolCallId": tid,
+                                "status": status,
+                                "content": content_block,
+                            })
+                        continue
+
                     # Build tool call content for the permission request
                     tool_kind = _kind_for_category(get_tool_category(event.ask_action))
                     pending = (self.agent._pending_approval or {}).get("tool_call", {})
@@ -1596,6 +1641,10 @@ class CDHACPAdapter:
         """Cancel current session."""
         if self.agent:
             await self.agent.cancel()
+            try:
+                self.agent.save_session()
+            except Exception:
+                debug_log("Failed to save session on cancel", exc_info=True)
         return {}
 
     async def session_set_mode(self, session_id: str, mode_id: str):

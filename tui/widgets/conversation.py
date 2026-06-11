@@ -1052,6 +1052,18 @@ class Conversation(containers.Vertical):
         self._agent_response = None
         self._complete_thought()
 
+    @on(acp_messages.AskUser)
+    async def on_acp_ask_user(self, message: acp_messages.AskUser):
+        message.stop()
+        from tui.screens.ask_user import AskUserScreen
+
+        screen = AskUserScreen(
+            question=message.question,
+            context=message.context,
+        )
+        result = await self.app.push_screen_wait(screen, mode=self.screen.id)
+        message.result_future.set_result(result)
+
     @on(acp_messages.Plan)
     async def on_acp_plan(self, message: acp_messages.Plan):
         from tui.widgets.plan import Plan

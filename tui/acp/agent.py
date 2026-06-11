@@ -324,6 +324,34 @@ class Agent(AgentBase):
         }
         return result
 
+    @jsonrpc.expose("session/ask_user")
+    async def rpc_ask_user(
+        self,
+        sessionId: str,
+        question: str,
+        context: str = "",
+        _meta: dict | None = None,
+    ) -> protocol.AskUserResponse:
+        """Agent asks the user a question and waits for a text response.
+
+        Args:
+            sessionId: The session ID.
+            question: The question to show the user.
+            context: Optional additional context.
+            _meta: Optional meta information.
+
+        Returns:
+            The user's answer and whether they cancelled.
+        """
+        result_future: asyncio.Future[dict] = asyncio.Future()
+        self.post_message(messages.AskUser(question, context, result_future))
+        await result_future
+        result = result_future.result()
+        return {
+            "answer": result.get("answer", ""),
+            "cancelled": result.get("cancelled", False),
+        }
+
     @jsonrpc.expose("fs/read_text_file")
     def rpc_read_text_file(
         self,
