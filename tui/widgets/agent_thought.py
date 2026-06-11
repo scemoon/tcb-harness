@@ -16,7 +16,7 @@ class AgentThought(Vertical, can_focus=True):
     """The agent's 'thoughts' with collapsible header.
 
     During streaming: header shows "⏳ thinking:", content visible.
-    After completion: header shows "- Thought" (expanded) or "+ Thought" (collapsed).
+    After completion: header shows "- Thought" (expanded by default).
     Ctrl+X or click on header toggles expand/collapse.
 
     Content is rendered as Markdown (bold, italic, code, lists, etc.).
@@ -93,9 +93,7 @@ class AgentThought(Vertical, can_focus=True):
         if self._completed:
             return
         self._completed = True
-        self._collapsed = True
         self._update_header()
-        self.query_one("#thought-content", Markdown).display = False
 
     def action_toggle(self) -> None:
         self._collapsed = not self._collapsed
