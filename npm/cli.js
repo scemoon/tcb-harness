@@ -3,7 +3,6 @@ const { spawn, execSync } = require('child_process');
 const path = require('path');
 
 const PKG_DIR = __dirname;
-const IS_GLOBAL = PKG_DIR.includes('node_modules');
 const CDH_PYTHON_DIR = path.join(require('os').homedir(), '.cdh', 'python');
 
 function exec(cmd, opts = {}) {
@@ -15,7 +14,8 @@ function exec(cmd, opts = {}) {
 }
 
 function checkPython() {
-  const r = exec('python3 -c "import sys; print(f\\"{sys.version_info.major}.{sys.version_info.minor}\\")"');
+  const script = 'import sys; v=sys.version_info; print(f"{v.major}.{v.minor}")';
+  const r = exec(`python3 -c "${script}"`);
   if (!r.ok) return { ok: false, version: null, pythonCmd: null };
   const [major, minor] = r.out.split('.').map(Number);
   return {
@@ -31,28 +31,21 @@ function checkUv() {
 }
 
 function checkCdhInstalled(pythonCmd) {
-  return exec(`${pythonCmd} -c "import cdh; import cdha; import tui"`).ok;
+  return exec(`${pythonCmd} -m pip show cloud-dev-harness 2>/dev/null`).ok;
 }
 
-function setupUvVenv() {
-  console.log('cdh: Setting up Python environment with uv...');
-  // Create dedicated Python env for cdh
-  const venvDir = CDH_PYTHON_DIR;
-  exec(`uv venv "${venvDir}" --python 3.12`);
-  exec(`"${venvDir}/bin/python" -m pip install pip --upgrade`);
-  return `${venvDir}/bin/python`;
-}
-
-function installWithUv(pythonCmd) {
-  const venvPython = setupUvVenv();
-  console.log('cdh: Installing cdh with uv...');
+function installWithUv() {
+  console.log('cdh: Creating Python environment with uv...');
+  exec(`uv venv "${CDH_PYTHON_DIR}"`);
+  const venvPython = path.join(CDH_PYTHON_DIR, 'bin', 'python');
+  console.log('cdh: Installing cloud-dev-harness...');
   exec(`"${venvPython}" -m pip install -e "${PKG_DIR}"`);
   return venvPython;
 }
 
 function installWithSystemPython(pythonCmd) {
-  console.log('cdh: Installing cdh...');
-  exec(`${pythonCmd} -m pip install -e "${PKG_DIR}"`);
+  console.log('cdh: Installing cloud-dev-harness...');
+  exec(`${pythonCmd} -m pip install "${PKG_DIR}"`);
   return pythonCmd;
 }
 
@@ -61,26 +54,24 @@ const isPostinstall = process.argv.length <= 2;
 const py = checkPython();
 
 if (!py.ok) {
-  console.error(`cdh: Python ${py.version} found, but Python 3.10+ is required.`);
-  
+  console.error(`cdh: Python ${py.version || 'not found'}, version 3.10+ is required.`);
+
   if (checkUv()) {
-    console.log('cdh: Using uv to set up Python 3.12 environment...');
     const venvPython = installWithUv();
     if (isPostinstall) {
       console.log('cdh: Installed. Add to PATH: export PATH="$HOME/.cdh/python/bin:$PATH"');
       process.exit(0);
     }
-    const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
-    spawn(venvPython, ['-m', 'cdh', ...args], { stdio: 'inherit' }).on('exit', process.exit);
+    spawn(venvPython, ['-m', 'cdh', ...process.argv.slice(2)], { stdio: 'inherit' })
+      .on('exit', process.exit);
     return;
   }
-  
-  console.error('cdh: Please upgrade Python to 3.10+ or install uv: https://github.com/astral-sh/uv');
-  if (isPostinstall) process.exit(0);
-  process.exit(1);
+
+  console.error('cdh: Install Python 3.10+ or uv (https://github.com/astral-sh/uv).');
+  process.exit(isPostinstall ? 0 : 1);
 }
 
-// Python is OK, check if cdh is installed
+// Python OK — install if missing
 if (!checkCdhInstalled(py.pythonCmd)) {
   installWithSystemPython(py.pythonCmd);
 }

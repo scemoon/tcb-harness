@@ -1,0 +1,3 @@
+{
+  "plugin": ["./plugin/cdh-ai-dlc.ts"]
+}

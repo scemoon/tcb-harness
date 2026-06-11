@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
 PKG_DIR="$SCRIPT_DIR/npm_pkg"
 PKG_FILE="$PKG_DIR/cdh-*.tgz"
-VERSION="$(node -e "console.log(require('./package.json').version)")"
+VERSION="$(node -e "console.log(require('$SCRIPT_DIR/package.json').version)")"
 
 usage() {
   echo "Usage: $0 [build|publish|clean]"
@@ -48,13 +48,11 @@ fi
 mkdir -p "$BUILD_DIR/package" "$PKG_DIR"
 cp "$SCRIPT_DIR/package.json" "$BUILD_DIR/package/"
 cp "$SCRIPT_DIR/cli.js" "$BUILD_DIR/package/"
-cp -r "$REPO_ROOT/cdh" "$BUILD_DIR/package/"
-cp -r "$REPO_ROOT/cdha" "$BUILD_DIR/package/"
-cp -r "$REPO_ROOT/tui" "$BUILD_DIR/package/"
-cp -r "$REPO_ROOT/cloud-spec-skill" "$BUILD_DIR/package/"
-if [ -d "$REPO_ROOT/cloud_dev_harness.egg-info" ]; then
-  cp -r "$REPO_ROOT/cloud_dev_harness.egg-info" "$BUILD_DIR/package/"
-fi
+rsync -a --no-implied-dirs "$REPO_ROOT/cdh/" "$BUILD_DIR/package/cdh/"
+rsync -a --no-implied-dirs "$REPO_ROOT/cdha/" "$BUILD_DIR/package/cdha/"
+rsync -a --no-implied-dirs "$REPO_ROOT/tui/" "$BUILD_DIR/package/tui/"
+rsync -a --no-implied-dirs --exclude='.agents' --exclude='.claude' "$REPO_ROOT/ai-dlc-skill/" "$BUILD_DIR/package/ai-dlc-skill/"
+cp "$REPO_ROOT/pyproject.toml" "$BUILD_DIR/package/"
 
 cat > "$BUILD_DIR/package/package.json" << EOF
 {
@@ -77,11 +75,11 @@ cat > "$BUILD_DIR/package/package.json" << EOF
   "files": [
     "cli.js",
     "package.json",
+    "pyproject.toml",
     "cdh",
     "cdha",
     "tui",
-    "cloud-spec-skill",
-    "cloud_dev_harness.egg-info"
+    "ai-dlc-skill"
   ],
   "scripts": {
     "postinstall": "node cli.js"

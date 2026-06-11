@@ -14,7 +14,11 @@ coverage/
 build/
 dist/
 .npmignore
-README.md
-LICENSE
 install.sh
 start.sh
+.gitkeep
+.DS_Store
+.cdh/
+
+# Keep these for npm publish
+# README.md, LICENSE

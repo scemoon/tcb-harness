@@ -8,7 +8,7 @@ AI-powered terminal-based development framework for cloud-native applications, f
 - **8 LLM Providers** — MiniMaxi (default), OpenAI, Anthropic, DeepSeek, MiniMax, GLM (Zhipu), Ollama (local) with auto-model selection by task complexity
 - **Sandboxed Execution** — Bubblewrap/Docker container isolation with resource limits (CPU, memory, processes, network)
 - **MCP Client** — Connect to external Model Context Protocol servers (SSE and stdio transports)
-- **Skill System** — Domain-specific knowledge injection with multi-path discovery (`.opencode/skills/`, `.claude/skills/`, `.agents/skills/`)
+- **Skill System** — Domain-specific knowledge injection with multi-path discovery (`.opencode/skills/`, `.claude/skills/`, `.agents/skills/`) and opencode plugin bridge for all CLIs
 - **Session Management** — SQLite-backed persistence with create/load/resume/delete/export
 - **Multi-Mode Agent** — Build (full tools), Plan (read-only), Solo (independent) modes with hidden system agents (compaction, title, summary)
 - **Subagents** — General, Explore (read-only codebase), Scout (web research)
@@ -177,10 +177,26 @@ Environment variables are interpolated with `${VAR}` syntax in config values.
 │   ├── screens/          # Main, store, settings, sessions screens
 │   ├── widgets/          # TUI widgets
 │   └── acp/              # ACP protocol implementation
+├── ai-dlc-skill/          # AI-DLC lifecycle skill (①Understand→②Plan→③Verify→④Deliver)
+│   ├── lifecycle/        # Phase definitions (understand, plan, verify, deliver)
+│   ├── practices/        # SDD, BDD, TDD practice guides
+│   ├── rules/            # Per-phase rule sets (UND, PLN, VRF, INT, STK, DLV, SEC)
+│   ├── templates/        # Project scaffolding + artifacts
+│   ├── workflows/        # ai-dlc pipeline workflow YAML
+│   ├── providers/        # Cloud platform configs (TCB, Aliyun)
+│   ├── skill.yaml        # Skill metadata
+│   ├── SKILL.md           # Entry point with frontmatter (multi-CLI compatible)
+│   ├── .claude/skills/   # Claude Code symlink bridge
+│   └── .agents/skills/   # OpenAI codex / Cursor / Continue.dev symlink bridge
 ├── cloud-spec-skill/     # CloudSpec specification framework
 │   ├── rules/            # Development standards
 │   ├── providers/        # Cloud abstractions (TCB, Aliyun, AWS)
 │   └── templates/        # Project scaffolding
+├── .opencode/              # opencode CLI integration
+│   ├── config.json        # Plugin config
+│   ├── plugin/            # CDH ai-dlc plugin (system prompt injection)
+│   ├── skills/            # Skill symlinks (→ ai-dlc-skill/)
+│   └── package.json       # @opencode-ai/plugin dependency
 ├── tests/                # pytest test suite
 ├── install.sh            # GitHub release installer
 └── pyproject.toml
@@ -254,15 +270,45 @@ The `lsp` tool supports:
 
 ## Skills
 
-Skills are markdown-based instruction sets with YAML frontmatter.
+Skills are markdown-based instruction sets with YAML frontmatter, injected into the agent's system prompt at startup.
+
+### Multi-CLI Discovery Architecture
+
+CDH uses a **symlink-based broadcast** + **plugin bridge** approach to make skills work uniformly across all CLIs:
+
+```
+ai-dlc-skill/SKILL.md  ←  single source of truth (YAML frontmatter + markdown body)
+         │
+         ├── .opencode/skills/ai-dlc-skill → ../..        (opencode auto-load)
+         ├── .claude/skills/ai-dlc-skill   → ../..        (Claude Code auto-load)
+         ├── .agents/skills/ai-dlc-skill   → ../..        (OpenAI Codex / Cursor / Continue.dev)
+         └── cdha/builtin_skills/ai-dlc    → ../../ai-dlc-skill  (CDH built-in)
+
+.opencode/plugin/cdh-ai-dlc.ts   ←  opencode system.transform (force-inject, optional)
+```
 
 ### Discovery Paths
 
 CDH searches for skills in:
 - `~/.cdh/skills/<name>/SKILL.md` — User skills
+- `builtin_skills/` — Skills bundled with CDH (ai-dlc, git, shell)
 - `.opencode/skills/<name>/SKILL.md` — OpenCode compatible
-- `.claude/skills/<name>/SKILL.md` — Claude compatible
-- `.agents/skills/<name>/SKILL.md` — Agent compatible
+- `.claude/skills/<name>/SKILL.md` — Claude Code compatible
+- `.agents/skills/<name>/SKILL.md` — Agent protocol compatible (OpenAI Codex, Cursor, Continue.dev)
+- Project root directories containing `SKILL.md` — Project-level skills
+
+### Built-in Skill: ai-dlc-skill
+
+The `ai-dlc-skill` implements the **AI-Driven Development Lifecycle (AI-DLC)** with four phases:
+
+| Phase | Lifecycle Doc | Artifacts |
+|-------|---------------|-----------|
+| ① Understand | `lifecycle/understand.md` | spec-delta.md, `.feature` files, contracts/ specs |
+| ② Plan | `lifecycle/plan.md` | design.md, task-list.md |
+| ③ Verify | `lifecycle/verify.md` | tests, implementation, contract tests |
+| ④ Deliver | `lifecycle/deliver.md` | stack deploy, e2e reports, BVT |
+
+When you run `cdh`, `opencode`, `claude`, or `openai codex` in this repo, the agent automatically loads ai-dlc-skill and follows the 4-phase workflow — no manual activation needed.
 
 ### Skill Frontmatter
 
@@ -271,7 +317,8 @@ CDH searches for skills in:
 name: git-release
 description: Create consistent releases and changelogs
 license: MIT
-compatibility: opencode
+compatibility:
+  opencode: ">=1.15"
 metadata:
   audience: maintainers
   workflow: github

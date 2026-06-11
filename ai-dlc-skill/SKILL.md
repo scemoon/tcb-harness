@@ -1,284 +1,78 @@
+---
+name: ai-dlc-skill
+description: |
+  AI-Driven Development Lifecycle for monorepo multi-component stacks
+  (native + desktop + web + backend + wxa + mya + tta).
+  ① Understand (SDD+BDD) → ② Plan (SDD+TDD) → ③ Verify (BDD+TDD) → ④ Deliver (SDD+Cloud).
+  Cross-component INT-FR contract discipline. Default cloud: TCB.
+allowed_tools:
+  - read
+  - grep
+  - glob
+  - bash
+  - edit
+  - write
+  - webfetch
+triggers:
+  - ai-dlc
+  - "ai dlc"
+  - lifecycle
+  - understand
+  - plan
+  - verify
+  - deliver
+  - spec-delta
+  - EARS
+  - BDD
+  - feature file
+  - monorepo
+  - INT-FR
+phases: [understand, plan, verify, deliver]
+compatibility:
+  cdh: ">=1.4"
+  opencode: ">=1.15"
+  claude-code: ">=1.0"
+  openai-codex: ">=1.0"
+license: Apache-2.0
+metadata:
+  version: "3.0.0"
+  stack_topology: monorepo
+  fr_namespaces: [NATIVE, DESKTOP, WEB, BE, WXA, MYA, TTA, INT]
+---
+
 # AI-DLC Development Skill
 
-This skill implements the **AI-Driven Development Lifecycle (AI-DLC)** with **SDD/BDD/TDD** practices, designed for **monorepo multi-component stacks** (native + desktop + web + backend + wxa + mya + tta) and a first-class **cross-component Integration** discipline.
+AI-Driven Development Lifecycle for monorepo multi-component stacks.
 
 ## Core Cycle
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  ① Understand (SDD + BDD)                                              │
-│  Intent → Spec Delta (EARS, FR namespace) → BDD Feature Files            │
-│  → Gate: human review + scenarios ≥3 per FR                             │
-├──────────────────────────────────────────────────────────────────────────┤
-│  ② Plan (SDD + TDD)                                                    │
-│  Design Doc (per-component + integration) → Task DAG → Test Plan        │
-│  → Gate: human review + dependencies explicit + contract refs           │
-├──────────────────────────────────────────────────────────────────────────┤
-│  ③ Verify (BDD + TDD)                                                  │
-│  For each BDD scenario: Red → Green → Refactor                          │
-│  unit + integration + e2e + cross-stack                                 │
-│  → Gate: cov≥80% + scenarios 100% + 0 vulns + contract tests green      │
-├──────────────────────────────────────────────────────────────────────────┤
-│  ④ Deliver (SDD + Cloud)                                               │
-│  Unified Stack Preview → BDD e2e + Cross-stack e2e → Human Approve       │
-│  → Production → BVT (stack-level)                                       │
-│  → Gate: BVT pass + all e2e pass + contract diff clean                  │
-└──────────────────────────────────────────────────────────────────────────┘
+① Understand (SDD+BDD)   Intent → Spec Delta → BDD Feature Files
+② Plan (SDD+TDD)         Design Doc → Task DAG → Test Plan
+③ Verify (BDD+TDD)       Red → Green → Refactor per scenario
+④ Deliver (SDD+Cloud)    Stack Preview → e2e → Production + BVT
 ```
 
-## Stack Topology
+## Components
 
-The skill assumes a **monorepo** with seven component kinds and a cross-cutting layer:
+| Prefix | Component | Directory | FR Namespace |
+|--------|-----------|-----------|--------------|
+| NATIVE | Mobile | `apps/native/` | `NATIVE-FR-NNN` |
+| DESKTOP | Desktop | `apps/desktop/` | `DESKTOP-FR-NNN` |
+| WEB | Browser | `apps/web/` | `WEB-FR-NNN` |
+| BE | Service | `apps/backend/` | `BE-FR-NNN` |
+| WXA | WeChat Mini | `apps/wxa/` | `WXA-FR-NNN` |
+| MYA | Alipay Mini | `apps/mya/` | `MYA-FR-NNN` |
+| TTA | TikTok Mini | `apps/tta/` | `TTA-FR-NNN` |
+| INT | Contracts | `contracts/`, `packages/shared/` | `INT-FR-NNN` |
 
-| Prefix | Component | Directory | FR Namespace | Typical Tech |
-|--------|-----------|-----------|--------------|--------------|
-| NATIVE | Native mobile client | `apps/native/` | `NATIVE-FR-NNN` | React Native / Flutter |
-| DESKTOP | Desktop client | `apps/desktop/` | `DESKTOP-FR-NNN` | Electron / Tauri |
-| WEB | Browser frontend | `apps/web/` | `WEB-FR-NNN` | React / Vue / Svelte |
-| BE  | Server / service | `apps/backend/` | `BE-FR-NNN` | Python / Node / Go |
-| WXA | WeChat Mini Program | `apps/wxa/` | `WXA-FR-NNN` | Miniprogram |
-| MYA | Mini Program (e.g. Alipay) | `apps/mya/` | `MYA-FR-NNN` | Miniprogram |
-| TTA | TikTok Mini Program | `apps/tta/` | `TTA-FR-NNN` | Miniprogram |
-| INT | Cross-cutting contracts | `contracts/`, `packages/shared/` | `INT-FR-NNN` | OpenAPI / AsyncAPI / generated types |
+## Lifecycle
 
-A feature that touches more than one component **must** declare:
+| Phase | Lifecycle | Rules | Practices |
+|-------|-----------|-------|-----------|
+| ① Understand | `lifecycle/understand.md` | `rules/understand.md` | SDD, BDD |
+| ② Plan | `lifecycle/plan.md` | `rules/plan.md` | SDD, TDD |
+| ③ Verify | `lifecycle/verify.md` | `rules/verify.md`, `rules/integration.md` | BDD, TDD |
+| ④ Deliver | `lifecycle/deliver.md` | `rules/deliver.md`, `rules/stack.md` | SDD, Cloud |
 
-1. Per-component FRs in each affected component's namespace (`NATIVE-FR-*`, `DESKTOP-FR-*`, `WEB-FR-*`, `BE-FR-*`, `WXA-FR-*`, `MYA-FR-*`, `TTA-FR-*`).
-2. One or more `INT-FR-*` FRs describing the contract between components.
-3. The `affects: [native, desktop, web, backend, wxa, mya, tta, contracts]` field in spec-delta, design, and task-list.
-
-## Monorepo Project Structure
-
-```
-{{project_name}}/                       # monorepo root
-├── requirements.md                     # Intent + global spec
-├── project.yaml                        # Stack topology (components, contracts)
-├── apps/
-│   ├── native/                         # native mobile client (NATIVE-FR-*)
-│   │   ├── src/
-│   │   ├── tests/{unit,e2e}/
-│   │   └── features/                   # NATIVE-FR-*.feature
-│   ├── desktop/                        # desktop client (DESKTOP-FR-*)
-│   │   ├── src/
-│   │   ├── tests/{unit,e2e}/
-│   │   └── features/                   # DESKTOP-FR-*.feature
-│   ├── web/                            # browser frontend (WEB-FR-*)
-│   │   ├── src/
-│   │   ├── tests/{unit,integration,e2e}/
-│   │   └── features/                   # WEB-FR-*.feature
-│   ├── wxa/                            # WeChat Mini Program (WXA-FR-*)
-│   │   ├── src/
-│   │   ├── tests/{e2e}/
-│   │   └── features/                   # WXA-FR-*.feature
-│   ├── mya/                            # Mini Program (MYA-FR-*)
-│   │   ├── src/
-│   │   ├── tests/{e2e}/
-│   │   └── features/                   # MYA-FR-*.feature
-│   ├── tta/                            # TikTok Mini Program (TTA-FR-*)
-│   │   ├── src/
-│   │   ├── tests/{e2e}/
-│   │   └── features/                   # TTA-FR-*.feature
-│   └── backend/                        # service (BE-FR-*)
-│       ├── src/
-│       ├── tests/{unit,integration,e2e}/
-│       └── features/                   # BE-FR-*.feature
-├── contracts/                          # INT-FR-* sources of truth
-│   ├── api/                            # OpenAPI 3.1 specs
-│   ├── events/                         # AsyncAPI / CloudEvent schemas
-│   └── CHANGELOG.md                    # contract version history
-├── packages/
-│   └── shared/                         # generated types from contracts
-├── features/
-│   └── cross-stack/                    # INT-FR-*.feature for full flow
-├── tests/
-│   └── cross-stack/                    # cross-stack e2e (multi-client↔backend)
-├── openspec/
-│   └── changes/{id}/
-│       ├── spec-delta.md               # declares affects + FR namespaces
-│       ├── design.md                   # architecture + per-component + integration
-│       ├── task-list.md                # DAG with cross-component edges
-│       └── contract-diff.md            # auto-generated contract changes
-├── providers/                          # cloud config (TCB / Aliyun)
-│   ├── tcb/
-│   └── aliyun/
-├── tools/
-│   ├── deploy_stack.py                 # unified preview/prod deploy
-│   ├── contract_diff.py                # OpenAPI/AsyncAPI diff + compat check
-│   └── generate_shared.py              # contracts → packages/shared
-└── pyproject.toml                      # workspace config (uv workspaces / pnpm)
-```
-
-The previous single-component structure (`src/`, `features/`, `tests/` at the root) is **deprecated** for new projects. Existing single-component projects continue to work via the legacy layout.
-
-## Phase Detail
-
-### ① Understand — 理解
-
-Capture intent and formalize as spec + behavior scenarios, scoped to the right FR namespace.
-
-```
-Intent (business need)
-  → OpenSpec spec-delta.md (with affects: [...] + FR namespaces)
-  → BDD feature files (APP-/WEB-/BE-/INT- tagged)
-  → Human review gate
-```
-
-**SDD:** proposal, spec delta (ADDED/MODIFIED/REMOVED), EARS (Ubiquitous/Event-Driven/State-Driven/Unwanted/Optional).
-
-**BDD:** `.feature` files tagged `@FR-{PREFIX}-NNN`, minimum 3 scenarios per FR (positive/negative/edge). Cross-component features split into per-component `*.feature` plus a `features/cross-stack/*.feature` for the end-to-end flow.
-
-### ② Plan — 规划
-
-Design the solution and decompose into tracked units of work, including cross-component edges.
-
-```
-Design doc (architecture, data model, API contract, state machine, integration)
-  → Task breakdown with dependency DAG (intra + inter component)
-  → Test plan per scenario (unit / integration / e2e / cross-stack)
-  → Human review gate
-```
-
-**SDD:** design doc, task list with DAG.
-
-**TDD:** test plan written before implementation.
-
-**Integration:** when a task changes a contract, the design doc must reference the `INT-FR-*` it implements and the `contract-diff.md` placeholder is filled in `Verify`.
-
-### ③ Verify — 验证
-
-Execute one TDD cycle per BDD scenario at the right test layer.
-
-```
-For each BDD scenario in each affected component:
-  RED:   Write test at the right layer (unit/integration/e2e) → confirm failure
-  GREEN: Write minimum implementation → confirm pass
-  REFACTOR: Clean up → all existing tests still pass
-
-After all scenarios:
-  pytest --cov --cov-fail-under=80          # per component
-  pytest-bdd features/                       # per component
-  contract test suite                        # INT-FR-* + OpenAPI/AsyncAPI
-  pytest tests/cross-stack/                  # full multi-client↔backend
-  Quality gates: coverage ≥80%, scenarios ≥90%, 0 vulns, no TODO, contract diff clean
-```
-
-**TDD:** red-green-refactor per scenario.
-
-**BDD:** pytest-bdd scenario verification at the right layer (unit → integration → e2e → cross-stack).
-
-**Integration gates:**
-- Contract test green against the generated `packages/shared/`
-- OpenAPI/AsyncAPI schema validation green
-- Backward-compat check: removing a field or changing a type is a breaking change
-
-### ④ Deliver — 交付
-
-Deploy the full stack together, verify end-to-end, release with stack-level BVT.
-
-```
-Unified Stack Preview Deploy (dynamic URL from TCB/Aliyun)
-  → Per-component BDD e2e (against component preview URL or stack URL)
-  → Cross-stack e2e (full multi-client↔backend against unified URL)
-  → Staging deploy + smoke
-  → Human approval gate
-  → Production deploy (whole stack)
-  → BVT (stack-level: /health on backend, app launch probe, web smoke, DB)
-  → Gate: BVT pass + all e2e pass + contract diff archived
-```
-
-**SDD:** archive change artifacts including `contract-diff.md`.
-
-**Cloud:** TCB (default) or Aliyun, unified stack URL resolved at deploy time. `PREVIEW_URL` is the backend gateway; all client components (`native`, `desktop`, `web`, `wxa`, `mya`, `tta`) receive it as a build-time or runtime config.
-
-## Test Layers (per feature)
-
-| Layer | Scope | Run Against | Speed | Owner |
-|-------|-------|-------------|-------|-------|
-| `unit` | Single function/module | Local | <1s/test | Component |
-| `integration` | Component + its DB / internal API | Local container | ~1s | Component |
-| `e2e` | Whole component against its preview | Component preview URL | ~10s | Component |
-| `cross-stack` | multi-client ↔ backend full flow | Unified stack preview URL | ~30s | Integration |
-
-`cross-stack` is mandatory for any feature that touches ≥2 components. Otherwise `e2e` per component is the highest required layer.
-
-## Quality Gates
-
-| ID | Gate | Command | Threshold | Scope |
-|----|------|---------|-----------|-------|
-| VRF-001 | TDD Red | `pytest -k {scenario}` | Test fails first | Per component |
-| VRF-002 | TDD Green | `pytest -k {scenario}` | Test passes | Per component |
-| VRF-003 | TDD Refactor | `pytest --cov` | Coverage ≥80% | Per component |
-| VRF-004 | BDD Scenarios | `pytest-bdd features/` | 100% pass | Per component |
-| VRF-005 | Backpressure | All gates | Block until pass | Per component |
-| INT-001 | Contract test | `pytest tests/contract/` | 100% pass | Cross-component |
-| INT-002 | Contract compat | `tools/contract_diff.py` | Backward-compat | Cross-component |
-| INT-003 | Shared types build | `tools/generate_shared.py` | Exit 0 | Cross-component |
-| STK-001 | Cross-stack e2e | `pytest tests/cross-stack/` | 100% pass | Stack |
-| DLV-003 | Stack BVT | `bvt ${STACK_URL}` | All checks pass | Stack |
-
-## Rule Categories
-
-| Prefix | File | Phase | Scope |
-|--------|------|-------|-------|
-| UND | `rules/understand.md` | Understand | All |
-| PLN | `rules/plan.md` | Plan | All |
-| VRF | `rules/verify.md` | Verify | Per component |
-| INT | `rules/integration.md` | All phases | Cross-component |
-| STK | `rules/stack.md` | All phases | Monorepo / multi-component |
-| DLV | `rules/deliver.md` | Deliver | Stack |
-| SEC | `rules/security.md` | All phases | All |
-
-## Cloud Platforms
-
-| Platform | Default | Stack Deploy | Per-component | Preview URL |
-|----------|---------|--------------|---------------|-------------|
-| TCB | ✅ | `deploy_stack --preview` | `tcb fn deploy` / `tcb hosting deploy` | `https://{env-id}.tcb-preview.com` (gateway) |
-| Aliyun | | `deploy_stack --preview` | `fun deploy` / OSS / FC | `https://{gateway}.{region}.fc.devs.com` |
-
-The stack deploy command orchestrates: backend (functions + DB migrate) → all client components (build + config injection with `BACKEND_URL`). Preview URL is the backend gateway; component build configs read it from env.
-
-## Quick Start (monorepo)
-
-```bash
-# ① Understand — declare scope + namespaces
-cat > openspec/changes/CHG-001/spec-delta.md <<'YAML'
-affects: [web, backend, contracts]
-frs:
-  - id: WEB-FR-001   # login UI
-  - id: BE-FR-001    # login API
-  - id: INT-FR-001   # POST /auth/login contract
-YAML
-# → write features/web/auth/login.feature  (WEB-FR-001)
-# → write features/backend/auth/login.feature (BE-FR-001)
-# → write features/cross-stack/auth/login.feature (INT-FR-001)
-
-# ② Plan
-# → write design.md (per-component sections + integration section)
-# → write task-list.md with DAG crossing web → contracts → backend
-
-# ③ Verify
-# Backend
-pytest apps/backend/tests/unit/ --verbose          # RED
-# implement apps/backend/src/auth/login.py
-pytest apps/backend/tests/unit/ --verbose          # GREEN
-pytest apps/backend/ --cov --cov-fail-under=80     # REFACTOR
-# Frontend
-pnpm --filter web test                               # RED/GREEN/REFACTOR
-# Contracts
-tools/generate_shared.py                             # regenerate packages/shared
-pytest tests/contract/                               # contract tests green
-# Cross-stack
-pytest tests/cross-stack/ -k INT-FR-001
-
-# ④ Deliver
-deploy_stack --preview                                # unified URL
-export PREVIEW_URL=$(deploy_stack --preview --output url)
-pytest apps/web/tests/e2e/ --preview-url $PREVIEW_URL
-pytest apps/native/tests/e2e/ --backend-url $BACKEND_URL
-pytest apps/desktop/tests/e2e/ --backend-url $BACKEND_URL
-pytest apps/wxa/tests/e2e/ --backend-url $BACKEND_URL
-pytest tests/cross-stack/ --preview-url $PREVIEW_URL
-deploy_stack --env staging
-deploy_stack --env production                        # after human approval
-bvt ${PRODUCTION_URL}                                # stack-level BVT
-```
+Security baseline: `rules/security.md` (all phases).

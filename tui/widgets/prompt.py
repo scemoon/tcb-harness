@@ -27,6 +27,7 @@ from tui.widgets.highlighted_textarea import HighlightedTextArea
 from tui.widgets.condensed_path import CondensedPath
 from tui.widgets.path_search import PathSearch
 from tui.widgets.plan import Plan
+from tui.answer import Answer
 from tui.widgets.question import Ask, Question
 from tui.widgets.slash_complete import SlashComplete
 from tui.messages import UserInputSubmitted
@@ -775,6 +776,14 @@ class Prompt(containers.VerticalGroup):
         return True
 
     def action_dismiss(self) -> None:
+        if self._ask is not None:
+            ask = self._ask
+            if (callback := ask.callback) is not None:
+                callback(Answer("Cancelled", "reject_once", "reject_once"))
+            self.ask_queue.clear()
+            self._ask = None
+            self.app.terminal_alert(False)
+            return
         if self.prompt_text_area.suggestion:
             self.prompt_text_area.suggestion = ""
             return

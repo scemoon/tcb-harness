@@ -2,7 +2,7 @@
   "name": "cdh",
   "version": "1.0.0",
   "description": "Cloud Dev Harness - cloud-native development Agent framework",
-  "keywords": ["ai", "agent", "cloud", "development", "cli", "tui"],
+  "keywords": ["ai", "agent", "cloud", "development", "cli", "cdc"],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -18,11 +18,11 @@
   "files": [
     "cli.js",
     "package.json",
-    "../cdh",
-    "../cdha",
-    "../tui",
-    "../cloud-spec-skill",
-    "../cloud_dev_harness.egg-info"
+    "pyproject.toml",
+    "cdh",
+    "cdha",
+    "tui",
+    "ai-dlc-skill"
   ],
   "scripts": {
     "postinstall": "node cli.js"

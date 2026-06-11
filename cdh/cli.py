@@ -37,7 +37,7 @@ Paths:
     short_help="Cloud Dev Harness - AI agent framework with TUI.",
     epilog=_COMMON_HELP,
 )
-@click.version_option(version="1.4.0", prog_name="cdh")
+@click.version_option(version="1.0.0", prog_name="cdh")
 @click.pass_context
 def cli(ctx):
     """
