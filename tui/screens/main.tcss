@@ -167,6 +167,10 @@ Conversation {
         text-style: italic;
     }
 
+    AgentThought > #thought-content MarkdownBlock:last-child {
+        margin-bottom: 0;
+    }
+
     AgentThought:focus-within > #thought-header {
         color: $secondary;
     }

@@ -6,7 +6,10 @@ from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical
 from textual.reactive import reactive
-from textual.widgets import Static
+from textual.widgets import Markdown, Static
+from textual.widgets.markdown import MarkdownStream
+
+from tui.protocol import ExpandProtocol
 
 
 class AgentThought(Vertical, can_focus=True):
@@ -15,6 +18,8 @@ class AgentThought(Vertical, can_focus=True):
     During streaming: header shows "⏳ thinking:", content visible.
     After completion: header shows "- Thought" (expanded) or "+ Thought" (collapsed).
     Ctrl+X or click on header toggles expand/collapse.
+
+    Content is rendered as Markdown (bold, italic, code, lists, etc.).
     """
 
     HELP = """
@@ -56,14 +61,14 @@ class AgentThought(Vertical, can_focus=True):
     def __init__(self, initial_content: str = "", *, replay: bool = False):
         super().__init__()
         self._initial_content = initial_content
-        self._buffer: list[str] = [initial_content]
+        self._stream: MarkdownStream | None = None
         self._completed = False
         self._collapsed = False
         self._replay = replay
 
     def compose(self) -> ComposeResult:
         yield Static("⏳ thinking:", id="thought-header")
-        yield Static(self._initial_content, id="thought-content", markup=False)
+        yield Markdown(self._initial_content, id="thought-content")
 
     def on_mount(self) -> None:
         # Force proper sizing — Vertical defaults to height: 1fr which
@@ -71,27 +76,31 @@ class AgentThought(Vertical, can_focus=True):
         self.styles.height = "auto"
         self.styles.min_height = 3
         self._completed = self._replay
-        self._collapsed = False
+        self._collapsed = self._replay
         self._update_header()
-        content = self.query_one("#thought-content", Static)
-        content.display = True
+        content = self.query_one("#thought-content", Markdown)
+        content.display = not self._collapsed
+        content.styles.height = "auto"
 
     async def append_fragment(self, fragment: str) -> None:
-        self._buffer.append(fragment)
-        content = self.query_one("#thought-content", Static)
-        content.update("".join(self._buffer))
+        content = self.query_one("#thought-content", Markdown)
+        if self._stream is None:
+            self._stream = Markdown.get_stream(content)
+        await self._stream.write(fragment)
+        content.scroll_end()
 
     def mark_completed(self) -> None:
         if self._completed:
             return
         self._completed = True
-        self._collapsed = False
+        self._collapsed = True
         self._update_header()
+        self.query_one("#thought-content", Markdown).display = False
 
     def action_toggle(self) -> None:
         self._collapsed = not self._collapsed
         self._update_header()
-        self.query_one("#thought-content", Static).display = not self._collapsed
+        self.query_one("#thought-content", Markdown).display = not self._collapsed
 
     def on_click(self, event) -> None:
         """Toggle when the header is clicked (only after completion)."""
@@ -110,41 +119,50 @@ class AgentThought(Vertical, can_focus=True):
         else:
             header.update("- Thought")
 
-    # ── Forward scroll actions to inner content (Static, may be no-op) ──
+    # ── ExpandProtocol ──
+
+    def can_expand(self) -> bool:
+        return True
+
+    def expand_block(self) -> None:
+        if self._collapsed:
+            self.action_toggle()
+
+    def collapse_block(self) -> None:
+        if not self._collapsed:
+            self.action_toggle()
+
+    def is_block_expanded(self) -> bool:
+        return not self._collapsed
+
+    # ── Forward scroll actions to inner Markdown ──
 
     def action_scroll_up(self) -> None:
-        self._try_scroll("scroll_up")
+        self.query_one(Markdown).scroll_up()
 
     def action_scroll_down(self) -> None:
-        self._try_scroll("scroll_down")
+        self.query_one(Markdown).scroll_down()
 
     def action_scroll_left(self) -> None:
-        self._try_scroll("scroll_left")
+        self.query_one(Markdown).scroll_left()
 
     def action_scroll_right(self) -> None:
-        self._try_scroll("scroll_right")
+        self.query_one(Markdown).scroll_right()
 
     def action_scroll_home(self) -> None:
-        self._try_scroll("scroll_home")
+        self.query_one(Markdown).scroll_home()
 
     def action_scroll_end(self) -> None:
-        self._try_scroll("scroll_end")
+        self.query_one(Markdown).scroll_end()
 
     def action_page_up(self) -> None:
-        self._try_scroll("page_up")
+        self.query_one(Markdown).page_up()
 
     def action_page_down(self) -> None:
-        self._try_scroll("page_down")
+        self.query_one(Markdown).page_down()
 
     def action_page_left(self) -> None:
-        self._try_scroll("page_left")
+        self.query_one(Markdown).page_left()
 
     def action_page_right(self) -> None:
-        self._try_scroll("page_right")
-
-    def _try_scroll(self, action: str) -> None:
-        """Call a scroll action on the inner content if it supports it."""
-        content = self.query_one("#thought-content")
-        method = getattr(content, action, None)
-        if callable(method):
-            method()
+        self.query_one(Markdown).page_right()
