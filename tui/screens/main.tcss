@@ -141,34 +141,38 @@ Conversation {
     AgentThought {
         min-height: 1;
         margin: 1 1 1 0;
-        padding: 0;
+        padding: 0 0 0 1;
+        border-left: tall $secondary 60%;
     }
 
     AgentThought > #thought-header {
-        color: $text;
+        color: $text-secondary;
         text-style: bold;
         padding: 0 2;
         height: 1;
-        background: $primary-muted 50%;
-        border-left: tall $secondary;
+        background: transparent;
     }
 
     AgentThought > #thought-header:hover {
-        background: $primary-muted 70%;
+        color: $text;
+        background: $primary-muted 30%;
     }
 
     AgentThought > #thought-content {
-        color: $text-disabled;
+        color: $text-muted;
         margin: 0;
         padding: 0 1 0 2;
-        border-left: tall $secondary 40%;
         height: auto;
         min-height: 1;
+        text-style: italic;
     }
 
     AgentThought:focus-within > #thought-header {
         color: $secondary;
-        background: $primary-muted 80%;
+    }
+
+    AgentThought:focus-within {
+        border-left: tall $secondary;
     }
 
     AgentThought.-maximized {
