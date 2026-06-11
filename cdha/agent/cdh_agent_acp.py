@@ -969,6 +969,7 @@ class CDHACPAdapter:
         in_minimax_tool_call = False
         in_bare_tool_call = False
         bare_tool_start = 0
+        thinking_sent_len = 0  # how much of text_buffer has been sent to TUI
 
         def _flush_held_buffer() -> None:
             """Force-emit the held buffer as a plain message and reset
@@ -976,7 +977,7 @@ class CDHACPAdapter:
             the early-exit path when a turn ends without a close
             marker.
             """
-            nonlocal text_buffer
+            nonlocal text_buffer, thinking_sent_len
             nonlocal in_thinking, in_tool_call
             nonlocal in_minimax_tool_call, in_bare_tool_call, bare_tool_start
             if chunker:
@@ -987,6 +988,7 @@ class CDHACPAdapter:
                     "content": {"type": "text", "text": text_buffer},
                 })
             text_buffer = ""
+            thinking_sent_len = 0
             in_thinking = in_tool_call = False
             in_minimax_tool_call = in_bare_tool_call = False
             bare_tool_start = 0
@@ -1015,7 +1017,7 @@ class CDHACPAdapter:
             return s[:cut]
 
         def on_chunk(text: str):
-            nonlocal text_buffer, in_thinking, in_tool_call
+            nonlocal text_buffer, thinking_sent_len, in_thinking, in_tool_call
             nonlocal in_minimax_tool_call, in_bare_tool_call, bare_tool_start
             text_buffer += text
 
@@ -1050,21 +1052,32 @@ class CDHACPAdapter:
                     if idx >= 0:
                         thinking = text_buffer[:idx]
                         if thinking:
-                            # Persist to the engine so it lands in the
-                            # context and survives session reload.
+                            # Send any remaining partial before the close
+                            if thinking_sent_len < len(thinking):
+                                partial = thinking[thinking_sent_len:]
+                                self.send_session_update({
+                                    "sessionUpdate": "agent_thought_chunk",
+                                    "content": {"type": "text", "text": partial},
+                                })
+                            # Persist COMPLETE thinking to engine context
                             on_thinking = getattr(self.agent, "on_thinking", None)
                             if on_thinking is not None:
                                 try:
                                     on_thinking(thinking)
                                 except Exception:
                                     debug_log("on_thinking callback failed", exc_info=True)
-                            self.send_session_update({
-                                "sessionUpdate": "agent_thought_chunk",
-                                "content": {"type": "text", "text": thinking},
-                            })
                         text_buffer = text_buffer[idx + close_len:]
+                        thinking_sent_len = 0
                         in_thinking = False
                     else:
+                        # Stream partial thinking content incrementally to TUI
+                        if thinking_sent_len < len(text_buffer):
+                            partial = text_buffer[thinking_sent_len:]
+                            self.send_session_update({
+                                "sessionUpdate": "agent_thought_chunk",
+                                "content": {"type": "text", "text": partial},
+                            })
+                            thinking_sent_len = len(text_buffer)
                         break
                 elif in_tool_call:
                     close_idx = text_buffer.find(_CLOSE_MARKER)
