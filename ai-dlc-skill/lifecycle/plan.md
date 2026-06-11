@@ -54,8 +54,25 @@ A multi-component design doc is organized by **component sections** plus an **in
 - Routes: {{...}}
 - Data flow: {{uses packages/shared generated from INT-FR-001}}
 
-### Component: app (APP-FR-*)
-- ... (if applicable)
+### Component: native (NATIVE-FR-*)
+- Architecture: {{native architecture}}
+- Data flow: {{uses packages/shared generated from INT-FR-*}}
+
+### Component: desktop (DESKTOP-FR-*)
+- Architecture: {{desktop architecture}}
+- Data flow: {{uses packages/shared generated from INT-FR-*}}
+
+### Component: wxa (WXA-FR-*)
+- Architecture: {{WeChat Mini Program}}
+- Data flow: {{uses packages/shared generated from INT-FR-*}}
+
+### Component: mya (MYA-FR-*)
+- Architecture: {{Mini Program}}
+- Data flow: {{uses packages/shared generated from INT-FR-*}}
+
+### Component: tta (TTA-FR-*)
+- Architecture: {{TikTok Mini Program}}
+- Data flow: {{uses packages/shared generated from INT-FR-*}}
 
 ### Integration
 - Flow: {{web → backend → DB; or app → backend → event → ...}}
@@ -76,7 +93,7 @@ A multi-component design doc is organized by **component sections** plus an **in
 
 | Method | Path | INT FR | Provider | Consumer |
 |--------|------|--------|----------|----------|
-| POST | /auth/login | INT-FR-001 | BE-FR-001 | WEB-FR-001, APP-FR-001 |
+| POST | /auth/login | INT-FR-001 | BE-FR-001 | WEB-FR-001, NATIVE-FR-001, DESKTOP-FR-001, WXA-FR-001, MYA-FR-001, TTA-FR-001 |
 
 ### State Machine
 

@@ -6,7 +6,7 @@ Rules for monorepo multi-component awareness. Apply to every change in a monorep
 
 **Severity:** MUST
 
-**Description:** Every spec delta, design doc, and task list MUST declare `affects: [app, web, backend, contracts]`. The declaration drives the FR namespaces used, the test layers required, and the deploy steps that run.
+**Description:** Every spec delta, design doc, and task list MUST declare `affects: [native, desktop, web, backend, wxa, mya, tta, contracts]`. The declaration drives the FR namespaces used, the test layers required, and the deploy steps that run.
 
 **Valid:**
 ```markdown
@@ -47,7 +47,7 @@ Affects: [web, backend, contracts]
 
 **Description:** Preview, staging, and production deploys MUST use the `deploy_stack` orchestrator, which deploys all affected components together and resolves the stack URL. Ad-hoc per-component deploys to a shared environment are forbidden (per-component deploys to isolated dev sandboxes are fine).
 
-**Valid:** `deploy_stack --preview` runs backend, web, and (if affected) app deploys in dependency order and exports `STACK_URL` / `BACKEND_URL`.
+**Valid:** `deploy_stack --preview` runs backend and all affected client deploys in dependency order and exports `STACK_URL` / `BACKEND_URL`.
 
 **Invalid:** Deploying only `tcb fn deploy` for backend to a shared preview env, leaving the web side stale.
 
@@ -55,7 +55,7 @@ Affects: [web, backend, contracts]
 
 **Severity:** MUST
 
-**Description:** Web and app builds MUST receive `BACKEND_URL` (and any other stack-level config) as a build-time or runtime environment variable, not via hardcoded URLs. The injected value MUST come from the `deploy_stack` orchestrator for the current environment.
+**Description:** All client builds (`web`, `native`, `desktop`, `wxa`, `mya`, `tta`) MUST receive `BACKEND_URL` (and any other stack-level config) as a build-time or runtime environment variable, not via hardcoded URLs. The injected value MUST come from the `deploy_stack` orchestrator for the current environment.
 
 **Valid:** `pnpm --filter web build --env BACKEND_URL=$BACKEND_URL` driven by `deploy_stack`.
 
@@ -67,6 +67,6 @@ Affects: [web, backend, contracts]
 
 **Description:** Rollback is a stack operation, not a per-component operation. If any component must be reverted, the entire previous stable stack version is rolled back together so internal contracts stay consistent.
 
-**Valid:** `deploy_stack --rollback v1.2.3` reverts backend, web, and app to the version that was last green on BVT.
+**Valid:** `deploy_stack --rollback v1.2.3` reverts the whole stack (backend + all clients) to the version that was last green on BVT.
 
-**Invalid:** Rolling back only the backend while leaving the web and app on the new version (contract mismatch).
+**Invalid:** Rolling back only the backend while leaving clients on the new version (contract mismatch).

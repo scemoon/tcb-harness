@@ -6,9 +6,13 @@
 
 | Component | FR Prefix | Directory | Purpose |
 |-----------|-----------|-----------|---------|
-| app | `APP-FR-*` | `apps/app/` | Mobile / native client |
+| native | `NATIVE-FR-*` | `apps/native/` | Native mobile client |
+| desktop | `DESKTOP-FR-*` | `apps/desktop/` | Desktop client |
 | web | `WEB-FR-*` | `apps/web/` | Browser frontend |
 | backend | `BE-FR-*` | `apps/backend/` | Service / API |
+| wxa | `WXA-FR-*` | `apps/wxa/` | WeChat Mini Program |
+| mya | `MYA-FR-*` | `apps/mya/` | Mini Program (e.g. Alipay) |
+| tta | `TTA-FR-*` | `apps/tta/` | TikTok Mini Program |
 | contracts | `INT-FR-*` | `contracts/`, `packages/shared/` | Cross-component contracts |
 
 Cloud: {{cloud_provider}} (default: TCB).
@@ -53,7 +57,7 @@ bvt ${PRODUCTION_URL}                                # stack-level BVT
 ### Prerequisites
 
 - Python 3.11+
-- Node 20+ (for app/web)
+- Node 20+ (for web/native/desktop/mini-programs)
 - uv (Python workspace manager) or pnpm
 - pytest + pytest-bdd + pytest-cov
 - Cloud CLI: `tcb` (TCB) or `fun` (Aliyun)
@@ -64,9 +68,13 @@ bvt ${PRODUCTION_URL}                                # stack-level BVT
 {{project_name}}/
 ├── project.yaml                 # stack topology, components, contracts
 ├── apps/
-│   ├── app/                     # APP-FR-*  (mobile/native)
-│   ├── web/                     # WEB-FR-*  (browser frontend)
-│   └── backend/                 # BE-FR-*   (service)
+│   ├── native/                  # NATIVE-FR-* (native mobile)
+│   ├── desktop/                 # DESKTOP-FR-* (desktop)
+│   ├── web/                     # WEB-FR-*   (browser frontend)
+│   ├── wxa/                     # WXA-FR-*   (WeChat Mini Program)
+│   ├── mya/                     # MYA-FR-*   (Mini Program)
+│   ├── tta/                     # TTA-FR-*   (TikTok Mini Program)
+│   └── backend/                 # BE-FR-*    (service)
 ├── contracts/                   # INT-FR-*  (single source of truth)
 │   ├── api/                     # OpenAPI 3.1
 │   ├── events/                  # AsyncAPI / CloudEvent

@@ -43,7 +43,7 @@ Gate: All layers green + contracts compatible + cross-stack pass
 | `unit` | Per function / module | `apps/{comp}/tests/unit/` | Local |
 | `integration` | Component + its DB / internal API | `apps/{comp}/tests/integration/` | Local container |
 | `e2e` | Whole component against preview | `apps/{comp}/tests/e2e/` | Component preview URL |
-| `cross-stack` | Full app ↔ web ↔ backend flow | `tests/cross-stack/` | Unified stack preview URL |
+| `cross-stack` | Full multi-client ↔ backend flow | `tests/cross-stack/` | Unified stack preview URL |
 | `contract` | Contract shape + backward compat | `tests/contract/` | Generated `packages/shared/` |
 
 ## TDD — Red
@@ -128,8 +128,12 @@ pytest tests/cross-stack/ --stack-url $STACK_URL --verbose
 ```bash
 # Per component
 pytest-bdd apps/backend/features/ --verbose
-pytest-bdd apps/web/features/ --verbose      # e.g. via cucumber-js
-pytest-bdd apps/app/features/ --verbose
+pytest-bdd apps/web/features/ --verbose       # e.g. via cucumber-js
+pytest-bdd apps/native/features/ --verbose    # or via detox/cavy
+pytest-bdd apps/desktop/features/ --verbose    # or via spectron
+pytest-bdd apps/wxa/features/ --verbose
+pytest-bdd apps/mya/features/ --verbose
+pytest-bdd apps/tta/features/ --verbose
 
 # Cross-stack
 pytest-bdd features/cross-stack/ --verbose

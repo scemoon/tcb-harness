@@ -25,20 +25,43 @@ stack:
       deploy:
         - hosting: tcb hosting deploy --build-env BACKEND_URL=${BACKEND_URL}
       consumes: BACKEND_URL
-    - id: app
+    - id: native
       depends_on: [backend]
       deploy:
         - build: build with BACKEND_URL injected
         - distribute: upload to internal distribution
+      consumes: BACKEND_URL
+    - id: desktop
+      depends_on: [backend]
+      deploy:
+        - build: build with BACKEND_URL injected
+        - distribute: upload to internal distribution
+      consumes: BACKEND_URL
+    - id: wxa
+      depends_on: [backend]
+      deploy:
+        - build: build with BACKEND_URL injected
+        - distribute: upload to mini-program platform
+      consumes: BACKEND_URL
+    - id: mya
+      depends_on: [backend]
+      deploy:
+        - build: build with BACKEND_URL injected
+        - distribute: upload to mini-program platform
+      consumes: BACKEND_URL
+    - id: tta
+      depends_on: [backend]
+      deploy:
+        - build: build with BACKEND_URL injected
+        - distribute: upload to mini-program platform
       consumes: BACKEND_URL
 ```
 
 The `deploy_stack` orchestrator:
 1. Resolves the platform (TCB / Aliyun) from the active provider.
 2. Deploys `backend` first; captures `BACKEND_URL`.
-3. Deploys `web` with `BACKEND_URL` injected at build time.
-4. Deploys `app` with `BACKEND_URL` injected (build config or env).
-5. Exposes `STACK_URL` (= `BACKEND_URL` for the gateway) and per-component URLs.
+3. Deploys all client components (`web`, `native`, `desktop`, `wxa`, `mya`, `tta`) in parallel with `BACKEND_URL` injected at build time.
+4. Exposes `STACK_URL` (= `BACKEND_URL` for the gateway) and per-component URLs.
 
 ## Pipeline
 
@@ -63,13 +86,29 @@ stages:
       - name: e2e_web
         command: pytest apps/web/tests/e2e/ --base-url ${WEB_URL} --api-url ${BACKEND_URL}
         requires: [deploy_stack]
-      - name: e2e_app
-        command: pytest apps/app/tests/e2e/ --backend-url ${BACKEND_URL}
+      - name: e2e_native
+        command: pytest apps/native/tests/e2e/ --backend-url ${BACKEND_URL}
         requires: [deploy_stack]
-        when: affects contains app
+        when: affects contains native
+      - name: e2e_desktop
+        command: pytest apps/desktop/tests/e2e/ --backend-url ${BACKEND_URL}
+        requires: [deploy_stack]
+        when: affects contains desktop
+      - name: e2e_wxa
+        command: pytest apps/wxa/tests/e2e/ --backend-url ${BACKEND_URL}
+        requires: [deploy_stack]
+        when: affects contains wxa
+      - name: e2e_mya
+        command: pytest apps/mya/tests/e2e/ --backend-url ${BACKEND_URL}
+        requires: [deploy_stack]
+        when: affects contains mya
+      - name: e2e_tta
+        command: pytest apps/tta/tests/e2e/ --backend-url ${BACKEND_URL}
+        requires: [deploy_stack]
+        when: affects contains tta
       - name: e2e_cross_stack
         command: pytest tests/cross-stack/ --stack-url ${STACK_URL}
-        requires: [e2e_backend, e2e_web, e2e_app]
+        requires: [e2e_backend, e2e_web, e2e_native, e2e_desktop, e2e_wxa, e2e_mya, e2e_tta]
         when: affects contains >= 2 components
 
   - name: staging
@@ -122,7 +161,7 @@ Executed after every production deployment. BVT operates on the **stack**, not a
 bvt ${PRODUCTION_URL}
 #  1. backend /health returns 200 OK
 #  2. web home page returns 200 (SSR) or shell loads (SPA)
-#  3. app launch probe (deep link resolves against BACKEND_URL)
+#  3. native/desktop/mini-program launch probe (deep link resolves against BACKEND_URL)
 #  4. Core cross-stack flow (login) succeeds end-to-end
 #  5. Database reachable
 #  6. Error rate < 0.1%
@@ -132,21 +171,29 @@ bvt ${PRODUCTION_URL}
 
 ## Build Config Injection
 
-`web` and `app` builds receive `BACKEND_URL` (and any other stack-level config) at build time. The orchestrator passes the env value; components MUST NOT hardcode URLs (STK-005).
+All client builds (`web`, `native`, `desktop`, `wxa`, `mya`, `tta`) receive `BACKEND_URL` (and any other stack-level config) at build time. The orchestrator passes the env value; components MUST NOT hardcode URLs (STK-005).
 
 ```bash
 # web
 pnpm --filter web build --env BACKEND_URL=$BACKEND_URL
 
-# app
-cd apps/app && BACKEND_URL=$BACKEND_URL pnpm build
+# native
+cd apps/native && BACKEND_URL=$BACKEND_URL pnpm build
+
+# desktop
+cd apps/desktop && BACKEND_URL=$BACKEND_URL pnpm build
+
+# mini-programs (wxa, mya, tta)
+cd apps/wxa && BACKEND_URL=$BACKEND_URL pnpm build
+cd apps/mya && BACKEND_URL=$BACKEND_URL pnpm build
+cd apps/tta && BACKEND_URL=$BACKEND_URL pnpm build
 ```
 
 ## Component URL Resolution
 
 Per-platform URL patterns (resolved by `deploy_stack`):
 
-| Platform | STACK_URL | WEB_URL | APP distribution |
-|----------|-----------|---------|------------------|
-| TCB | `https://{env-id}.tcb-preview.com` | `https://{env-id}-{project}.tcb-preview.com` | internal distribution URL |
-| Aliyun | `https://{gateway}.{region}.fc.devs.com` | `https://{bucket}.{region}.oss-website.aliyuncs.com` | internal distribution URL |
+| Platform | STACK_URL | WEB_URL | NATIVE/DESKTOP distribution | MINI-PROGRAM distribution |
+|----------|-----------|---------|---------------------------|---------------------------|
+| TCB | `https://{env-id}.tcb-preview.com` | `https://{env-id}-{project}.tcb-preview.com` | internal distribution URL | mini-program preview QR |
+| Aliyun | `https://{gateway}.{region}.fc.devs.com` | `https://{bucket}.{region}.oss-website.aliyuncs.com` | internal distribution URL | mini-program preview QR |

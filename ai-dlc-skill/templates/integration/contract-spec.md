@@ -25,7 +25,7 @@
 | Field | Value |
 |-------|-------|
 | Change ID | `{{change_id}}` |
-| Affects | {{affects: [app, web, backend]}} |
+| Affects | {{affects: [native, desktop, web, backend, wxa, mya, tta]}} |
 | Direction | {{provider → consumer / bidirectional}} |
 | Breaking? | {{yes / no}} |
 | Migration | {{link to migration doc or "none"}} |

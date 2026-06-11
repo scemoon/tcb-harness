@@ -1,6 +1,6 @@
 # AI-DLC Development Skill
 
-This skill implements the **AI-Driven Development Lifecycle (AI-DLC)** with **SDD/BDD/TDD** practices, designed for **monorepo multi-component stacks** (app + web + backend) and a first-class **cross-component Integration** discipline.
+This skill implements the **AI-Driven Development Lifecycle (AI-DLC)** with **SDD/BDD/TDD** practices, designed for **monorepo multi-component stacks** (native + desktop + web + backend + wxa + mya + tta) and a first-class **cross-component Integration** discipline.
 
 ## Core Cycle
 
@@ -28,20 +28,24 @@ This skill implements the **AI-Driven Development Lifecycle (AI-DLC)** with **SD
 
 ## Stack Topology
 
-The skill assumes a **monorepo** with three component kinds and a cross-cutting layer:
+The skill assumes a **monorepo** with seven component kinds and a cross-cutting layer:
 
 | Prefix | Component | Directory | FR Namespace | Typical Tech |
 |--------|-----------|-----------|--------------|--------------|
-| APP | Mobile / native client | `apps/app/` | `APP-FR-NNN` | React Native / Flutter / Native |
+| NATIVE | Native mobile client | `apps/native/` | `NATIVE-FR-NNN` | React Native / Flutter |
+| DESKTOP | Desktop client | `apps/desktop/` | `DESKTOP-FR-NNN` | Electron / Tauri |
 | WEB | Browser frontend | `apps/web/` | `WEB-FR-NNN` | React / Vue / Svelte |
 | BE  | Server / service | `apps/backend/` | `BE-FR-NNN` | Python / Node / Go |
+| WXA | WeChat Mini Program | `apps/wxa/` | `WXA-FR-NNN` | Miniprogram |
+| MYA | Mini Program (e.g. Alipay) | `apps/mya/` | `MYA-FR-NNN` | Miniprogram |
+| TTA | TikTok Mini Program | `apps/tta/` | `TTA-FR-NNN` | Miniprogram |
 | INT | Cross-cutting contracts | `contracts/`, `packages/shared/` | `INT-FR-NNN` | OpenAPI / AsyncAPI / generated types |
 
 A feature that touches more than one component **must** declare:
 
-1. Per-component FRs in each affected component's namespace (`APP-FR-*`, `WEB-FR-*`, `BE-FR-*`).
+1. Per-component FRs in each affected component's namespace (`NATIVE-FR-*`, `DESKTOP-FR-*`, `WEB-FR-*`, `BE-FR-*`, `WXA-FR-*`, `MYA-FR-*`, `TTA-FR-*`).
 2. One or more `INT-FR-*` FRs describing the contract between components.
-3. The `affects: [app, web, backend, contracts]` field in spec-delta, design, and task-list.
+3. The `affects: [native, desktop, web, backend, wxa, mya, tta, contracts]` field in spec-delta, design, and task-list.
 
 ## Monorepo Project Structure
 
@@ -50,14 +54,30 @@ A feature that touches more than one component **must** declare:
 ├── requirements.md                     # Intent + global spec
 ├── project.yaml                        # Stack topology (components, contracts)
 ├── apps/
-│   ├── app/                            # mobile client (APP-FR-*)
+│   ├── native/                         # native mobile client (NATIVE-FR-*)
 │   │   ├── src/
 │   │   ├── tests/{unit,e2e}/
-│   │   └── features/                   # APP-FR-*.feature
+│   │   └── features/                   # NATIVE-FR-*.feature
+│   ├── desktop/                        # desktop client (DESKTOP-FR-*)
+│   │   ├── src/
+│   │   ├── tests/{unit,e2e}/
+│   │   └── features/                   # DESKTOP-FR-*.feature
 │   ├── web/                            # browser frontend (WEB-FR-*)
 │   │   ├── src/
 │   │   ├── tests/{unit,integration,e2e}/
 │   │   └── features/                   # WEB-FR-*.feature
+│   ├── wxa/                            # WeChat Mini Program (WXA-FR-*)
+│   │   ├── src/
+│   │   ├── tests/{e2e}/
+│   │   └── features/                   # WXA-FR-*.feature
+│   ├── mya/                            # Mini Program (MYA-FR-*)
+│   │   ├── src/
+│   │   ├── tests/{e2e}/
+│   │   └── features/                   # MYA-FR-*.feature
+│   ├── tta/                            # TikTok Mini Program (TTA-FR-*)
+│   │   ├── src/
+│   │   ├── tests/{e2e}/
+│   │   └── features/                   # TTA-FR-*.feature
 │   └── backend/                        # service (BE-FR-*)
 │       ├── src/
 │       ├── tests/{unit,integration,e2e}/
@@ -71,7 +91,7 @@ A feature that touches more than one component **must** declare:
 ├── features/
 │   └── cross-stack/                    # INT-FR-*.feature for full flow
 ├── tests/
-│   └── cross-stack/                    # cross-stack e2e (app↔web↔backend)
+│   └── cross-stack/                    # cross-stack e2e (multi-client↔backend)
 ├── openspec/
 │   └── changes/{id}/
 │       ├── spec-delta.md               # declares affects + FR namespaces
@@ -138,7 +158,7 @@ After all scenarios:
   pytest --cov --cov-fail-under=80          # per component
   pytest-bdd features/                       # per component
   contract test suite                        # INT-FR-* + OpenAPI/AsyncAPI
-  pytest tests/cross-stack/                  # full app↔web↔backend
+  pytest tests/cross-stack/                  # full multi-client↔backend
   Quality gates: coverage ≥80%, scenarios ≥90%, 0 vulns, no TODO, contract diff clean
 ```
 
@@ -158,7 +178,7 @@ Deploy the full stack together, verify end-to-end, release with stack-level BVT.
 ```
 Unified Stack Preview Deploy (dynamic URL from TCB/Aliyun)
   → Per-component BDD e2e (against component preview URL or stack URL)
-  → Cross-stack e2e (full app↔web↔backend against unified URL)
+  → Cross-stack e2e (full multi-client↔backend against unified URL)
   → Staging deploy + smoke
   → Human approval gate
   → Production deploy (whole stack)
@@ -168,7 +188,7 @@ Unified Stack Preview Deploy (dynamic URL from TCB/Aliyun)
 
 **SDD:** archive change artifacts including `contract-diff.md`.
 
-**Cloud:** TCB (default) or Aliyun, unified stack URL resolved at deploy time. `PREVIEW_URL` is the backend gateway; `app` and `web` receive it as a build-time or runtime config.
+**Cloud:** TCB (default) or Aliyun, unified stack URL resolved at deploy time. `PREVIEW_URL` is the backend gateway; all client components (`native`, `desktop`, `web`, `wxa`, `mya`, `tta`) receive it as a build-time or runtime config.
 
 ## Test Layers (per feature)
 
@@ -177,7 +197,7 @@ Unified Stack Preview Deploy (dynamic URL from TCB/Aliyun)
 | `unit` | Single function/module | Local | <1s/test | Component |
 | `integration` | Component + its DB / internal API | Local container | ~1s | Component |
 | `e2e` | Whole component against its preview | Component preview URL | ~10s | Component |
-| `cross-stack` | app ↔ web ↔ backend full flow | Unified stack preview URL | ~30s | Integration |
+| `cross-stack` | multi-client ↔ backend full flow | Unified stack preview URL | ~30s | Integration |
 
 `cross-stack` is mandatory for any feature that touches ≥2 components. Otherwise `e2e` per component is the highest required layer.
 
@@ -215,7 +235,7 @@ Unified Stack Preview Deploy (dynamic URL from TCB/Aliyun)
 | TCB | ✅ | `deploy_stack --preview` | `tcb fn deploy` / `tcb hosting deploy` | `https://{env-id}.tcb-preview.com` (gateway) |
 | Aliyun | | `deploy_stack --preview` | `fun deploy` / OSS / FC | `https://{gateway}.{region}.fc.devs.com` |
 
-The stack deploy command orchestrates: backend (functions + DB migrate) → web (hosting) → app (build + config injection with `BACKEND_URL`). Preview URL is the backend gateway; component build configs read it from env.
+The stack deploy command orchestrates: backend (functions + DB migrate) → all client components (build + config injection with `BACKEND_URL`). Preview URL is the backend gateway; component build configs read it from env.
 
 ## Quick Start (monorepo)
 
@@ -254,6 +274,9 @@ pytest tests/cross-stack/ -k INT-FR-001
 deploy_stack --preview                                # unified URL
 export PREVIEW_URL=$(deploy_stack --preview --output url)
 pytest apps/web/tests/e2e/ --preview-url $PREVIEW_URL
+pytest apps/native/tests/e2e/ --backend-url $BACKEND_URL
+pytest apps/desktop/tests/e2e/ --backend-url $BACKEND_URL
+pytest apps/wxa/tests/e2e/ --backend-url $BACKEND_URL
 pytest tests/cross-stack/ --preview-url $PREVIEW_URL
 deploy_stack --env staging
 deploy_stack --env production                        # after human approval

@@ -32,7 +32,7 @@ The login should work well and be fast.  # No EARS, vague terms
 
 **Severity:** MUST
 
-**Description:** Each functional requirement MUST have at least 3 BDD scenarios covering positive, negative, and edge cases. Scenarios MUST be tagged with the FR namespace prefix (`@APP-`, `@WEB-`, `@BE-`, or `@INT-`).
+**Description:** Each functional requirement MUST have at least 3 BDD scenarios covering positive, negative, and edge cases. Scenarios MUST be tagged with the FR namespace prefix (`@NATIVE-`, `@DESKTOP-`, `@WEB-`, `@BE-`, `@WXA-`, `@MYA-`, `@TTA-`, or `@INT-`).
 
 **Valid:**
 ```gherkin
@@ -54,7 +54,7 @@ Scenario: Login  # No namespace prefix, missing negative and edge
 
 **Severity:** MUST
 
-**Description:** Every spec delta MUST declare which components it affects via an `affects: [app, web, backend, contracts]` field. The declaration drives which FR namespaces are used, which lifecycle paths run, and which deploy steps are triggered.
+**Description:** Every spec delta MUST declare which components it affects via an `affects: [native, desktop, web, backend, wxa, mya, tta, contracts]` field. The declaration drives which FR namespaces are used, which lifecycle paths run, and which deploy steps are triggered.
 
 **Valid:**
 ```markdown
@@ -69,7 +69,7 @@ Affects: [web, backend, contracts]
 **Severity:** MUST
 
 **Description:** A feature that affects ≥2 components MUST be split into:
-- one FR per affected component in that component's namespace (`APP-*` / `WEB-*` / `BE-*`)
+- one FR per affected component in that component's namespace (`NATIVE-*` / `DESKTOP-*` / `WEB-*` / `BE-*` / `WXA-*` / `MYA-*` / `TTA-*`)
 - one or more `INT-*` FRs describing the contract
 - a `features/cross-stack/*.feature` file with end-to-end scenarios for the `INT-*` FR
 

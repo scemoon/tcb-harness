@@ -6,7 +6,7 @@ Rules for the Deliver phase: unified stack preview, per-component and cross-stac
 
 **Severity:** MUST
 
-**Description:** Every release MUST be deployed as a unified stack preview (backend + web + app together) with per-component e2e AND cross-stack e2e passing before any production deployment. The stack preview URL is dynamically resolved per cloud platform.
+**Description:** Every release MUST be deployed as a unified stack preview (backend + all client components together) with per-component e2e AND cross-stack e2e passing before any production deployment. The stack preview URL is dynamically resolved per cloud platform.
 
 **Valid:**
 ```bash
@@ -37,7 +37,7 @@ pytest tests/cross-stack/ --stack-url $STACK_URL
 **Verification:**
 ```bash
 bvt ${PRODUCTION_URL}
-# Checks: backend /health, web smoke, app launch probe, DB, end-to-end login, error rate
+# Checks: backend /health, web smoke, native/desktop/mini-program launch probe, DB, end-to-end login, error rate
 ```
 
 **Failure handling:**

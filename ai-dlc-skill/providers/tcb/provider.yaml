@@ -1,6 +1,6 @@
 # TCB Provider (Stack-aware)
 
-Default cloud development platform. Supports the unified stack deploy (backend + web + app) and per-component deploys (for isolated dev sandboxes only).
+Default cloud development platform. Supports the unified stack deploy (backend + all clients: web, native, desktop, wxa, mya, tta) and per-component deploys (for isolated dev sandboxes only).
 
 ## Metadata
 
@@ -20,8 +20,20 @@ stack:
     - id: web
       deploy_order: 2
       consumes: BACKEND_URL
-    - id: app
-      deploy_order: 3
+    - id: native
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: desktop
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: wxa
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: mya
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: tta
+      deploy_order: 2
       consumes: BACKEND_URL
 
 regions:
@@ -66,7 +78,11 @@ deploy_stack --preview --provider tcb
 # → backend:  tcb fn deploy --env preview
 # → backend:  tcb db migrate --env preview
 # → web:      tcb hosting deploy --env preview --build-env BACKEND_URL=${STACK_URL}
-# → app:      build with BACKEND_URL injected; upload to internal distribution
+# → native:   build with BACKEND_URL injected; upload to internal distribution
+# → desktop:  build with BACKEND_URL injected; upload to internal distribution
+# → wxa:      build with BACKEND_URL injected; upload to mini-program platform
+# → mya:      build with BACKEND_URL injected; upload to mini-program platform
+# → tta:      build with BACKEND_URL injected; upload to mini-program platform
 # → STACK_URL = https://{env-id}.tcb-preview.com
 
 # Stack staging
@@ -109,7 +125,11 @@ tcb env use <env-id>
 |-----------|---------|
 | `STACK_URL` / `BACKEND_URL` | `https://{env-id}.tcb-preview.com` |
 | `WEB_URL` | `https://{env-id}-{project}.tcb-preview.com` |
-| `APP_DIST_URL` | internal distribution URL |
+| `NATIVE_DIST_URL` | internal distribution URL |
+| `DESKTOP_DIST_URL` | internal distribution URL |
+| `WXA_URL` | mini-program preview QR |
+| `MYA_URL` | mini-program preview QR |
+| `TTA_URL` | mini-program preview QR |
 
 ## Build Config Injection
 

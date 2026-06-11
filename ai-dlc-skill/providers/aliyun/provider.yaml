@@ -1,6 +1,6 @@
 # Aliyun Provider (Stack-aware)
 
-Aliyun (Alibaba Cloud) provider — secondary platform. Supports the unified stack deploy (backend + web + app) and per-component deploys (for isolated dev sandboxes only).
+Aliyun (Alibaba Cloud) provider — secondary platform. Supports the unified stack deploy (backend + all clients: web, native, desktop, wxa, mya, tta) and per-component deploys (for isolated dev sandboxes only).
 
 ## Metadata
 
@@ -20,8 +20,20 @@ stack:
     - id: web
       deploy_order: 2
       consumes: BACKEND_URL
-    - id: app
-      deploy_order: 3
+    - id: native
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: desktop
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: wxa
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: mya
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: tta
+      deploy_order: 2
       consumes: BACKEND_URL
 
 regions:
@@ -64,7 +76,11 @@ capabilities:
 deploy_stack --preview --provider aliyun
 # → backend:  fun deploy --env preview
 # → web:      oss + cdn deploy with build env BACKEND_URL=${STACK_URL}
-# → app:      build with BACKEND_URL injected; package
+# → native:   build with BACKEND_URL injected; package
+# → desktop:  build with BACKEND_URL injected; package
+# → wxa:      build with BACKEND_URL injected; upload to mini-program platform
+# → mya:      build with BACKEND_URL injected; upload to mini-program platform
+# → tta:      build with BACKEND_URL injected; upload to mini-program platform
 # → STACK_URL = https://{gateway}.{region}.fc.devs.com
 
 deploy_stack --env staging --provider aliyun
@@ -102,7 +118,11 @@ fun config --region cn-shanghai
 |-----------|---------|
 | `STACK_URL` / `BACKEND_URL` | `https://{gateway}.{region}.fc.devs.com` |
 | `WEB_URL` | `https://{bucket}.{region}.oss-website.aliyuncs.com` |
-| `APP_DIST_URL` | internal distribution URL |
+| `NATIVE_DIST_URL` | internal distribution URL |
+| `DESKTOP_DIST_URL` | internal distribution URL |
+| `WXA_URL` | mini-program preview QR |
+| `MYA_URL` | mini-program preview QR |
+| `TTA_URL` | mini-program preview QR |
 
 ## Build Config Injection
 

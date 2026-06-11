@@ -1,6 +1,6 @@
 # TCB Stack Preview
 
-Preview deployment for the unified stack (backend + web + app). URL resolution is dynamic per platform; `BACKEND_URL` is injected into web/app builds at build time.
+Preview deployment for the unified stack (backend + all clients: web, native, desktop, wxa, mya, tta). URL resolution is dynamic per platform; `BACKEND_URL` is injected into client builds at build time.
 
 ## Overview
 
@@ -13,7 +13,9 @@ git push feature branch
   → deploy_stack --preview --provider tcb
   → STACK_URL = BACKEND_URL = https://{env-id}.tcb-preview.com
   → WEB_URL  = https://{env-id}-{project}.tcb-preview.com
-  → APP_DIST_URL = internal distribution URL
+  → NATIVE_DIST_URL = internal distribution URL
+  → DESKTOP_DIST_URL = internal distribution URL
+  → WXA_URL / MYA_URL / TTA_URL = mini-program preview QR
   → Per-component e2e: pytest apps/{comp}/tests/e2e/ --base-url $URL
   → Cross-stack e2e:  pytest tests/cross-stack/ --stack-url $STACK_URL
   → TTL: 24h → auto cleanup
@@ -33,13 +35,25 @@ preview:
     web:
       - BACKEND_URL
       - STACK_URL
-    app:
+    native:
+      - BACKEND_URL
+    desktop:
+      - BACKEND_URL
+    wxa:
+      - BACKEND_URL
+    mya:
+      - BACKEND_URL
+    tta:
       - BACKEND_URL
   env:
     - STACK_URL             # = BACKEND_URL (gateway)
     - BACKEND_URL
     - WEB_URL
-    - APP_DIST_URL
+    - NATIVE_DIST_URL
+    - DESKTOP_DIST_URL
+    - WXA_URL
+    - MYA_URL
+    - TTA_URL
     - DATABASE_URL (sandbox)
 ```
 
@@ -50,12 +64,17 @@ preview:
 export STACK_URL=$(deploy_stack --preview --provider tcb --output url)
 export BACKEND_URL=$STACK_URL
 export WEB_URL=$(deploy_stack --preview --provider tcb --output web_url)
-export APP_DIST_URL=$(deploy_stack --preview --provider tcb --output app_url)
+export NATIVE_DIST_URL=$(deploy_stack --preview --provider tcb --output native_url)
+export DESKTOP_DIST_URL=$(deploy_stack --preview --provider tcb --output desktop_url)
 
 # Per-component e2e
 pytest apps/backend/tests/e2e/ --base-url $BACKEND_URL
 pytest apps/web/tests/e2e/ --base-url $WEB_URL --api-url $BACKEND_URL
-pytest apps/app/tests/e2e/ --backend-url $BACKEND_URL
+pytest apps/native/tests/e2e/ --backend-url $BACKEND_URL
+pytest apps/desktop/tests/e2e/ --backend-url $BACKEND_URL
+pytest apps/wxa/tests/e2e/ --backend-url $BACKEND_URL
+pytest apps/mya/tests/e2e/ --backend-url $BACKEND_URL
+pytest apps/tta/tests/e2e/ --backend-url $BACKEND_URL
 
 # Cross-stack e2e
 pytest tests/cross-stack/ --stack-url $STACK_URL

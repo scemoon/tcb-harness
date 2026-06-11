@@ -1,6 +1,6 @@
 # {{project_name}}
 
-AI-DLC monorepo project. Stack: app + web + backend with cross-component contracts.
+AI-DLC monorepo project. Stack: native + desktop + web + backend + wxa + mya + tta with cross-component contracts.
 
 ## Project Layout
 
@@ -9,15 +9,31 @@ AI-DLC monorepo project. Stack: app + web + backend with cross-component contrac
 ├── project.yaml                       # Stack topology
 ├── requirements.md                    # Intent + global spec
 ├── apps/
-│   ├── app/                           # APP-FR-*   mobile / native
+│   ├── native/                        # NATIVE-FR-* native mobile
 │   │   ├── src/
 │   │   ├── tests/{unit,e2e}/
 │   │   └── features/
-│   ├── web/                           # WEB-FR-*   browser frontend
+│   ├── desktop/                       # DESKTOP-FR-* desktop
+│   │   ├── src/
+│   │   ├── tests/{unit,e2e}/
+│   │   └── features/
+│   ├── web/                           # WEB-FR-*    browser frontend
 │   │   ├── src/
 │   │   ├── tests/{unit,integration,e2e}/
 │   │   └── features/
-│   └── backend/                       # BE-FR-*    service / API
+│   ├── wxa/                           # WXA-FR-*    WeChat Mini Program
+│   │   ├── src/
+│   │   ├── tests/{e2e}/
+│   │   └── features/
+│   ├── mya/                           # MYA-FR-*    Mini Program
+│   │   ├── src/
+│   │   ├── tests/{e2e}/
+│   │   └── features/
+│   ├── tta/                           # TTA-FR-*    TikTok Mini Program
+│   │   ├── src/
+│   │   ├── tests/{e2e}/
+│   │   └── features/
+│   └── backend/                       # BE-FR-*     service / API
 │       ├── src/
 │       ├── tests/{unit,integration,e2e}/
 │       └── features/
@@ -48,9 +64,13 @@ AI-DLC monorepo project. Stack: app + web + backend with cross-component contrac
 stack:
   topology: monorepo
   components:
-    - id: app       { fr_prefix: APP, tech: react-native, dir: apps/app }
-    - id: web       { fr_prefix: WEB, tech: react,        dir: apps/web }
-    - id: backend   { fr_prefix: BE,  tech: python,       dir: apps/backend }
+    - id: native    { fr_prefix: NATIVE, tech: react-native,  dir: apps/native }
+    - id: desktop   { fr_prefix: DESKTOP, tech: electron,     dir: apps/desktop }
+    - id: web       { fr_prefix: WEB,    tech: react,         dir: apps/web }
+    - id: backend   { fr_prefix: BE,     tech: python,        dir: apps/backend }
+    - id: wxa       { fr_prefix: WXA,    tech: miniprogram,   dir: apps/wxa }
+    - id: mya       { fr_prefix: MYA,    tech: miniprogram,   dir: apps/mya }
+    - id: tta       { fr_prefix: TTA,    tech: miniprogram,   dir: apps/tta }
   cross_cutting:
     fr_prefix: INT
     contracts: contracts/
@@ -62,7 +82,7 @@ stack:
 ```bash
 # ① Understand
 # requirements.md → openspec/changes/{id}/spec-delta.md (with affects)
-# → features/{app|web|backend}/{domain}/{feature}.feature
+# → features/{component}/{domain}/{feature}.feature
 # → features/cross-stack/{domain}/{feature}.feature  (if cross-component)
 
 # ② Plan

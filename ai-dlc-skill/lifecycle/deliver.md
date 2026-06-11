@@ -15,7 +15,9 @@ All Verify gates passed (per-component + contract + cross-stack)
 Unified Stack Preview Deploy (dynamic URL from cloud provider)
   - backend (functions + DB migrate)
   - web (hosting build with BACKEND_URL)
-  - app (build with BACKEND_URL; if native, package + upload)
+  - native (build with BACKEND_URL; package + upload)
+  - desktop (build with BACKEND_URL; package + upload)
+  - wxa / mya / tta (build with BACKEND_URL; upload to mini-program platform)
   │
   ▼
 Per-component BDD e2e (against component preview URL or stack URL)
@@ -44,7 +46,7 @@ Gate: BVT pass → done | BVT fail → stack rollback
 
 ## Unified Stack Preview Deploy
 
-The whole stack is deployed as one unit. The preview URL is the **backend gateway**; `web` and `app` receive it as a build-time or runtime config.
+The whole stack is deployed as one unit. The preview URL is the **backend gateway**; all client components (`web`, `native`, `desktop`, `wxa`, `mya`, `tta`) receive it as a build-time or runtime config.
 
 ```bash
 # TCB (default)
@@ -52,14 +54,22 @@ deploy_stack --preview
 # → backend: tcb fn deploy --env preview
 # → backend: tcb db migrate --env preview
 # → web:     tcb hosting deploy --env preview --build-env BACKEND_URL=${STACK_URL}
-# → app:     build with BACKEND_URL=${STACK_URL}, upload to internal distribution
+# → native:  build with BACKEND_URL=${STACK_URL}, upload to internal distribution
+# → desktop: build with BACKEND_URL=${STACK_URL}, upload to internal distribution
+# → wxa:     build with BACKEND_URL=${STACK_URL}, upload to mini-program platform
+# → mya:     build with BACKEND_URL=${STACK_URL}, upload to mini-program platform
+# → tta:     build with BACKEND_URL=${STACK_URL}, upload to mini-program platform
 # → STACK_URL = https://{env-id}.tcb-preview.com
 
 # Aliyun
 deploy_stack --preview
 # → backend: fun deploy --env preview
 # → web:     oss + cdn deploy with build env
-# → app:     build with BACKEND_URL, package
+# → native:  build with BACKEND_URL, package
+# → desktop: build with BACKEND_URL, package
+# → wxa:     build with BACKEND_URL, upload to mini-program platform
+# → mya:     build with BACKEND_URL, upload to mini-program platform
+# → tta:     build with BACKEND_URL, upload to mini-program platform
 # → STACK_URL = https://{gateway}.{region}.fc.devs.com
 ```
 
@@ -78,15 +88,23 @@ pytest apps/backend/tests/e2e/ --base-url $BACKEND_URL
 export WEB_URL=$(deploy_stack --preview --output web_url)
 pytest apps/web/tests/e2e/ --base-url $WEB_URL --api-url $BACKEND_URL
 
-# App (against installed package or emulator; uses BACKEND_URL)
-pytest apps/app/tests/e2e/ --backend-url $BACKEND_URL
+# Native (against installed package or emulator; uses BACKEND_URL)
+pytest apps/native/tests/e2e/ --backend-url $BACKEND_URL
+
+# Desktop (against installed package or emulator; uses BACKEND_URL)
+pytest apps/desktop/tests/e2e/ --backend-url $BACKEND_URL
+
+# Mini-programs (wxa, mya, tta) (against emulator or device; uses BACKEND_URL)
+pytest apps/wxa/tests/e2e/ --backend-url $BACKEND_URL
+pytest apps/mya/tests/e2e/ --backend-url $BACKEND_URL
+pytest apps/tta/tests/e2e/ --backend-url $BACKEND_URL
 ```
 
 ## Cross-Stack E2E
 
 ```bash
 pytest tests/cross-stack/ --stack-url $STACK_URL --verbose
-# Runs the full app ↔ web ↔ backend flow defined in features/cross-stack/
+# Runs the full multi-client ↔ backend flow defined in features/cross-stack/
 ```
 
 **Rule STK-001:** All `cross-stack` scenarios must pass before staging or production.
@@ -120,7 +138,7 @@ bvt ${PRODUCTION_URL}
 # Checks:
 #  1. backend /health returns 200
 #  2. web home page returns 200 (SSR) or shell loads (SPA)
-#  3. app launch probe (deep link resolves against BACKEND_URL)
+#  3. native/desktop/mini-program launch probe (deep link resolves against BACKEND_URL)
 #  4. Core end-to-end flow (login) succeeds
 #  5. Database connectivity (probe query)
 #  6. No error rate spikes (5xx < 0.1%, p99 < 500ms)

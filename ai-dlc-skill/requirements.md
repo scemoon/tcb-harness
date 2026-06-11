@@ -2,32 +2,38 @@
 
 ## Overview
 
-This skill implements the AI-Driven Development Lifecycle for **monorepo multi-component stacks** (app + web + backend) with four core phases — Understand (SDD+BDD), Plan (SDD+TDD), Verify (BDD+TDD), Deliver (SDD+Cloud) — plus a first-class **Integration** discipline that governs cross-component contracts (API, events, shared types).
+This skill implements the AI-Driven Development Lifecycle for **monorepo multi-component stacks** (native + desktop + web + backend + wxa + mya + tta) with four core phases — Understand (SDD+BDD), Plan (SDD+TDD), Verify (BDD+TDD), Deliver (SDD+Cloud) — plus a first-class **Integration** discipline that governs cross-component contracts (API, events, shared types).
 
 ## Topology
 
 ```
-┌─────────────── Monorepo Root ───────────────┐
-│                                             │
-│  apps/app        apps/web      apps/backend │
-│  (APP-FR-*)      (WEB-FR-*)    (BE-FR-*)    │
-│      │              │              │         │
-│      └──────┬───────┴──────┬───────┘         │
-│             │              │                │
-│         contracts/   packages/shared/       │
-│         (INT-FR-*)    (generated types)     │
-│                                             │
-│  features/  tests/  openspec/  providers/   │
-└─────────────────────────────────────────────┘
+┌──────────────────── Monorepo Root ─────────────────────┐
+│                                                        │
+│  apps/native  apps/desktop  apps/web  apps/backend     │
+│  (NATIVE-FR-) (DESKTOP-FR-) (WEB-FR-) (BE-FR-)        │
+│  apps/wxa     apps/mya      apps/tta                  │
+│  (WXA-FR-)    (MYA-FR-)     (TTA-FR-)                 │
+│       │              │           │                    │
+│       └──────┬───────┴─────┬─────┘                    │
+│              │             │                          │
+│          contracts/  packages/shared/                 │
+│          (INT-FR-*)   (generated types)               │
+│                                                        │
+│  features/  tests/  openspec/  providers/              │
+└────────────────────────────────────────────────────────┘
 ```
 
 FR namespaces:
 
 | Prefix | Owner | Scope |
 |--------|-------|-------|
-| `APP-*` | `apps/app` | Mobile/native behavior |
+| `NATIVE-*` | `apps/native` | Native mobile behavior |
+| `DESKTOP-*` | `apps/desktop` | Desktop client behavior |
 | `WEB-*` | `apps/web` | Browser frontend behavior |
 | `BE-*`  | `apps/backend` | Server/service behavior |
+| `WXA-*` | `apps/wxa` | WeChat Mini Program behavior |
+| `MYA-*` | `apps/mya` | Mini Program (e.g. Alipay) behavior |
+| `TTA-*` | `apps/tta` | TikTok Mini Program behavior |
 | `INT-*` | `contracts/`, `packages/shared/` | Cross-component contract & integration |
 
 ## Functional Requirements
@@ -96,7 +102,7 @@ FR namespaces:
 
 **Priority:** P0
 
-**When** a feature spans more than one component (e.g. `WEB-*` + `BE-*`, or `APP-*` + `BE-*`),
+**When** a feature spans more than one component (e.g. `WEB-*` + `BE-*`, or `NATIVE-*` + `BE-*`),
 **the system SHALL** define and verify the contract between components before integration.
 
 **Acceptance Criteria:**
@@ -114,7 +120,7 @@ FR namespaces:
 **the system SHALL** be aware of which component(s) the current work affects and apply the right scope, tests, and deploy steps.
 
 **Acceptance Criteria:**
-- Spec delta, design doc, and task list each declare an `affects: [app, web, backend, contracts]` field
+- Spec delta, design doc, and task list each declare an `affects: [native, desktop, web, backend, wxa, mya, tta, contracts]` field
 - Test plan enumerates the layers it covers: `unit`, `integration`, `e2e`, `cross-stack`
 - Only the affected components are deployed in the unified preview (others reused or stubbed)
 - BVT and rollback operate on the whole stack, not a single component

@@ -20,7 +20,11 @@ staging:
     - tcb db migrate --env staging           # backend
     - tcb hosting deploy --env staging \
         --build-env BACKEND_URL=${STACK_URL}  # web
-    - app build with BACKEND_URL injected     # app
+    - native build with BACKEND_URL injected  # native
+    - desktop build with BACKEND_URL injected # desktop
+    - wxa build with BACKEND_URL injected     # wxa
+    - mya build with BACKEND_URL injected     # mya
+    - tta build with BACKEND_URL injected     # tta
     - smoke-test ${STACK_URL}
 
 production:
@@ -32,7 +36,11 @@ production:
     - tcb db migrate --env production
     - tcb hosting deploy --env production \
         --build-env BACKEND_URL=${STACK_URL}
-    - app build with BACKEND_URL injected
+    - native build with BACKEND_URL injected
+    - desktop build with BACKEND_URL injected
+    - wxa build with BACKEND_URL injected
+    - mya build with BACKEND_URL injected
+    - tta build with BACKEND_URL injected
     - smoke-test ${PRODUCTION_URL}
     - health-check ${PRODUCTION_URL}/health
     - bvt ${PRODUCTION_URL}

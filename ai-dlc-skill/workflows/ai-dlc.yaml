@@ -2,23 +2,27 @@ name: ai-dlc
 version: 3.0.0
 description: >
   AI-DLC four-phase development workflow for monorepo multi-component stacks
-  (app + web + backend) with a first-class Integration discipline.
+  (native + desktop + web + backend + wxa + mya + tta) with a first-class Integration discipline.
   Understand (SDD+BDD) → Plan (SDD+TDD) → Verify (BDD+TDD) → Deliver (SDD+Cloud).
 
 stack:
   topology: monorepo
-  components: [app, web, backend]
+  components: [native, desktop, web, backend, wxa, mya, tta]
   fr_namespaces:
-    app: APP-*
+    native: NATIVE-*
+    desktop: DESKTOP-*
     web: WEB-*
     backend: BE-*
+    wxa: WXA-*
+    mya: MYA-*
+    tta: TTA-*
     contracts: INT-*
 
 phases:
   - name: understand
     label: "① Understand — 理解"
     description: >
-      Capture intent, declare affects: [app|web|backend|contracts],
+      Capture intent, declare affects: [native|desktop|web|backend|wxa|mya|tta|contracts],
       produce OpenSpec spec delta in EARS format with FR namespaces,
       write BDD feature files (per-component + cross-stack if applies).
     practices:
@@ -36,8 +40,8 @@ phases:
     artifacts:
       - requirements.md
       - openspec/changes/{id}/spec-delta.md
-      - apps/{component}/features/{domain}/{feature}.feature   # per-component
-      - features/cross-stack/{domain}/{feature}.feature        # if cross-component
+      - apps/{component}/features/{domain}/{feature}.feature        # per-component
+      - features/cross-stack/{domain}/{feature}.feature             # if cross-component
       - contracts/api|events/{name}.{yaml,graphql}             # if affects contracts
 
   - name: plan
@@ -101,7 +105,7 @@ phases:
   - name: deliver
     label: "④ Deliver — 交付"
     description: >
-      Unified stack preview (backend + web + app together), per-component e2e,
+      Unified stack preview (backend + all clients together), per-component e2e,
       cross-stack e2e, staging, human approval, stack-level production deploy,
       stack-level BVT validation, stack-level rollback on failure.
     practices:
