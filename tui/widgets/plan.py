@@ -37,14 +37,24 @@ class Plan(containers.Grid):
             text-style: dim italic;
         }
 
+        .-plan-header {
+            column-span: 2;
+            padding: 0 0 1 0;
+            color: $text-secondary;
+        }
+
         .plan {
             color: $text-secondary;
-            padding: 1 0 1 0;
+            padding: 0 0 0 0;
         }
 
         .status {
-            padding: 1 0 1 0;
+            padding: 0 0 0 0;
             color: $text-secondary;
+        }
+
+        .status-icon {
+            min-width: 3;
         }
 
         .priority-high {
@@ -68,7 +78,7 @@ class Plan(containers.Grid):
         }
 
         .status-pending {
-            opacity: 0.7;
+            opacity: 0.6;
         }
     }
 
@@ -138,11 +148,20 @@ class Plan(containers.Grid):
         if not self.entries:
             yield Static(self._placeholder, classes="-no-plan")
             return
+
+        total = len(self.entries)
+        done = sum(1 for e in self.entries if e.status == "completed")
+        yield Static(f"📋 {done}/{total}  全部完成 ✔" if done == total else f"📋 {done}/{total}", classes="-plan-header")
+
         for entry in self.entries:
             classes = f"priority-{entry.priority} status-{entry.status}"
+
+            status_parts = [self.render_status(entry.status)]
+            if pill_content := self.PRIORITIES.get(entry.priority):
+                status_parts.append(pill_content)
             yield NonSelectableStatic(
-                self.render_status(entry.status),
-                classes=f"status {classes}",
+                Content.assemble(*status_parts),
+                classes=f"status status-icon {classes}",
             )
 
             yield (

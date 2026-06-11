@@ -4,7 +4,6 @@ import json
 import logging
 import re
 import time
-import uuid
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
@@ -261,7 +260,8 @@ class TaskManager:
             self._on_change()
 
     def _next_id(self) -> str:
-        return uuid.uuid4().hex[:12]
+        self._id_counter += 1
+        return f"t{self._id_counter}"
 
     # ── V2 Task Management ──
 
@@ -276,6 +276,7 @@ class TaskManager:
         task_id = self._next_id()
         task = {
             "id": task_id,
+            "_order": self._id_counter,
             "subject": subject,
             "description": description,
             "activeForm": active_form,
@@ -294,8 +295,8 @@ class TaskManager:
         return self._tasks.get(task_id)
 
     def list_tasks(self) -> list[dict]:
-        """List all tasks sorted by id."""
-        return sorted(self._tasks.values(), key=lambda t: t["id"])
+        """List all tasks in creation order."""
+        return list(self._tasks.values())
 
     def update_task(self, task_id: str, **fields) -> dict | None:
         """Update task fields. Supports: subject, description, activeForm, status,
