@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from asyncio import Future
 from typing import Any, Mapping, TYPE_CHECKING
@@ -67,9 +67,11 @@ class RequestPermission(AgentMessage):
 
 @dataclass
 class AskUser(AgentMessage):
-    question: str
-    context: str
-    result_future: Future[dict]
+    question: str = ""
+    context: str = ""
+    options: list[dict] = field(default_factory=list)
+    questions: list[dict] = field(default_factory=list)
+    tool_id: str = ""
 
 
 @dataclass

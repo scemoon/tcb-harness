@@ -369,11 +369,39 @@ Rules:
 - **SendMessage**: send_message(message, attachments=[]) - Send a user-visible message during execution. Use to communicate status updates, findings, or results.
 
 ### Human Interaction
-- **AskUser**: ask_user(question, context="") - Ask the user a question. Use when you need:
+- **AskUser**: ask_user(question, context="", options=[]) - Ask the user a question. Use when you need:
   - Approval before modifying or creating files (when permission_edit is ASK)
   - Clarification on ambiguous requirements
   - Confirmation before destructive operations
   - Any time you need human input to continue
+
+  When asking for confirmation or a simple choice, **always provide `options`** with predefined choices instead of free-text input. Each option supports:
+  - `label` (str, required): Display text shown to the user
+  - `value` (str, required): Value returned when selected
+  - `key` (str, optional): Single-character keyboard shortcut (e.g. "y", "n", "1")
+  - `default` (bool, optional): Auto-select if user doesn't respond (set on at most one option)
+
+  Examples:
+  ```
+  # Confirmation with options
+  ask_user(
+    question="Please confirm SPEC.md is correct?",
+    options=[
+      {"label": "✓ Confirm", "value": "confirmed", "key": "y", "default": true},
+      {"label": "✗ Needs changes", "value": "needs_changes", "key": "n"},
+    ]
+  )
+
+  # Multiple choice
+  ask_user(
+    question="Which environment to deploy?",
+    options=[
+      {"label": "1. Development", "value": "dev", "key": "1"},
+      {"label": "2. Staging", "value": "staging", "key": "2", "default": true},
+      {"label": "3. Production", "value": "prod", "key": "3"},
+    ]
+  )
+  ```
 
 ### Skills (CDH)
 - **Skill**: skill(name, arguments=[]) - Run a registered skill by name. Skills are markdown-based instruction sets with YAML frontmatter.

@@ -246,6 +246,28 @@ class Agent(AgentBase):
                 ))
 
             case {
+                "sessionUpdate": "ask_user",
+                "question": question,
+            }:
+                self.post_message(messages.AskUser(
+                    question=question,
+                    context=update.get("context", ""),
+                    options=update.get("options", []),
+                    questions=update.get("questions", []),
+                    tool_id=update.get("toolId", ""),
+                ))
+
+            case {
+                "sessionUpdate": "ask_user",
+                "questions": questions,
+            } if questions:
+                self.post_message(messages.AskUser(
+                    questions=questions,
+                    context=update.get("context", ""),
+                    tool_id=update.get("toolId", ""),
+                ))
+
+            case {
                 "sessionUpdate": "available_commands_update",
                 "availableCommands": available_commands,
             }:
@@ -324,33 +346,18 @@ class Agent(AgentBase):
         }
         return result
 
-    @jsonrpc.expose("session/ask_user")
-    async def rpc_ask_user(
-        self,
-        sessionId: str,
-        question: str,
-        context: str = "",
-        _meta: dict | None = None,
-    ) -> protocol.AskUserResponse:
-        """Agent asks the user a question and waits for a text response.
+    def send_ask_user_answer(self, answer: str, cancelled: bool) -> None:
+        """Send the user's answer back to the CDHA agent."""
+        import uuid
 
-        Args:
-            sessionId: The session ID.
-            question: The question to show the user.
-            context: Optional additional context.
-            _meta: Optional meta information.
-
-        Returns:
-            The user's answer and whether they cancelled.
-        """
-        result_future: asyncio.Future[dict] = asyncio.Future()
-        self.post_message(messages.AskUser(question, context, result_future))
-        await result_future
-        result = result_future.result()
-        return {
-            "answer": result.get("answer", ""),
-            "cancelled": result.get("cancelled", False),
+        request = {
+            "jsonrpc": "2.0",
+            "method": "session/ask_user_answer",
+            "params": {"answer": answer, "cancelled": cancelled},
+            "id": str(uuid.uuid4()),
         }
+        if self._process is not None and self._process.stdin is not None:
+            self._process.stdin.write(b"%s\n" % json.dumps(request).encode("utf-8"))
 
     @jsonrpc.expose("fs/read_text_file")
     def rpc_read_text_file(

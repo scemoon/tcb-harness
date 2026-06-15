@@ -1314,14 +1314,60 @@ class AgentEngine:
                 if tu["name"] == "AskUser":
                     parsed = json.loads(result_str) if result_str else {}
                     question = parsed.get("question", "")
+                    options = parsed.get("options", [])
+                    questions = parsed.get("questions", [])
+
+                    # Check for auto-default on single question + single option
+                    if not questions and len(options) == 1 and options[0].get("default"):
+                        default_val = options[0]["value"]
+                        self._pending_approval = None
+                        yield StreamEvent.tool_result(
+                            call_id=tu["id"],
+                            content=json.dumps({"answer": default_val}),
+                        )
+                        continue
+
+                    # Auto-default for multi-question: skip questions that have
+                    # a single option with default=true
+                    if questions:
+                        auto_answers = {}
+                        remaining = []
+                        for i, q in enumerate(questions):
+                            qopts = q.get("options", [])
+                            if len(qopts) == 1 and qopts[0].get("default"):
+                                auto_answers[str(i)] = qopts[0]["value"]
+                            else:
+                                remaining.append(q)
+                        if not remaining:
+                            self._pending_approval = None
+                            yield StreamEvent.tool_result(
+                                call_id=tu["id"],
+                                content=json.dumps({"answers": auto_answers}),
+                            )
+                            continue
+                        questions = remaining
+
+                    has_questions = bool(questions)
                     self._pending_approval = {"tool_call": tu, "category": category, "ask_user": True}
-                    yield StreamEvent.ask_user(
-                        call_id=tu["id"],
-                        action="AskUser",
-                        question=question,
-                        context=result_str,
-                        action_type="ask_user",
-                    )
+                    if has_questions:
+                        yield StreamEvent.ask_user(
+                            call_id=tu["id"],
+                            action="AskUser",
+                            question="",  # not used when questions is present
+                            context=result_str,
+                            options=[],
+                            questions=questions,
+                            action_type="ask_user",
+                        )
+                    else:
+                        yield StreamEvent.ask_user(
+                            call_id=tu["id"],
+                            action="AskUser",
+                            question=question,
+                            context=result_str,
+                            options=options,
+                            action_type="ask_user",
+                        )
                     continue
 
                 # Detect ASK permission denial
@@ -1423,6 +1469,19 @@ class AgentEngine:
                     "tool_use_id": tc["id"],
                     "content": json.dumps({"answer": "", "error": "User cancelled"}),
                     "is_error": True,
+                    "category": tc.get("category", "unknown"),
+                }
+            # answer is a JSON string when multi-question, plain text otherwise
+            try:
+                parsed = json.loads(answer)
+                is_structured = isinstance(parsed, dict) or isinstance(parsed, list)
+            except (json.JSONDecodeError, TypeError):
+                is_structured = False
+            if is_structured:
+                return {
+                    "tool_use_id": tc["id"],
+                    "content": json.dumps({"answers": parsed}),
+                    "is_error": False,
                     "category": tc.get("category", "unknown"),
                 }
             return {

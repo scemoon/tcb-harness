@@ -384,6 +384,22 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
                 "content": {"type": "text", "text": f"↩️ Undo edit on {path}"},
             }]
 
+    if name == "AskUser":
+        q = str(arguments.get("question", ""))
+        opts = arguments.get("options", [])
+        lines = [f"❓ {q}"]
+        for o in opts:
+            label = o.get("label", "")
+            desc = o.get("description", "")
+            if desc:
+                lines.append(f"  • {label} — {desc}")
+            else:
+                lines.append(f"  • {label}")
+        return [{
+            "type": "content",
+            "content": {"type": "text", "text": "\n".join(lines)},
+        }] if lines else []
+
     args_text = json.dumps(arguments, indent=2, ensure_ascii=False)
     return [{
         "type": "content",
@@ -600,6 +616,7 @@ class CDHACPAdapter:
         self._pending_requests: dict[str, asyncio.Future[dict]] = {}
         self._request_seq = 0
         self._perm_store = PermissionStore()
+        self._ask_user_future: asyncio.Future[dict] | None = None
 
     @staticmethod
     def _content_to_blocks(content: str | list) -> list:
@@ -725,6 +742,15 @@ class CDHACPAdapter:
         """Synchronously cancel the current prompt (called from main loop)."""
         if self.agent:
             self.agent._cancelled = True
+
+    def resolve_ask_user(self, answer: str, cancelled: bool) -> dict:
+        """Resolve the pending ask_user request with the user's answer.
+
+        Called from the main loop when a ``session/ask_user_answer`` request arrives.
+        """
+        if self._ask_user_future is not None and not self._ask_user_future.done():
+            self._ask_user_future.set_result({"answer": answer, "cancelled": cancelled})
+        return {"ok": True}
 
     def send_session_update(self, update: dict):
         """Send a session/update notification with proper ACP protocol format."""
@@ -1426,19 +1452,35 @@ class CDHACPAdapter:
                     self._text_chunker.flush()
                     self._thought_chunker.flush()
 
-                    # Handle AskUser tool — show text input dialog via session/ask_user RPC
+                    # Handle AskUser tool — show question inline via session/update notification
                     if event.ask_action == "AskUser":
-                        try:
-                            ask_response = await self.send_request("session/ask_user", {
-                                "sessionId": session_id,
+                        if event.ask_questions:
+                            self.send_session_update({
+                                "sessionUpdate": "ask_user",
+                                "questions": event.ask_questions,
+                                "context": event.ask_context or "",
+                                "toolId": event.tool_id,
+                            })
+                        else:
+                            self.send_session_update({
+                                "sessionUpdate": "ask_user",
                                 "question": event.ask_question,
                                 "context": event.ask_context or "",
+                                "options": event.ask_options,
+                                "toolId": event.tool_id,
                             })
+                        try:
+                            self._ask_user_future = asyncio.get_event_loop().create_future()
+                            ask_response = await asyncio.wait_for(
+                                self._ask_user_future, timeout=120
+                            )
                             answer = ask_response.get("answer", "")
                             cancelled = ask_response.get("cancelled", False)
-                        except Exception:
+                        except (asyncio.TimeoutError, Exception):
                             answer = ""
                             cancelled = True
+                        finally:
+                            self._ask_user_future = None
                         result = await self.agent.resolve_approval(
                             approved=not cancelled, answer=answer,
                         )
@@ -1689,6 +1731,7 @@ class JSONRPCServer:
             "session/prompt": self._handle_session_prompt,
             "session/cancel": self._handle_session_cancel,
             "session/set_mode": self._handle_session_set_mode,
+            "session/ask_user_answer": self._handle_ask_user_answer,
             "terminal/create": self._handle_terminal_create,
             "terminal/kill": self._handle_terminal_kill,
             "terminal/output": self._handle_terminal_output,
@@ -1742,6 +1785,12 @@ class JSONRPCServer:
         return await self.adapter.session_cancel(
             params.get("sessionId"),
             params.get("_meta", {}),
+        )
+
+    async def _handle_ask_user_answer(self, params: dict):
+        return self.adapter.resolve_ask_user(
+            params.get("answer", ""),
+            params.get("cancelled", True),
         )
 
     async def _handle_session_set_mode(self, params: dict):

@@ -64,6 +64,7 @@ from tui.slash_command import SlashCommand
 from tui.protocol import BlockProtocol, MenuProtocol, ExpandProtocol
 from tui.menus import MenuItem
 from tui.widgets.shell_terminal import ShellTerminal
+from tui.widgets.ask_user import AskUserWidget, AskUserSubmitted
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -1055,14 +1056,26 @@ class Conversation(containers.Vertical):
     @on(acp_messages.AskUser)
     async def on_acp_ask_user(self, message: acp_messages.AskUser):
         message.stop()
-        from tui.screens.ask_user import AskUserScreen
+        self.window.scroll_end(animate=False)
 
-        screen = AskUserScreen(
+        widget = AskUserWidget(
+            message.tool_id,
             question=message.question,
-            context=message.context,
+            options=message.options or [],
+            questions=message.questions or [],
         )
-        result = await self.app.push_screen_wait(screen, mode=self.screen.id)
-        message.result_future.set_result(result)
+        await self.post(widget, new_block=True)
+        self._agent_response = None
+        self._complete_thought()
+
+    @on(AskUserSubmitted)
+    def on_ask_user_submitted(self, message: AskUserSubmitted) -> None:
+        message.stop()
+        if self.agent is not None:
+            cancelled = message.value == "__cancel__"
+            self.agent.send_ask_user_answer(
+                message.value if not cancelled else "", cancelled=cancelled
+            )
 
     @on(acp_messages.Plan)
     async def on_acp_plan(self, message: acp_messages.Plan):
@@ -1106,6 +1119,9 @@ class Conversation(containers.Vertical):
 
         tool_call = message.tool_call
         status = tool_call.get("status", "")
+
+        if tool_call.get("title") == "AskUser":
+            return
         tool_id = message.tool_id
         content = tool_call.get("content", None) or []
 

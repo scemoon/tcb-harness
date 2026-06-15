@@ -38,26 +38,83 @@ class SendMessageTool:
 
 
 
+_OPTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string", "description": "Display text for the option"},
+        "value": {"type": "string", "description": "Value returned when selected"},
+        "description": {"type": "string", "description": "Optional explanation of the choice"},
+        "key": {"type": "string", "description": "Optional keyboard shortcut (e.g. 'y', 'n')"},
+        "default": {"type": "boolean", "description": "Auto-select if user doesn't respond"},
+    },
+    "required": ["label", "value"],
+}
+
+_QUESTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "header": {"type": "string", "description": "Short label (max 30 chars) for this question"},
+        "question": {"type": "string", "description": "The question text shown to the user"},
+        "type": {
+            "type": "string",
+            "enum": ["single", "multiple", "confirm"],
+            "description": "Question type: single=one choice, multiple=multi-select, confirm=yes/no",
+        },
+        "options": {
+            "type": "array",
+            "items": _OPTION_SCHEMA,
+            "description": "Predefined choices. For 'confirm' type, omit to get default Yes/No options.",
+        },
+    },
+    "required": ["question"],
+}
+
+
 class AskUserTool:
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="AskUser",
-            description="Ask the user a question and wait for their response.",
+            description="Ask the user one or more questions with optional predefined choices.",
             input_schema={
                 "type": "object",
                 "properties": {
-                    "question": {"type": "string", "description": "The question to ask"},
+                    "question": {"type": "string", "description": "[DEPRECATED] Single question text. Use 'questions' instead."},
+                    "header": {"type": "string", "description": "[DEPRECATED] Short label for single question."},
                     "context": {"type": "string", "description": "Additional context"},
+                    "options": {
+                        "type": "array",
+                        "items": _OPTION_SCHEMA,
+                        "description": "[DEPRECATED] Options for single question. Use 'questions' instead.",
+                    },
+                    "questions": {
+                        "type": "array",
+                        "items": _QUESTION_SCHEMA,
+                        "minItems": 1,
+                        "maxItems": 6,
+                        "description": "One or more questions to ask the user. Supports single choice, multiple selection, and confirm types.",
+                    },
                 },
-                "required": ["question"],
+                "oneOf": [
+                    {"required": ["question"]},
+                    {"required": ["questions"]},
+                ],
             },
             is_read_only=True,
         )
 
     def run(self, tool_input: dict[str, Any]) -> ToolResult:
         question = tool_input.get("question", "")
+        header = tool_input.get("header", "")
         context = tool_input.get("context", "")
-        return ToolResult(name="AskUser", output={"question": question, "context": context})
+        options = tool_input.get("options", [])
+        questions = tool_input.get("questions", [])
+        return ToolResult(name="AskUser", output={
+            "question": question,
+            "header": header,
+            "context": context,
+            "options": options,
+            "questions": questions,
+        })
 
 
 

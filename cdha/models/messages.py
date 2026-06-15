@@ -312,6 +312,8 @@ class StreamEvent:
     ask_action: str = ""
     ask_question: str = ""
     ask_context: str = ""
+    ask_options: list[dict] = field(default_factory=list)
+    ask_questions: list[dict] = field(default_factory=list)
     ask_action_type: str = ""
     ask_path: str = ""
     ask_command: str = ""
@@ -375,13 +377,17 @@ class StreamEvent:
     @classmethod
     def ask_user(cls, call_id: str, action: str, question: str,
                  context: str = "", action_type: str = "",
-                 path: str = "", command: str = "") -> "StreamEvent":
+                 path: str = "", command: str = "",
+                 options: list[dict] | None = None,
+                 questions: list[dict] | None = None) -> "StreamEvent":
         return cls(
             type=StreamEventType.ASK_USER,
             tool_id=call_id,
             ask_action=action,
             ask_question=question,
             ask_context=context,
+            ask_options=options or [],
+            ask_questions=questions or [],
             ask_action_type=action_type,
             ask_path=path,
             ask_command=command,
@@ -458,7 +464,7 @@ class StreamEvent:
                 category=self.result_category,
             ).to_dict()
         elif self.type == StreamEventType.ASK_USER:
-            return {
+            result = {
                 "type": "ask_user",
                 "ask_user": {
                     "tool_use_id": self.tool_id,
@@ -466,11 +472,14 @@ class StreamEvent:
                     "category": self.tool_category.value,
                     "question": self.ask_question,
                     "context": self.ask_context,
+                    "options": self.ask_options,
+                    "questions": self.ask_questions,
                     "action_type": self.ask_action_type,
                     "path": self.ask_path,
                     "command": self.ask_command,
                 }
             }
+            return result
         elif self.type == StreamEventType.ERROR:
             return TextBlock(content=f"[Error: {self.error_message}]").to_dict()
         elif self.type == StreamEventType.SUBAGENT_START:

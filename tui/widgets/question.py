@@ -262,9 +262,14 @@ class Question(containers.VerticalGroup, can_focus=True):
             for index, answer in enumerate(self.options):
                 active = index == self.selection
                 key = (
-                    self.DEFAULT_KINDS.get(answer.kind)
-                    if (answer.kind and answer.kind not in kinds)
-                    else None
+                    answer.kind
+                    if (answer.kind and answer.kind not in kinds
+                        and answer.kind not in self.DEFAULT_KINDS)
+                    else (
+                        self.DEFAULT_KINDS.get(answer.kind)
+                        if (answer.kind and answer.kind not in kinds)
+                        else None
+                    )
                 )
                 yield Option(
                     index,
