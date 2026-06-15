@@ -42,6 +42,8 @@ class CdhProjectLoader:
 
     CDH_DIRNAME = ".cdh"
     LAST_SESSION_FILENAME = "last_session.json"
+    TASKS_FILENAME = "tasks.json"
+    PERMISSIONS_FILENAME = "permissions.json"
 
     # ── discovery ──────────────────────────────────────────────
 
@@ -114,6 +116,50 @@ class CdhProjectLoader:
     def load_last_session(cdh_dir: Path) -> dict:
         """Load last session info from ``.cdh/last_session.json``."""
         path = cdh_dir / CdhProjectLoader.LAST_SESSION_FILENAME
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {}
+
+    # ── task persistence ───────────────────────────────────────
+
+    @staticmethod
+    def save_tasks(cdh_dir: Path, tasks_data: dict) -> None:
+        """Save tasks/todos to ``.cdh/tasks.json``."""
+        path = cdh_dir / CdhProjectLoader.TASKS_FILENAME
+        path.write_text(
+            json.dumps(tasks_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def load_tasks(cdh_dir: Path) -> dict:
+        """Load tasks/todos from ``.cdh/tasks.json``."""
+        path = cdh_dir / CdhProjectLoader.TASKS_FILENAME
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {}
+
+    # ── permission persistence ─────────────────────────────────
+
+    @staticmethod
+    def save_permissions(cdh_dir: Path, perm_data: dict) -> None:
+        """Save permission overrides to ``.cdh/permissions.json``."""
+        path = cdh_dir / CdhProjectLoader.PERMISSIONS_FILENAME
+        path.write_text(
+            json.dumps(perm_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def load_permissions(cdh_dir: Path) -> dict:
+        """Load permission overrides from ``.cdh/permissions.json``."""
+        path = cdh_dir / CdhProjectLoader.PERMISSIONS_FILENAME
         if path.exists():
             try:
                 return json.loads(path.read_text(encoding="utf-8"))

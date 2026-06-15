@@ -114,7 +114,7 @@ class BuildAgent(AgentConfig):
     def __init__(self):
         super().__init__(
             name="build",
-            description="Full development agent with all tools enabled. Edits and shell commands require user approval.",
+            description="Full development agent with all tools enabled. Edits and shell commands require user approval. Uses CoT reasoning + ReAct loop with Task-first delegation.",
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.ASK,
             permission_bash=AgentPermission.ASK,
@@ -131,7 +131,7 @@ class PlanAgent(AgentConfig):
     def __init__(self):
         super().__init__(
             name="plan",
-            description="Plan mode: ReAct (Thought → Action → Observation) agent with hard plan gate. Creates task plans first, presents for user review, then executes with Human-in-the-loop.",
+            description="Plan mode: CoT + ReAct (思考→行动→观察) agent with hard plan gate and Task-first delegation. Creates task plans first, presents for user review, then delegates execution via Task subagents with Human-in-the-loop.",
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.ASK,
             permission_bash=AgentPermission.ASK,
@@ -148,7 +148,7 @@ class SoloAgent(AgentConfig):
     def __init__(self):
         super().__init__(
             name="solo",
-            description="Independent agent that plans first, then acts with full tool access. Shell commands require user approval.",
+            description="Independent agent that plans first, then acts with full tool access. Uses CoT reasoning + ReAct loop with Task-first delegation. Shell commands require user approval.",
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.ALLOW,
             permission_bash=AgentPermission.ASK,
@@ -165,7 +165,7 @@ class GeneralAgent(AgentConfig):
     def __init__(self):
         super().__init__(
             name="general",
-            description="General-purpose subagent for complex multi-step tasks",
+            description="General-purpose subagent for complex multi-step tasks. Executes focused work delegated by parent agent via Task tool. Uses CoT + ReAct internally.",
             mode=AgentMode.SUBAGENT,
             permission_edit=AgentPermission.ALLOW,
             permission_bash=AgentPermission.ALLOW,
@@ -476,18 +476,68 @@ def filter_tool_descriptions(
     return "\n".join(result_lines)
 
 
+REACT_CYCLE = """
+## ReAct Cycle — 思考 → 行动 → 观察
+
+You operate in a **ReAct loop with Chain of Thought (CoT) reasoning**:
+
+```
+┌────────────────────────────────────────────────────┐
+│  ╭──────────╮    ╭──────────╮    ╭──────────╮      │
+│  │  Thought  │ →  │  Action  │ →  │Observa-  │      │
+│  │ (思考)    │    │ (行动)   │    │tion(观察)│ ──→  │
+│  ╰──────────╯    ╰──────────╯    ╰──────────╯      │
+│       ↑                   ↓ (cycle continues)      │
+│       │                                            │
+│       └──────── Feedback Loop ────────────────────┘ │
+└────────────────────────────────────────────────────┘
+```
+
+### Thought Phase (思考阶段)
+Before any action, reason step by step inside `<thinking>`:
+1. **Current state**: What do I know? What has been done? What are the results?
+2. **Goal**: What needs to be accomplished next?
+3. **Plan**: How should I approach it? What's the smallest next step?
+4. **Tool selection**: Which tool is appropriate?
+   - **For multi-step or independent work → always use `Task`** to spawn a subagent
+   - For simple queries → use read/search tools directly
+   - For execution (Write/Edit/Insert/ApplyPatch/Bash) → prefer delegating via `Task`
+
+### Action Phase (行动阶段)
+Execute the chosen action. **Action types (in priority order)**:
+1. **Delegate via Task**: `Task(agent_type="general"|"explore"|"scout", prompt="...")` — **preferred for any substantial work**. Multi-step logic, file modifications, research, and any task that needs >1-2 tool calls should be delegated.
+2. **Plan**: `task_create()` / `task_update()` / `todo_create()` to organize the work DAG.
+3. **Research**: `Read()` / `Grep()` / `Glob()` / `WebFetch()` / `WebSearch()` for information gathering.
+4. **Direct execute**: Only for trivial single-step operations that cannot justify a subagent.
+
+### Observation Phase (观察阶段)
+The tool result IS your observation. Process it:
+- **Success**: Note key outputs, update task status, move to next step
+- **Error**: Diagnose root cause, decide: retry with fix | modify plan | ask user
+- **Partial**: Extract what worked, adjust approach for remaining work
+
+### Core Rules
+- **ALL reasoning goes in `<thinking>`**: Never narrate "I will now..." in visible text
+- **Prefer Task over direct execution**: File edits, multi-step logic, research → always use `Task()`
+- **One responsibility per Task**: Each subagent should have a clear, focused goal
+- **Pass context**: Include relevant context (file paths, findings) in Task prompts
+- **CoT every cycle**: Every turn starts with `<thinking>` reasoning before any action
+"""
+
 PLAN_INSTRUCTIONS = """
 ## ReAct Workflow (Thought → Action → Observation)
 
 The agent is a **ReAct** implementation: each cycle is **Thought → Action → Observation**.
-Action takes two forms: **Plan** (task_create/task_update) or **Execute** (tool calls).
+**Action always delegates to `Task` subagents for any substantial work.**
 **Human-in-the-loop** means you involve the user at key decision points.
 
 ```
 Loop:
-  Thought     → Reason about current state, decide what to do next
-  Action      → Plan (create/update tasks) or Execute (use tools)
-  Observation → Incorporate tool results into the next Thought
+  Thought     → Reason step by step (CoT) inside <thinking>
+                Always ask: "Should I delegate this to a Task subagent?"
+  Action      → Prefer Task(agent_type, prompt) for multi-step work
+                Only use direct tools for trivial single-step operations
+  Observation → Incorporate results into the next Thought
 ```
 
 Plan/Build/Solo are different configurations of this same ReAct engine. The
@@ -495,17 +545,19 @@ difference is how strictly planning is enforced before execution:
 - **plan** mode: hard gate — execution tools blocked until a task plan exists
 - **build**/**solo** mode: soft gate — execution allowed but planning encouraged
 
-ReAct actions that are NOT execution (Read, Grep, Glob, List, WebFetch,
-WebSearch, Task, task_create, task_list, send_message, ask_user) are always
-allowed. Only Write/Edit/Insert/ApplyPatch/Bash are gated by the plan.
+**Task-first principle**: Any action that requires >1 tool call or involves
+file modification MUST be delegated to a `Task` subagent. Direct execution
+(Write/Edit/Insert/ApplyPatch/Bash) is only for trivial single-step operations.
 
 ---
 
-### Step 1: Think — Understand & Explore
+### Step 1: Think (CoT) — Chain of Thought Reasoning
 
-Analyze the request before taking any action.
+Analyze the request with step-by-step reasoning before any action.
 
 - Wrap ALL reasoning in `<thinking>...</thinking>` — visible text is for the user only
+- Think step by step: What's the goal? What's the current state? What's the best approach?
+- **Always consider**: "Can this be delegated to a Task subagent?"
 - Read relevant files, grep for patterns, glob for structure
 - Use `webfetch`/`websearch` for external APIs or docs
 - Delegate deep research to `explore`/`scout` subagents via `task()`
@@ -520,7 +572,7 @@ Once you understand the work, create a complete task plan via `task_create()`.
 
 **Task Granularity Rules**
 - One task = one concern (e.g. "Create User model", "Add login API endpoint")
-- Each task: **1-3 tool calls**. If >5 tool calls, split it.
+- Each task: **delegate to a Task subagent**. If a task needs >5 tool calls, split it.
 - Every task must have a **clear, verifiable completion criterion**
 - Use `todo_create()` only for truly trivial items (single config change, one quick check)
 
@@ -543,15 +595,17 @@ Wait for user approval before moving to execution.
 
 ---
 
-### Step 3: Act (Execute) — Process Tasks
+### Step 3: Act (Execute) — Delegate to Task Subagents
 
-Execute tasks one by one with user awareness.
+Execute by **delegating to Task subagents** rather than using direct tools.
 
-- Verify blockedBy tasks are done via `task_list()` before starting
-- Update status: `pending` → `in_progress` → `completed`
+- **PREFERRED**: `Task(agent_type="general", prompt="Detailed instructions with context...")`
+- Use `general` subagent for implementation work, `explore` for code search, `scout` for research
+- Pass enough context in the prompt: relevant file paths, code snippets, requirements
+- Update task status: `pending` → `in_progress` → `completed`
 - Use `task_update(..., output=...)` to pass results to downstream tasks
-- Execution tools (Write/Edit/Insert/ApplyPatch/Bash) may require user approval
-  depending on agent config (always required in plan/build mode)
+- Direct execution tools (Write/Edit/Insert/ApplyPatch/Bash) should be avoided
+  in favor of `Task` delegation. Only use them for truly trivial operations.
 - After each task, report progress via `send_message()` to keep the user in the loop
 
 ---
@@ -560,8 +614,8 @@ Execute tasks one by one with user awareness.
 
 After every Action, the tool result is your **Observation**. Use it to inform the
 next Thought:
-- Task creation succeeded → proceed to present plan or execute
-- Task execution completed → note the output, move to next task
+- Task subagent completed → review SUMMARY/CHANGES/EVIDENCE/RISKS/BLOCKERS sections
+- Task creation succeeded → proceed to present plan or delegate execution
 - Error occurred → diagnose and decide: retry, modify plan, or ask the user
 - User denied an action → adapt the task plan accordingly
 
@@ -570,7 +624,8 @@ next Thought:
 ### Rules
 
 - **No top-level planning prose**: All planning goes through task/todo tools so the UI renders it.
-- **Thinking in `<thinking>`**: Reasoning between tool calls goes inside `<thinking>...</thinking>`. Never narrate "I will now…" in visible text.
+- **CoT in `<thinking>`**: Every turn starts with chain-of-thought reasoning inside `<thinking>`. Never narrate "I will now…" in visible text.
+- **Task-first**: Any operation needing >1 tool call → delegate via `Task()`. Direct tool use is exceptional.
 - **Task status discipline**: `pending` → `in_progress` → `completed`. Every task transitions through all three.
 - **No execution without a plan**: Write/Edit/Insert/ApplyPatch/Bash require tasks. Create tasks first.
 - **Human at key decisions**: Present the plan, get approval, then execute. Report progress as you go.

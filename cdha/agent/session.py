@@ -23,6 +23,8 @@ class SessionData:
     lifecycle_state: dict = field(default_factory=dict)
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    tasks: list[dict] = field(default_factory=list)
+    todos: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -36,6 +38,8 @@ class SessionData:
             "lifecycle_state": self.lifecycle_state,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "tasks": self.tasks,
+            "todos": self.todos,
         }
 
     @classmethod
@@ -51,6 +55,8 @@ class SessionData:
             lifecycle_state=data.get("lifecycle_state", {}),
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
+            tasks=data.get("tasks", []),
+            todos=data.get("todos", []),
         )
 
 
@@ -89,6 +95,22 @@ class AgentSession:
     @property
     def lifecycle_state(self) -> dict:
         return self._data.lifecycle_state
+
+    @property
+    def tasks(self) -> list[dict]:
+        return self._data.tasks
+
+    @tasks.setter
+    def tasks(self, value: list[dict]) -> None:
+        self._data.tasks = value
+
+    @property
+    def todos(self) -> list[dict]:
+        return self._data.todos
+
+    @todos.setter
+    def todos(self, value: list[dict]) -> None:
+        self._data.todos = value
 
     def add_message(self, role: str, content: str) -> None:
         self._data.messages.append({"role": role, "content": content})

@@ -11,10 +11,11 @@ from dataclasses import dataclass
 from typing import Callable
 
 from cdha.agent.context import ContextManager
+from cdha.agent.permissions_store import PermissionStore
 from cdha.models.provider import ContentBlockType, ProviderRegistry
 
 from cdha.agent.session import AgentSession
-from cdha.models.messages import StreamEvent
+from cdha.models.messages import StreamEvent, StreamEventType
 
 logger = logging.getLogger("cdha.agent.engine")
 
@@ -420,6 +421,30 @@ class TaskManager:
     def get_plan(self) -> list[str]:
         return self._plan
 
+    # ── Serialization ──
+
+    def to_dict(self) -> dict:
+        """Serialize all tasks and todos for persistence."""
+        return {
+            "tasks": [dict(t) for t in self._tasks.values()],
+            "todos": [dict(t) for t in self._todos],
+            "plan": list(self._plan),
+            "id_counter": self._id_counter,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, on_change: Callable[[], None] | None = None) -> TaskManager:
+        """Restore task manager from saved dict."""
+        tm = cls(on_change=on_change)
+        tm._id_counter = data.get("id_counter", 0)
+        tm._plan = list(data.get("plan", []))
+        for t in data.get("tasks", []):
+            tid = t.get("id", tm._next_id())
+            tm._tasks[tid] = dict(t)
+        for t in data.get("todos", []):
+            tm._todos.append(dict(t))
+        return tm
+
 
 # Tools that require a task plan before execution (plan gate)
 _EXECUTION_TOOLS: frozenset[str] = frozenset({
@@ -428,7 +453,7 @@ _EXECUTION_TOOLS: frozenset[str] = frozenset({
 
 
 class AgentEngine:
-    def __init__(self, app, project_dir: Path | None = None):
+    def __init__(self, app, project_dir: Path | None = None, perm_store: PermissionStore | None = None):
         from cdha.agent.tools.file_ops import ToolFactory
         from cdha.agent.agents.types import BuildAgent
         from cdha.agent.hooks import HookManager
@@ -498,12 +523,19 @@ class AgentEngine:
         # cancelling the parent also cancels in-flight subagents.
         self._child_engines: list[AgentEngine] = []
 
+        # Permission overrides shared across subagents
+        self._perm_store: PermissionStore = perm_store or PermissionStore()
+
         # Plan gate: mode-aware enforcement based on agent type
         # "hard" (plan mode) rejects execution tools without plan
         # "soft" (build/solo mode) suggests planning but doesn't block
         # "off" (agents with permission_task=DENY) no enforcement
         self._plan_gate_mode: str = "off"
         self._plan_gate_fired: bool = False
+
+        # ReAct state tracking
+        self._react_phase: str = "thought"  # "thought" | "action" | "observation"
+        self._direct_execution_count: int = 0  # Track direct tool use for Task-first routing
 
     def _build_tool_registry(self) -> ToolRegistry:
         from cdha.agent.tools.registry import ToolRegistry
@@ -664,6 +696,7 @@ class AgentEngine:
             AgentPermission,
             create_agent,
             PLAN_INSTRUCTIONS,
+            REACT_CYCLE,
             TOOL_DESCRIPTIONS,
             filter_tool_descriptions,
         )
@@ -681,6 +714,7 @@ class AgentEngine:
             system_parts.append("\n".join(restrictions))
 
         if self.current_agent.permission_task != AgentPermission.DENY:
+            system_parts.append(REACT_CYCLE)
             system_parts.append(PLAN_INSTRUCTIONS)
 
         # Tell the model how to format intermediate reasoning so the TUI
@@ -691,6 +725,12 @@ class AgentEngine:
         # and shows up in chat interleaved with tool calls.
         system_parts.append(
             "\n## Response style\n"
+            "- **Every turn must start with Chain of Thought reasoning** "
+            "inside `<thinking>`. Analyze the current state, determine the "
+            "next step, and decide whether to delegate via `Task`.\n"
+            "- **Prefer `Task` delegation**: For any multi-step operation, "
+            "file modification, or research, use `Task(agent_type, prompt)` "
+            "rather than calling execution tools directly.\n"
             "- If you need to reason between tool calls, wrap your "
             "reasoning in `<thinking>...</thinking>`.  The TUI will "
             "render the wrapped block as a collapsible thought and "
@@ -710,6 +750,9 @@ class AgentEngine:
         tagged_content = "<!-- AGENT_CONFIG -->\n" + "\n".join(system_parts)
         if not self.context.replace_system_section("AGENT_CONFIG", tagged_content):
             self.context.add_system(tagged_content)
+
+        # Re-apply user permission overrides (e.g. "allow always")
+        self._perm_store.apply_to(self.current_agent)
 
     def get_available_tools(self) -> str:
         from cdha.agent.agents.types import TOOL_DESCRIPTIONS, filter_tool_descriptions
@@ -1020,13 +1063,46 @@ class AgentEngine:
         # Reset cancellation flag (adapter also resets it before calling)
         self._cancelled = False
 
-        # ── Agent loop (Clawd-Code style) ──
+        # ── Agent loop: CoT + ReAct (思考 → 行动 → 观察) ──
         is_anthropic = provider.is_anthropic_style()
         max_turns = self.current_agent.max_turns or 10
+
+        # Initialize ReAct phase section (first turn prompt)
+        cot_phase_init = (
+            "<!-- REACT_PHASE -->\n"
+            "## Turn 1 — Thought Phase (思考)\n"
+            "Begin this turn by reasoning step by step in `<thinking>`:\n"
+            "1. **Current state**: Analyze the user request and what needs to be done.\n"
+            "2. **Goal**: What should I accomplish this turn?\n"
+            "3. **Approach**: Should I delegate via `Task`, plan via `task_create`, "
+            "or use a direct tool?\n"
+            "4. **Task-first**: For any multi-step work or file modifications, "
+            "prefer `Task(agent_type, prompt)` over direct execution tools.\n"
+        )
+        if not self.context.replace_system_section("REACT_PHASE", cot_phase_init):
+            self.context.add_system(cot_phase_init)
+
         for turn in range(max_turns):
             if self._cancelled:
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                 return
+
+            # ── Thought Phase: update CoT reasoning guidance for this turn ──
+            # Cleanup stale reminders that may have accumulated
+            self.context.remove_system_by_marker("<!-- TASK_FIRST_REMINDER -->")
+            if turn > 0:
+                cot_phase = (
+                    f"<!-- REACT_PHASE -->\n"
+                    f"## Turn {turn + 1} — Thought Phase (思考)\n"
+                    "Begin this turn by reasoning step by step in `<thinking>`:\n"
+                    "1. **Current state**: What just happened? What results do I have?\n"
+                    "2. **Goal**: What should I accomplish this turn?\n"
+                    "3. **Approach**: Should I delegate via `Task`, plan via `task_create`, "
+                    "or use a direct tool?\n"
+                    "4. **Task-first**: For any multi-step work or file modifications, "
+                    "prefer `Task(agent_type, prompt)` over direct execution tools.\n"
+                )
+                self.context.replace_system_section("REACT_PHASE", cot_phase)
 
             self._pending_thinking_blocks = []
 
@@ -1281,13 +1357,25 @@ class AgentEngine:
                         # Soft gate: execute but inject a reminder for next turn
                         self.context.add_system(
                             "<!-- PLAN_REMINDER -->\n"
-                            "Note: You started execution without a task plan. "
-                            "If this is a complex task, consider using task_create() "
-                            "to organize your work into fine-grained steps."
+                            "Note: You used a direct execution tool without delegating via Task. "
+                            "For any non-trivial operation, prefer `Task(agent_type, prompt)` "
+                            "to delegate the work to a focused subagent instead. Task subagents "
+                            "encapsulate multi-step logic, keep the main context clean, and "
+                            "return structured SUMMARY/CHANGES/EVIDENCE/RISKS/BLOCKERS output."
                         )
                         result = await self._execute_tool(tu)
                 else:
                     result = await self._execute_tool(tu)
+                    # Task-first routing: track direct execution tool use
+                    if tu["name"] in _EXECUTION_TOOLS:
+                        self._direct_execution_count += 1
+                        if self._direct_execution_count >= 2:
+                            self.context.add_system(
+                                "<!-- TASK_FIRST_REMINDER -->\n"
+                                "Reminder: You're using direct execution tools repeatedly. "
+                                "For multi-step work, delegate via `Task(agent_type, prompt)` instead. "
+                                "This keeps the main context focused and work properly encapsulated."
+                            )
                 result_str = str(result.get("content", ""))
                 is_error = result.get("is_error", False)
                 category = result.get("category", "unknown")
@@ -1511,6 +1599,14 @@ class AgentEngine:
         finally:
             setattr(self.current_agent, attr_name, saved)
 
+    def _reset_react_state(self) -> None:
+        """Reset ReAct loop state for a fresh cycle."""
+        self._react_phase = "thought"
+        self._direct_execution_count = 0
+        self._plan_gate_fired = False
+        self.context.remove_system_by_marker("<!-- REACT_PHASE -->")
+        self.context.remove_system_by_marker("<!-- TASK_FIRST_REMINDER -->")
+
     def reset(self):
         self.context.reset()
         self.iterations = 0
@@ -1519,6 +1615,7 @@ class AgentEngine:
         self._skills_loaded = False
         self._project_context_loaded = False
         self._skill_loader.invalidate_cache()
+        self._reset_react_state()
 
     def status(self) -> str:
         return (
@@ -1602,7 +1699,7 @@ class AgentEngine:
         Inherits project context and skills from the parent
         engine so the subagent does not start from a blank slate.
         """
-        sub_engine = AgentEngine(self.app, project_dir=self._project_dir)
+        sub_engine = AgentEngine(self.app, project_dir=self._project_dir, perm_store=self._perm_store)
 
         # Inherit parent context: project info, skills
         sub_engine._project_context_loaded = self._project_context_loaded
@@ -1708,11 +1805,32 @@ class AgentEngine:
         self._session = session
         if session.messages:
             self.context.load_from_session(session.messages)
+        if session.tasks or session.todos:
+            self._task_manager = TaskManager.from_dict({
+                "tasks": session.tasks,
+                "todos": session.todos,
+                "plan": [],
+                "id_counter": len(session.tasks) + len(session.todos),
+            }, on_change=self._on_task_change)
+        # Restore context usage stats
+        self._restore_session_stats(session)
 
     def save_session(self) -> None:
         if self._session:
             try:
                 self._session.messages = self.context.to_session_format()
+                tm_data = self._task_manager.to_dict()
+                self._session.tasks = tm_data.get("tasks", [])
+                self._session.todos = tm_data.get("todos", [])
+                # Persist context usage stats so they survive session reload
+                self._session.update_state("stats", {
+                    "total_tokens": self.total_tokens,
+                    "iterations": self.iterations,
+                    "turn_usages": [
+                        {k: v for k, v in u.items() if isinstance(v, (int, float))}
+                        for u in self._turn_usages
+                    ],
+                })
                 self._session.save()
             except Exception as e:
                 logger.exception("Failed to save session: %s", e)
@@ -1722,8 +1840,55 @@ class AgentEngine:
         if session.load():
             self._session = session
             self.context.load_from_session(session.messages)
+            if session.tasks or session.todos:
+                self._task_manager = TaskManager.from_dict({
+                    "tasks": session.tasks,
+                    "todos": session.todos,
+                    "plan": [],
+                    "id_counter": len(session.tasks) + len(session.todos),
+                }, on_change=self._on_task_change)
+            # Restore context usage stats
+            self._restore_session_stats(session)
             return True
         return False
+
+    def _restore_session_stats(self, session: AgentSession) -> None:
+        """Restore context usage stats from session lifecycle_state."""
+        stats = session.get_state("stats", {})
+        if not stats:
+            return
+        self.total_tokens = int(stats.get("total_tokens", self.total_tokens))
+        self.iterations = int(stats.get("iterations", self.iterations))
+        restored_turns = stats.get("turn_usages", [])
+        if restored_turns and isinstance(restored_turns, list):
+            self._turn_usages = list(restored_turns)
+
+    def save_tasks_to_project(self) -> None:
+        """Save tasks/todos to .cdh/tasks.json in the project directory."""
+        from cdha.agent.cdh_loader import CdhProjectLoader
+        cdh_dir = CdhProjectLoader.find_cdh_dir(self._project_dir)
+        if cdh_dir is None:
+            return
+        try:
+            tm_data = self._task_manager.to_dict()
+            CdhProjectLoader.save_tasks(cdh_dir, tm_data)
+        except Exception as e:
+            logger.warning("Failed to save tasks to .cdh: %s", e)
+
+    def load_tasks_from_project(self) -> None:
+        """Restore tasks/todos from .cdh/tasks.json."""
+        from cdha.agent.cdh_loader import CdhProjectLoader
+        cdh_dir = CdhProjectLoader.find_cdh_dir(self._project_dir)
+        if cdh_dir is None:
+            return
+        try:
+            data = CdhProjectLoader.load_tasks(cdh_dir)
+            if data and (data.get("tasks") or data.get("todos")):
+                self._task_manager = TaskManager.from_dict(
+                    data, on_change=self._on_task_change
+                )
+        except Exception as e:
+            logger.warning("Failed to load tasks from .cdh: %s", e)
 
     def get_session(self) -> Optional[AgentSession]:
         return self._session

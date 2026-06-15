@@ -42,6 +42,7 @@ def debug_log(*args, **kwargs):
     else:
         print("[cdha]", *args, file=sys.stderr, flush=True)
 
+from cdha.agent.cdh_loader import CdhProjectLoader
 from cdha.agent.engine import AgentEngine
 from cdha.agent.permissions_store import PermissionStore
 from cdha.agent.session import AgentSession
@@ -509,7 +510,7 @@ def _filter_tool_call_text(text: str) -> str:
     return "".join(out)
 
 
-def _create_engine(cwd: str) -> AgentEngine:
+def _create_engine(cwd: str, perm_store: PermissionStore | None = None) -> AgentEngine:
     cfg = load_config()
     ModelRegistry.initialize()
     provider_cls = ProviderRegistry.get(cfg.default_provider)
@@ -522,7 +523,7 @@ def _create_engine(cwd: str) -> AgentEngine:
         current_model = cfg.default_model
 
     project_dir = Path(cwd).resolve() if cwd else Path.cwd()
-    return AgentEngine(MinimalApp(), project_dir=project_dir)
+    return AgentEngine(MinimalApp(), project_dir=project_dir, perm_store=perm_store)
 
 
 class TextChunker:
@@ -617,6 +618,48 @@ class CDHACPAdapter:
         self._request_seq = 0
         self._perm_store = PermissionStore()
         self._ask_user_future: asyncio.Future[dict] | None = None
+
+    def _perm_store_load(self, cwd: str | None = None) -> None:
+        """Load permission overrides from ``.cdh/permissions.json``."""
+        project_dir = Path(cwd).resolve() if cwd else (self.agent._project_dir if self.agent else Path.cwd())
+        cdh_dir = CdhProjectLoader.find_cdh_dir(project_dir)
+        if cdh_dir:
+            data = CdhProjectLoader.load_permissions(cdh_dir)
+            if data:
+                self._perm_store = PermissionStore.from_dict(data)
+
+    def _perm_store_save(self) -> None:
+        """Save permission overrides to ``.cdh/permissions.json``."""
+        if not self.agent:
+            return
+        cdh_dir = CdhProjectLoader.find_cdh_dir(self.agent._project_dir)
+        if cdh_dir:
+            CdhProjectLoader.save_permissions(cdh_dir, self._perm_store.to_dict())
+
+    def _handle_reset_permission(self, key: str = "") -> dict:
+        """Handle /reset-permission slash command.
+
+        Without argument: clears all overrides.
+        With argument (e.g. ``bash``): clears that specific override.
+        """
+        if key:
+            old = self._perm_store.get_override(key)
+            if old:
+                self._perm_store.clear_override(key)
+                setattr(self.agent.current_agent, f"permission_{key}", None)
+                msg = f"Permission override `{key}` ({old.value}) cleared."
+            else:
+                msg = f"No override found for `{key}`."
+        else:
+            count = len(self._perm_store._overrides)
+            self._perm_store.clear_all()
+            msg = f"All {count} permission override(s) cleared."
+        self._perm_store_save()
+        self.send_session_update({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": f"✅ {msg}"},
+        })
+        return {"stopReason": "end_turn"}
 
     @staticmethod
     def _content_to_blocks(content: str | list) -> list:
@@ -827,14 +870,16 @@ class CDHACPAdapter:
             "sessionUpdate": "available_commands_update",
             "availableCommands": [
                 {"name": "exit", "description": "Exit A2TUI", "input": None},
+                {"name": "reset-permission", "description": "Clear permission overrides (use `/reset-permission edit` for specific key)", "input": None},
             ],
         })
 
     async def session_new(self, cwd: str, mcp_servers: list):
         """Create new session."""
         cfg = load_config()
-        self.agent = _create_engine(cwd)
+        self.agent = _create_engine(cwd, perm_store=self._perm_store)
         self.agent.set_agent(cfg.default_mode)
+        self._perm_store_load()
         self._perm_store.apply_to(self.agent.current_agent)
 
         session = AgentSession()
@@ -846,6 +891,9 @@ class CDHACPAdapter:
         session.save()
         self.agent.attach_session(session)
         self.session_id = session.id
+
+        # Restore tasks from project .cdh/ if available
+        self.agent.load_tasks_from_project()
 
         self._send_available_commands()
 
@@ -859,7 +907,8 @@ class CDHACPAdapter:
 
     async def session_load(self, cwd: str, mcp_servers: list, session_id: str):
         """Load existing session."""
-        self.agent = _create_engine(cwd)
+        self._perm_store_load(cwd)
+        self.agent = _create_engine(cwd, perm_store=self._perm_store)
         self.session_id = session_id
 
         loaded = self.agent.load_session(session_id)
@@ -867,6 +916,10 @@ class CDHACPAdapter:
         self.agent.set_agent(cfg.default_mode)
         self._perm_store.apply_to(self.agent.current_agent)
         self._send_available_commands()
+
+        # Also restore tasks from project .cdh/ as fallback / supplement
+        self.agent.load_tasks_from_project()
+
         if not loaded:
             return {"modes": _DEFAULT_MODES}
 
@@ -1248,6 +1301,17 @@ class CDHACPAdapter:
                 # Pass through unknown types, the context layer will handle them
                 user_content.append(block)
 
+        # ── Slash-command handling ─────────────────────────────
+        if user_content and user_content[0].get("type") == "text":
+            text = user_content[0].get("text", "").strip()
+            if text == "/reset-permission":
+                return self._handle_reset_permission()
+            if text.startswith("/reset-permission "):
+                key = text.split("/reset-permission ", 1)[1].strip()
+                return self._handle_reset_permission(key)
+
+        # Fresh per-turn tracking (tool_calls accumulates across one turn only)
+        self.tool_calls = {}
         self.agent._cancelled = False
 
         # Create chunkers for agent_message_chunk and agent_thought_chunk
@@ -1371,6 +1435,10 @@ class CDHACPAdapter:
                                     if path := parsed.get("path"):
                                         self.tool_calls[event.tool_id]["title"] = f"{current_title}: {_short_path(path, self.agent._project_dir)}"
 
+                    # Add "denied" hint for reject-always overrides
+                    if event.result_is_error and display_text and "denied" in display_text:
+                        display_text += "\n\n💡 Use `/reset-permission` to clear a 'reject always' override."
+
                     # TUI now renders all text content as Markdown.
                     # Wrap multi-line results in a fenced code block so they
                     # display as a code block rather than a raw paragraph.
@@ -1471,18 +1539,49 @@ class CDHACPAdapter:
                                 "options": event.ask_options,
                                 "toolId": event.tool_id,
                             })
-                        try:
-                            self._ask_user_future = asyncio.get_event_loop().create_future()
-                            ask_response = await asyncio.wait_for(
-                                self._ask_user_future, timeout=120
-                            )
-                            answer = ask_response.get("answer", "")
-                            cancelled = ask_response.get("cancelled", False)
-                        except (asyncio.TimeoutError, Exception):
-                            answer = ""
-                            cancelled = True
-                        finally:
-                            self._ask_user_future = None
+                        answer = ""
+                        cancelled = False
+                        # AskUser re-ask flow:
+                        #   1) send full question, wait up to 60s for response
+                        #   2) on timeout: send brief "请确认" reminder, wait 60s
+                        #   3) on second timeout: use the default/best option
+                        #      instead of cancelling, so the agent can keep going
+                        #      with a sensible default choice.
+                        _ASK_USER_REASK_TIMEOUT = 60
+                        _no_response = False
+                        for _attempt in range(2):
+                            try:
+                                self._ask_user_future = asyncio.get_event_loop().create_future()
+                                ask_response = await asyncio.wait_for(
+                                    self._ask_user_future,
+                                    timeout=_ASK_USER_REASK_TIMEOUT,
+                                )
+                                answer = ask_response.get("answer", "")
+                                cancelled = ask_response.get("cancelled", False)
+                                _no_response = False
+                                break
+                            except (asyncio.TimeoutError, Exception):
+                                if _attempt == 0:
+                                    # Brief re-ask: do NOT resend the full question
+                                    self.send_session_update({
+                                        "sessionUpdate": "ask_user_remind",
+                                        "text": "请确认？",
+                                        "toolId": event.tool_id,
+                                    })
+                                    _no_response = True
+                                    continue
+                                # Second timeout: pick the default option
+                                answer = self._pick_default_ask_user_answer(event)
+                                cancelled = False
+                                _no_response = True
+                            finally:
+                                self._ask_user_future = None
+                        if _no_response and not cancelled and answer:
+                            self.send_session_update({
+                                "sessionUpdate": "ask_user_default_used",
+                                "answer": answer,
+                                "toolId": event.tool_id,
+                            })
                         result = await self.agent.resolve_approval(
                             approved=not cancelled, answer=answer,
                         )
@@ -1571,6 +1670,7 @@ class CDHACPAdapter:
                                 attr_name = f"permission_{perm_key}"
                                 setattr(self.agent.current_agent, attr_name, AgentPermission.ALLOW)
                                 self._perm_store.set_override(perm_key, AgentPermission.ALLOW)
+                                self._perm_store_save()
                         elif option_id == "reject_always":
                             from cdha.agent.agents.types import AgentPermission
                             perm_key = self.agent._TOOL_NAME_TO_PERM_KEY.get(event.ask_action)
@@ -1578,6 +1678,7 @@ class CDHACPAdapter:
                                 attr_name = f"permission_{perm_key}"
                                 setattr(self.agent.current_agent, attr_name, AgentPermission.DENY)
                                 self._perm_store.set_override(perm_key, AgentPermission.DENY)
+                                self._perm_store_save()
                     except Exception:
                         approved = False
 
@@ -1628,6 +1729,10 @@ class CDHACPAdapter:
                 self.agent.save_session()
             except Exception:
                 pass
+            try:
+                self.agent.save_tasks_to_project()
+            except Exception:
+                pass
             return {"stopReason": "error", "message": "Internal agent error"}
 
         self._text_chunker.flush()
@@ -1637,6 +1742,12 @@ class CDHACPAdapter:
             self.agent.save_session()
         except Exception:
             debug_log("Failed to save session at turn end", exc_info=True)
+
+        # Persist tasks to project .cdh/ so they survive Ctrl+C
+        try:
+            self.agent.save_tasks_to_project()
+        except Exception:
+            debug_log("Failed to save tasks to .cdh at turn end", exc_info=True)
 
         # Send context usage stats to TUI sidebar
         ctx = self.agent.context
@@ -1648,6 +1759,22 @@ class CDHACPAdapter:
             "size": size,
         })
 
+        # Send final action summary if tool calls were made this turn
+        if self.tool_calls:
+            summaries: list[str] = []
+            for tid, tc in self.tool_calls.items():
+                action = tc.get("title", "")
+                status = tc.get("status", "")
+                if action:
+                    emoji = "✅" if status == "completed" else "❌" if status == "failed" else "⏳"
+                    summaries.append(f"{emoji} {action}")
+            if summaries:
+                summary_text = "\n".join(summaries)
+                self.send_session_update({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": f"```output\n{summary_text}\n```"},
+                })
+
         stop_reason = "cancelled" if self.agent._cancelled else "end_turn"
         usage = self._build_session_usage()
         return {
@@ -1655,6 +1782,35 @@ class CDHACPAdapter:
             "stopReason": stop_reason,
             "usage": usage,
         }
+
+    def _pick_default_ask_user_answer(self, event) -> str:
+        """Pick the default answer for a timed-out AskUser prompt.
+
+        Heuristic:
+        - If a question has an option with ``default: true``, use it.
+        - Otherwise pick the first option.
+        - Multi-question prompts return a JSON string of ``{idx: value}``.
+        - Single-question prompts return the option value as a plain string.
+        - If the question has no options (free-text), return an empty string
+          so the agent treats it as a no-op.
+        """
+        questions = getattr(event, "ask_questions", None) or []
+        options = getattr(event, "ask_options", None) or []
+
+        def _pick(opt_list: list) -> str:
+            if not opt_list:
+                return ""
+            for opt in opt_list:
+                if opt.get("default"):
+                    return str(opt.get("value", ""))
+            return str(opt_list[0].get("value", ""))
+
+        if questions:
+            answers = {str(i): _pick(q.get("options", [])) for i, q in enumerate(questions)}
+            return json.dumps(answers)
+        if options:
+            return _pick(options)
+        return ""
 
     def _build_session_usage(self) -> dict:
         """Aggregate per-turn usage from the engine into a single Usage dict.
@@ -1689,6 +1845,11 @@ class CDHACPAdapter:
                 self.agent.save_session()
             except Exception:
                 debug_log("Failed to save session on cancel", exc_info=True)
+            # Persist tasks to .cdh so they survive Ctrl+C and re-entry
+            try:
+                self.agent.save_tasks_to_project()
+            except Exception:
+                debug_log("Failed to save tasks to .cdh on cancel", exc_info=True)
         return {}
 
     async def session_set_mode(self, session_id: str, mode_id: str):
