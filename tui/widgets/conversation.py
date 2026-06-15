@@ -600,6 +600,16 @@ class Conversation(containers.Vertical):
     def on_terminal_blur(self, event: events.DescendantFocus) -> None:
         self.focus_prompt()
 
+    @on(Terminal.CancelRequested)
+    async def on_terminal_cancel_requested(self, event: Terminal.CancelRequested) -> None:
+        event.stop()
+        if (agent := self.agent) is not None:
+            cancelled = await agent.cancel()
+            if cancelled:
+                self.flash("Turn cancelled", style="success")
+            else:
+                self.flash("Cancel requested", style="success")
+
     @on(messages.Flash)
     def on_flash(self, event: messages.Flash) -> None:
         event.stop()

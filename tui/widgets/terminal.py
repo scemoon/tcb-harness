@@ -72,6 +72,16 @@ Tap escape *twice* to exit.
         def control(self) -> Terminal:
             return self.terminal
 
+    @dataclass
+    class CancelRequested(Message):
+        """User double-pressed escape to cancel the agent."""
+
+        terminal: Terminal
+
+        @property
+        def control(self) -> Terminal:
+            return self.terminal
+
     def __init__(
         self,
         name: str | None = None,
@@ -442,6 +452,7 @@ Tap escape *twice* to exit.
                 if monotonic() < self._escape_time + ESCAPE_TAP_DURATION:
                     self.blur()
                     self._escaping = False
+                    self.post_message(self.CancelRequested(self))
                     return
                 else:
                     await self.write_process_stdin(self.state.key_escape())

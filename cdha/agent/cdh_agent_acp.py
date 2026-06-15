@@ -742,6 +742,8 @@ class CDHACPAdapter:
         """Synchronously cancel the current prompt (called from main loop)."""
         if self.agent:
             self.agent._cancelled = True
+            for child in self.agent._child_engines:
+                child._cancelled = True
 
     def resolve_ask_user(self, answer: str, cancelled: bool) -> dict:
         """Resolve the pending ask_user request with the user's answer.
