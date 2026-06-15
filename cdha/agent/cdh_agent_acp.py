@@ -408,7 +408,7 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
     }]
 
 
-def _format_tui_display_text(result_text: str) -> str:
+def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
     """Convert internal tool result JSON to user-visible text for TUI.
 
     Tools return dicts like ``{"success": true, "path": "..."}`` that are
@@ -417,9 +417,13 @@ def _format_tui_display_text(result_text: str) -> str:
 
     Success results that have a ``path`` field render as ``✓ /path``;
     other success results fall through to a compact view of the rest
-    of the dict so tools like ``TaskUpdate`` / ``TaskStop`` (which return
-    ``{"success": true, ...}`` without a path) still show meaningful
-    output instead of disappearing.
+    of the dict.
+
+    Task / Todo tools (TaskCreate, TaskUpdate, TaskList, …) are special-
+    cased: their verbose ``{"task": {...}}`` / ``{"tasks": [...]}`` results
+    are collapsed to a single concise marker (``✓ updated``) since the
+    LLM's tool-call args already show what the agent did, and re-printing
+    the full task object after every call clutters the conversation view.
     """
     if not result_text:
         return ""
@@ -431,6 +435,9 @@ def _format_tui_display_text(result_text: str) -> str:
         return result_text
     if "error" in parsed:
         return str(parsed["error"])
+    # Task / Todo tools: collapse verbose state echoes to a one-liner.
+    if tool_name in _QUIET_TASK_TOOLS:
+        return "✓ updated"
     if parsed.get("success") is True:
         if path := parsed.get("path"):
             return f"✓ {path}"
@@ -442,6 +449,19 @@ def _format_tui_display_text(result_text: str) -> str:
         except (TypeError, ValueError):
             return str(visible)
     return result_text
+
+
+_QUIET_TASK_TOOLS = frozenset({
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskUpdate",
+    "TaskOutput",
+    "TaskStop",
+    "TodoCreate",
+    "TodoList",
+    "TodoComplete",
+})
 
 
 _BARE_LEGACY_RE = re.compile(
@@ -806,7 +826,12 @@ class CDHACPAdapter:
 
     def _emit_tool_result(self, block: ToolResult) -> None:
         """Send a tool_result as a tool_call_update, accumulating with existing content."""
-        display_text = _format_tui_display_text(block.content)
+        # Look up tool name from the tracked tool_calls entry
+        tool_name = self.tool_calls.get(block.tool_use_id, {}).get("title", "")
+        # Title may be like "Bash: ls -la" — keep just the leading tool name
+        if tool_name and ":" in tool_name:
+            tool_name = tool_name.split(":", 1)[0].strip()
+        display_text = _format_tui_display_text(block.content, tool_name)
 
         # Update title with path from result if not already set
         if block.content and block.tool_use_id in self.tool_calls:
@@ -1420,7 +1445,9 @@ class CDHACPAdapter:
                         self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.TOOL_RESULT:
                     status = "failed" if event.result_is_error else "completed"
-                    display_text = _format_tui_display_text(event.result_content or "")
+                    display_text = _format_tui_display_text(
+                        event.result_content or "", event.tool_name,
+                    )
 
                     # Update title with path from result if not already set
                     if event.result_content and event.tool_id in self.tool_calls:
