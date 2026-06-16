@@ -178,7 +178,7 @@ class ToolCall(containers.VerticalGroup):
 
         yield ToolCallHeader(self.tool_call_header_content, markup=False).with_tooltip(
             "Expand to see full title"
-        )
+        ) if self.has_content else ToolCallHeader(self.tool_call_header_content, markup=False)
         with containers.VerticalScroll(id="tool-content"):
             yield from content_update
         yield ViewMore(Content.from_markup("[$accent]▼ View more ▼"), id="view-more")

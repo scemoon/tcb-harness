@@ -437,7 +437,10 @@ def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
         return result_text
     if "error" in parsed:
         return str(parsed["error"])
-    # Task / Todo tools: collapse verbose state echoes to a one-liner.
+    # Read: show actual file content (code fence + language wrapping in _emit_tool_result)
+    if tool_name == "Read":
+        return parsed.get("content", "")
+    # Task / Todo tools: collapse verbose state echoes to one-liner.
     if tool_name in _STATUS_ONLY_TOOLS:
         return ""
     if parsed.get("success") is True:
@@ -1541,8 +1544,9 @@ class CDHACPAdapter:
                                         if isinstance(task_info, dict):
                                             if subject := task_info.get("subject", ""):
                                                 self.tool_calls[event.tool_id]["title"] = f"{current_title}: {subject}"
-                                                continue
-                                    if path := parsed.get("path"):
+                                            elif path := parsed.get("path"):
+                                                self.tool_calls[event.tool_id]["title"] = f"{current_title}: {_short_path(path, self.agent._project_dir)}"
+                                    elif path := parsed.get("path"):
                                         self.tool_calls[event.tool_id]["title"] = f"{current_title}: {_short_path(path, self.agent._project_dir)}"
 
                     # Add "denied" hint for reject-always overrides

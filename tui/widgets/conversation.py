@@ -377,6 +377,7 @@ class Conversation(containers.Vertical):
         self._agent_response: AgentResponse | None = None
         self._agent_thought: AgentThought | None = None
         self._replay: bool = False
+        self._replay_buffer: list[dict] = []
         self._last_escape_time: float = monotonic()
         self._agent_data = agent
         self._agent_session_id = agent_session_id
@@ -1018,6 +1019,9 @@ class Conversation(containers.Vertical):
     @on(acp_messages.Update)
     async def on_acp_agent_message(self, message: acp_messages.Update):
         message.stop()
+        if self._replay:
+            self._replay_buffer.append({"kind": "agent_text", "text": message.text})
+            return
         self._complete_thought()
         if self._msg_log is not None:
             self._msg_log.agent_output(message.text, self._turn_count)
@@ -1025,14 +1029,20 @@ class Conversation(containers.Vertical):
 
     @on(acp_messages.UserMessage)
     async def on_acp_user_message(self, message: acp_messages.UserMessage):
+        message.stop()
+        if self._replay:
+            self._replay_buffer.append({"kind": "user", "text": message.text})
+            return
         self._complete_thought()
         self._agent_response = None
-        message.stop()
         await self.post(UserInput(message.text))
 
     @on(acp_messages.Thinking)
     async def on_acp_agent_thinking(self, message: acp_messages.Thinking):
         message.stop()
+        if self._replay:
+            self._replay_buffer.append({"kind": "thought", "text": message.text})
+            return
         if self._msg_log is not None:
             self._msg_log.agent_thought(message.text, self._turn_count)
         await self.post_agent_thought(message.text, replay=self._replay)
@@ -1043,10 +1053,89 @@ class Conversation(containers.Vertical):
         message.stop()
         was_replay = self._replay
         self._replay = message.active
-        # When the replay just ended, complete any pending thought so the
-        # header transitions to "- Thought" instead of staying at "⏳".
+        # When the replay just ended, flush buffer and complete any pending thought.
         if was_replay and not message.active:
+            self.call_after_refresh(self._flush_replay_buffer)
             self._complete_thought()
+
+    @work(thread=False)
+    async def _flush_replay_buffer(self) -> None:
+        """Process all buffered replay entries in one batch mount."""
+        if not self._replay_buffer:
+            return
+        from tui.widgets.agent_response import AgentResponse
+        from tui.widgets.agent_thought import AgentThought
+        from tui.widgets.tool_call import ToolCall
+        from tui.widgets.plan import Plan
+        from tui.widgets.subagent import SubAgent
+
+        created_subagents: dict[str, SubAgent] = {}
+        current_thought: AgentThought | None = None
+        widgets: list[Widget] = []
+
+        for entry in self._replay_buffer:
+            match entry["kind"]:
+                case "user":
+                    current_thought = None
+                    self._complete_thought()
+                    self._agent_response = None
+                    widgets.append(UserInput(entry["text"]))
+
+                case "agent_text":
+                    current_thought = None
+                    self._complete_thought()
+                    self._agent_response = None
+                    widgets.append(AgentResponse(entry["text"]))
+
+                case "thought":
+                    if current_thought is None:
+                        current_thought = AgentThought(entry["text"], replay=True)
+                        widgets.append(current_thought)
+                    else:
+                        current_thought.append_fragment(entry["text"])
+
+                case "tool_call":
+                    current_thought = None
+                    self.new_block()
+                    widgets.append(ToolCall(entry["tool_call"], id=entry["tool_id"]))
+
+                case "plan":
+                    current_thought = None
+                    self.new_block()
+                    widgets.append(Plan(entry["entries"]))
+
+                case "subagent_start":
+                    current_thought = None
+                    self.new_block()
+                    sa = SubAgent(entry["agent_type"], tool_id=entry["id"])
+                    created_subagents[entry["id"]] = sa
+                    widgets.append(sa)
+
+                case "subagent_chunk":
+                    sa = created_subagents.get(entry["id"])
+                    if sa is not None:
+                        sa.append_chunk(entry["text"])
+
+                case "subagent_end":
+                    sa = created_subagents.get(entry["id"])
+                    if sa is not None:
+                        sa.complete()
+
+                case "ask_user":
+                    current_thought = None
+                    self.new_block()
+                    widgets.append(AskUserWidget(
+                        entry["tool_id"],
+                        question=entry["question"],
+                        options=entry.get("options", []),
+                        questions=entry.get("questions", []),
+                    ))
+
+        if widgets:
+            await self.contents.mount(*widgets)
+        self._replay_buffer.clear()
+        self._complete_thought()
+        self.window.scroll_end(animate=False)
 
     @on(acp_messages.RequestPermission)
     async def on_acp_request_permission(self, message: acp_messages.RequestPermission):
@@ -1066,6 +1155,15 @@ class Conversation(containers.Vertical):
     @on(acp_messages.AskUser)
     async def on_acp_ask_user(self, message: acp_messages.AskUser):
         message.stop()
+        if self._replay:
+            self._replay_buffer.append({
+                "kind": "ask_user",
+                "tool_id": message.tool_id,
+                "question": message.question,
+                "options": message.options or [],
+                "questions": message.questions or [],
+            })
+            return
         self.window.scroll_end(animate=False)
 
         widget = AskUserWidget(
@@ -1089,6 +1187,9 @@ class Conversation(containers.Vertical):
 
     @on(acp_messages.Plan)
     async def on_acp_plan(self, message: acp_messages.Plan):
+        if self._replay:
+            self._replay_buffer.append({"kind": "plan", "entries": message.entries})
+            return
         from tui.widgets.plan import Plan
 
         entries = [
@@ -1133,6 +1234,27 @@ class Conversation(containers.Vertical):
         if tool_call.get("title") == "AskUser":
             return
         tool_id = message.tool_id
+
+        if self._replay:
+            if isinstance(message, acp_messages.ToolCall):
+                self._replay_buffer.append({"kind": "tool_call", "tool_call": tool_call, "tool_id": tool_id})
+            else:
+                # ToolCallUpdate during replay: merge result content/status/title
+                # into the corresponding buffered tool_call entry.
+                for entry in self._replay_buffer:
+                    if entry.get("kind") == "tool_call" and entry.get("tool_id") == tool_id:
+                        existing_content = entry["tool_call"].get("content", [])
+                        new_content = tool_call.get("content", [])
+                        if new_content:
+                            entry["tool_call"]["content"] = existing_content + new_content
+                        if status:
+                            entry["tool_call"]["status"] = status
+                        new_title = tool_call.get("title", "")
+                        if new_title:
+                            entry["tool_call"]["title"] = new_title
+                        break
+            return
+
         content = tool_call.get("content", None) or []
 
         logger.debug(
@@ -1188,6 +1310,9 @@ class Conversation(containers.Vertical):
         from tui.widgets.subagent import SubAgent
 
         message.stop()
+        if self._replay:
+            self._replay_buffer.append({"kind": "subagent_start", "agent_type": message.agent_type, "id": message.subagent_id})
+            return
         sa = SubAgent(message.agent_type, tool_id=message.subagent_id)
         await self.post(sa, new_block=True)
 
@@ -1196,6 +1321,9 @@ class Conversation(containers.Vertical):
         from tui.widgets.subagent import SubAgent
 
         message.stop()
+        if self._replay:
+            self._replay_buffer.append({"kind": "subagent_chunk", "id": message.subagent_id, "text": message.text})
+            return
         try:
             sa: SubAgent | None = self.contents.get_child_by_id(
                 message.subagent_id, SubAgent
@@ -1211,6 +1339,9 @@ class Conversation(containers.Vertical):
         from tui.widgets.subagent import SubAgent
 
         message.stop()
+        if self._replay:
+            self._replay_buffer.append({"kind": "subagent_end", "id": message.subagent_id})
+            return
         try:
             sa: SubAgent | None = self.contents.get_child_by_id(
                 message.subagent_id, SubAgent

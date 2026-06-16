@@ -548,6 +548,11 @@ class Agent(AgentBase):
 
             if isinstance(agent_data, dict):
                 if "result" in agent_data or "error" in agent_data:
+                    # Wait for pending notification dispatch tasks so all ACP
+                    # messages are queued before the response future resolves.
+                    if tasks:
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                        tasks.clear()
                     API.process_response(agent_data)
                     continue
 
