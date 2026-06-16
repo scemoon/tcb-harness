@@ -1,0 +1,36 @@
+# Runtime Contract 模板 — Serverless 函数接口声明
+# Provider-agnostic: 描述函数"做什么"，不涉及具体部署平台
+# 放置在 contracts/functions/{name}.yaml
+
+function: {{function_name}}
+version: {{semver}}
+fr_ref: {{INT-FR-NNN}}
+description: {{description}}
+
+triggers:
+  - type: http            # http | timer | event | oss | mns
+    method: POST
+    path: /{{endpoint}}
+  - type: event
+    source: {{event_source}}
+
+timeout: {{timeout}}s
+memory: {{memory}}MB
+
+env:
+  {{env_var_name}}: {from: {{source}}}  # stack_env | secrets | literal
+
+# Provider-specific 映射 (自动选择)
+# 部署时根据 --provider + --compute-mode 选择合适的 runtime
+provider_map:
+  tcb:
+    compute_mode: cloudbase-functions
+    runtime: nodejs18 | python3.10 | go1.18
+  aliyun:
+    compute_mode: fc           # Function Compute
+    runtime: python3.10 | nodejs18
+    # 或 SAE 模式 (container):
+    sae:
+      type: web-app
+      port: 8080
+      health_check: /health

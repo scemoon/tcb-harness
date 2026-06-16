@@ -1,10 +1,8 @@
 ---
 name: ai-dlc-skill
 description: |
-  AI-Driven Development Lifecycle for monorepo multi-component stacks
-  (native + desktop + web + backend + wxa + mya + tta).
-  ① Understand (SDD+BDD) → ② Plan (SDD+TDD) → ③ Verify (BDD+TDD) → ④ Deliver (SDD+Cloud).
-  Cross-component INT-FR contract discipline. Default cloud: TCB.
+  AI-Driven Development Lifecycle for monorepo multi-component stacks.
+  Adaptive orchestration: Master Agent evaluates complexity, delegates sub-tasks.
 allowed_tools:
   - read
   - grep
@@ -13,36 +11,26 @@ allowed_tools:
   - edit
   - write
   - webfetch
+  - websearch
+  - task
+  - skill
 triggers:
   - ai-dlc
-  - "ai dlc"
-  - lifecycle
-  - understand
-  - plan
-  - verify
-  - deliver
-  - spec-delta
-  - EARS
-  - BDD
-  - feature file
-  - monorepo
-  - INT-FR
-phases: [understand, plan, verify, deliver]
+  - ai dlc
 compatibility:
   cdh: ">=1.4"
   opencode: ">=1.15"
   claude-code: ">=1.0"
   openai-codex: ">=1.0"
+  cursor: ">=0.45"
 license: Apache-2.0
 metadata:
-  version: "3.0.0"
+  version: "4.0.0"
   stack_topology: monorepo
   fr_namespaces: [NATIVE, DESKTOP, WEB, BE, WXA, MYA, TTA, INT]
 ---
 
-# AI-DLC Development Skill
-
-AI-Driven Development Lifecycle for monorepo multi-component stacks.
+# AI-DLC Master Orchestrator
 
 ## Core Cycle
 
@@ -66,13 +54,22 @@ AI-Driven Development Lifecycle for monorepo multi-component stacks.
 | TTA | TikTok Mini | `apps/tta/` | `TTA-FR-NNN` |
 | INT | Contracts | `contracts/`, `packages/shared/` | `INT-FR-NNN` |
 
-## Lifecycle
+## Adaptive Flow
+
+See `core/adaptive-flow.md` for complexity assessment.
+
+1. Analyze intent → determine complexity (L1-L5)
+2. Select phases to execute
+3. Delegate each phase via `Task(agent_type="general", prompt=...)` using the phase's `prompt.md`
+4. Collect results, enforce gates, iterate or advance
+
+## Phase Reference
 
 | Phase | Lifecycle | Rules | Practices |
 |-------|-----------|-------|-----------|
-| ① Understand | `lifecycle/understand.md` | `rules/understand.md` | SDD, BDD |
-| ② Plan | `lifecycle/plan.md` | `rules/plan.md` | SDD, TDD |
-| ③ Verify | `lifecycle/verify.md` | `rules/verify.md`, `rules/integration.md` | BDD, TDD |
-| ④ Deliver | `lifecycle/deliver.md` | `rules/deliver.md`, `rules/stack.md` | SDD, Cloud |
+| ① Understand | `phases/understand/lifecycle.md` | `phases/understand/rules.md` | SDD, BDD |
+| ② Plan | `phases/plan/lifecycle.md` | `phases/plan/rules.md` | SDD, TDD |
+| ③ Verify | `phases/verify/lifecycle.md` | `phases/verify/rules.md` | BDD, TDD |
+| ④ Deliver | `phases/deliver/lifecycle.md` | `phases/deliver/rules.md` | SDD, Cloud |
 
-Security baseline: `rules/security.md` (all phases).
+Security baseline: `core/security.md` (all phases).

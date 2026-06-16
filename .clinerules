@@ -1,0 +1,19 @@
+# AI-DLC Development Rules (Cline)
+
+## Core Methodology
+AI-DLC: Intent → Spec (EARS) → BDD → Design → TDD → Deploy
+
+## FR Namespaces
+NATIVE apps/native | DESKTOP apps/desktop | WEB apps/web
+BE apps/backend | WXA apps/wxa | MYA apps/mya | TTA apps/tta
+INT contracts/ + packages/shared/
+
+## Quality Gates
+- Coverage >= 80%
+- BDD scenarios 100% pass
+- 0 vulns, no TODO in src/
+- Contract backward-compat by default
+- Cross-stack e2e mandatory for multi-component changes
+
+## Reference
+Full skill: .opencode/skills/ai-dlc-skill/

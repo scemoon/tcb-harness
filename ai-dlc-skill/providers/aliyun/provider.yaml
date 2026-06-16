@@ -56,8 +56,24 @@ limits:
   function_timeout: 600s
   function_memory: 3072MB
 
+compute_modes:
+  - id: fc
+    type: faas
+    default: true
+    description: "Function Compute — event-driven functions"
+    limits:
+      timeout: 600s
+      memory: 3072MB
+  - id: sae
+    type: caas
+    description: "Serverless App Engine 2.0 — container/web app hosting"
+    limits:
+      timeout: 86400s
+      memory: 32768MB
+
 capabilities:
   - function_compute
+  - serverless_app_engine
   - oss_storage
   - rds_database
   - tablestore

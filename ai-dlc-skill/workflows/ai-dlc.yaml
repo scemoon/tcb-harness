@@ -1,9 +1,9 @@
 name: ai-dlc
-version: 3.0.0
+version: 4.0.0
 description: >
-  AI-DLC four-phase development workflow for monorepo multi-component stacks
-  (native + desktop + web + backend + wxa + mya + tta) with a first-class Integration discipline.
-  Understand (SDD+BDD) → Plan (SDD+TDD) → Verify (BDD+TDD) → Deliver (SDD+Cloud).
+  AI-DLC adaptive workflow for monorepo multi-component stacks.
+  Master Agent evaluates complexity (L1-L5), selects phases, delegates
+  via Task(general) agents. See core/adaptive-flow.md.
 
 stack:
   topology: monorepo
@@ -22,108 +22,89 @@ phases:
   - name: understand
     label: "① Understand — 理解"
     description: >
-      Capture intent, declare affects: [native|desktop|web|backend|wxa|mya|tta|contracts],
-      produce OpenSpec spec delta in EARS format with FR namespaces,
-      write BDD feature files (per-component + cross-stack if applies).
+      Capture intent, declare affects, produce spec delta (EARS),
+      write BDD feature files.
+    entry: phases/understand/prompt.md
+    lifecycle: phases/understand/lifecycle.md
+    rules: phases/understand/rules.md
     practices:
-      - sdd  # proposal, spec delta
-      - bdd  # feature files, scenarios
-      - integration  # contract-first for cross-component
+      - sdd
+      - bdd
+      - integration
     gates:
-      - UND-001: Intent documented with affects declaration
-      - UND-002: Requirements use EARS syntax
-      - UND-003: Minimum 3 scenarios per FR (positive, negative, edge), FR namespace prefixed
-      - UND-004: affects: [...] declared
-      - UND-005: Cross-component features split per-component + INT-* + cross-stack feature file
-      - UND-006: Contract file present in contracts/ for any cross-component change
+      - UND-001..006: Understand rules
       - Human review and approval
     artifacts:
       - requirements.md
       - openspec/changes/{id}/spec-delta.md
-      - apps/{component}/features/{domain}/{feature}.feature        # per-component
-      - features/cross-stack/{domain}/{feature}.feature             # if cross-component
-      - contracts/api|events/{name}.{yaml,graphql}             # if affects contracts
+      - apps/{component}/features/{domain}/{feature}.feature
+      - features/cross-stack/{domain}/{feature}.feature
+      - contracts/api|events/{name}.{yaml,graphql}
 
   - name: plan
     label: "② Plan — 规划"
     description: >
-      Design the solution (per-component + integration), decompose into units
-      with dependency DAG (including cross-component edges), write test plans
-      per scenario and per layer.
+      Design solution per-component + integration, decompose into DAG
+      units, write test plans per layer.
+    entry: phases/plan/prompt.md
+    lifecycle: phases/plan/lifecycle.md
+    rules: phases/plan/rules.md
     practices:
-      - sdd  # design doc, task list
-      - tdd  # test plan
-      - integration  # contract plan
+      - sdd
+      - tdd
+      - integration
     gates:
-      - PLN-001: Design doc has per-component sections + integration section
-      - PLN-002: Task DAG with explicit cross-component edges
-      - PLN-003: Test plans name the layer (unit/integration/e2e/cross-stack/contract)
-      - PLN-004: Contract plan identifies version impact (additive vs breaking)
-      - STK-001: affects: [...] declared in design and task-list
-      - STK-002: Cross-component tasks have explicit depends_on edges
+      - PLN-001..004: Plan rules
       - Human review and approval
     artifacts:
       - openspec/changes/{id}/design.md
       - openspec/changes/{id}/task-list.md
-      - openspec/changes/{id}/contract-diff.md   # placeholder, filled in verify
+      - openspec/changes/{id}/contract-diff.md
 
   - name: verify
     label: "③ Verify — 验证"
     description: >
-      Execute TDD red-green-refactor per BDD scenario at the right test layer
-      (unit / integration / e2e / cross-stack / contract). Verify all scenarios
-      pass. Quality gates enforced as backpressure per component and at the
-      stack level.
+      TDD red-green-refactor per scenario, contract verification,
+      cross-stack e2e, quality gates.
+    entry: phases/verify/prompt.md
+    lifecycle: phases/verify/lifecycle.md
+    rules: phases/verify/rules.md
     practices:
-      - bdd  # pytest-bdd scenario verification
-      - tdd  # red-green-refactor per scenario
-      - integration  # contract tests, contract diff, shared types regeneration
+      - bdd
+      - tdd
+      - integration
     gates:
-      - VRF-001: Tests written and fail first (Red)            # per component
-      - VRF-002: Minimum implementation passes (Green)         # per component
-      - VRF-003: Refactor keeps all tests green                # per component
-      - VRF-004: All BDD scenarios pass (pytest-bdd 100%)      # per layer
-      - VRF-005: Per-component backpressure (cov≥80%, scenarios≥90%, 0 vulns, no TODO)
-      - VRF-006: Test layer correctness (cross-stack ≠ unit)
-      - INT-001: Contract as source of truth (in contracts/)
-      - INT-002: Backward-compat by default; breaking change requires human approval
-      - INT-003: packages/shared/ generated and in sync
-      - INT-004: Contract tests at INT FR level (100% pass)
-      - INT-005: Cross-stack feature coverage (≥3 scenarios per INT-FR)
-      - INT-006: contract-diff.md filled and reviewed
-      - STK-001..006: Stack rules (affects declared, cross-stack e2e, unified deploy, build config injection)
+      - VRF-001..006: Verify rules
+      - INT-001..006: Integration rules
+      - STK-001..006: Stack rules
     artifacts:
       - apps/{component}/tests/{unit,integration,e2e}/test_{feature}.py
       - apps/{component}/features/steps/test_{feature}_steps.py
       - apps/{component}/src/{module}/{feature}.py
       - tests/contract/test_{contract}.py
       - tests/cross-stack/test_{flow}.py
-      - features/cross-stack/steps/test_{flow}_steps.py
-      - packages/shared/                       # generated
-      - openspec/changes/{id}/contract-diff.md # filled
+      - packages/shared/
+      - openspec/changes/{id}/contract-diff.md
 
   - name: deliver
     label: "④ Deliver — 交付"
     description: >
-      Unified stack preview (backend + all clients together), per-component e2e,
-      cross-stack e2e, staging, human approval, stack-level production deploy,
-      stack-level BVT validation, stack-level rollback on failure.
+      Unified stack preview, per-component e2e, cross-stack e2e,
+      staging, human approval, production BVT + stack rollback.
+    entry: phases/deliver/prompt.md
+    lifecycle: phases/deliver/lifecycle.md
+    rules: phases/deliver/rules.md
     practices:
-      - sdd       # archive artifacts
-      - cloud     # TCB/Aliyun stack deploy
-      - integration  # contract diff archived
+      - sdd
+      - cloud
+      - integration
     gates:
-      - DLV-001: Unified stack preview + per-component e2e + cross-stack e2e pass
-      - DLV-002: Human approval (per-component + cross-stack + staging + contract diff)
-      - DLV-003: Stack BVT pass (auto stack rollback on failure)
-      - DLV-004: Per-component preview URL isolation (no hardcoded URLs)
-      - STK-004: Unified stack deploy (deploy_stack orchestrator)
-      - STK-005: Build config injection (BACKEND_URL from deploy_stack)
-      - STK-006: Stack-level rollback
+      - DLV-001..004: Deliver rules
+      - STK-004..006: Stack deploy rules
     artifacts:
-      - STACK_URL / BACKEND_URL (dynamic, per platform, per env)
+      - STACK_URL / BACKEND_URL
       - Per-component e2e report
       - Cross-stack e2e report
-      - openspec/changes/{id}/contract-diff.md (archived)
+      - openspec/changes/{id}/contract-diff.md
       - Stack BVT report
-      - Deploy log (stack version + per-component versions)
+      - Deploy log

@@ -9,17 +9,17 @@ categories:
 - monorepo
 - integration
 description: >-
-  AI-Driven Development Lifecycle skill for monorepo multi-component stacks
-  (native + desktop + web + backend + wxa + mya + tta). Core phases:
-  Understand (SDD+BDD) → Plan (SDD+TDD) → Verify (BDD+TDD) → Deliver
-  (SDD+Cloud), with cross-stack Integration rules (API contract, event
-  contract, shared types) governing component boundaries. FR namespaces:
-  NATIVE-*, DESKTOP-*, WEB-*, BE-*, WXA-*, MYA-*, TTA-*, INT-*.
-  Default cloud platform: TCB. Also supports Aliyun.
+  AI-Driven Development Lifecycle for monorepo multi-component stacks
+  (native + desktop + web + backend + wxa + mya + tta). Adaptive orchestration:
+  Master Agent evaluates complexity, delegates sub-tasks via CDHA Task tool.
+  Core phases: Understand (SDD+BDD) → Plan (SDD+TDD) → Verify (BDD+TDD) →
+  Deliver (SDD+Cloud), with cross-stack Integration rules governing
+  component boundaries. FR namespaces: NATIVE-*, DESKTOP-*, WEB-*, BE-*,
+  WXA-*, MYA-*, TTA-*, INT-*. Default cloud platform: TCB. Also supports Aliyun.
 enabled: true
 entry: SKILL.md
 name: ai-dlc-skill
-version: 3.0.0
+version: 4.0.0
 
 stack:
   topology: monorepo
@@ -62,17 +62,17 @@ stack:
   cross_cutting:
     fr_prefix: INT
     owns:
-      - contracts/        # OpenAPI, GraphQL, event schemas
-      - packages/shared/  # shared types generated from contracts
+      - contracts/
+      - packages/shared/
   e2e_layers:
-    - unit                # per component, TDD red-green-refactor
-    - integration         # per component, internal API + DB
-    - e2e                 # per component, against own preview
-    - cross-stack         # full multi-client↔backend flow against unified preview
+    - unit
+    - integration
+    - e2e
+    - cross-stack
 
 integration:
   contract_first: true
-  contract_format: openapi-3.1   # or graphql, asyncapi
+  contract_format: openapi-3.1
   backward_compat: required
   breaking_change_gate: human-approval
   shared_types:
@@ -104,3 +104,20 @@ quality_gates:
   contract_diff: required
   no_todo: true
   no_secrets_in_diff: true
+
+agents:
+  - name: ai-dlc-master
+    entry: SKILL.md
+    mode: primary
+  - name: ai-dlc-understand
+    entry: phases/understand/entry.md
+    mode: subagent
+  - name: ai-dlc-plan
+    entry: phases/plan/entry.md
+    mode: subagent
+  - name: ai-dlc-verify
+    entry: phases/verify/entry.md
+    mode: subagent
+  - name: ai-dlc-deliver
+    entry: phases/deliver/entry.md
+    mode: subagent

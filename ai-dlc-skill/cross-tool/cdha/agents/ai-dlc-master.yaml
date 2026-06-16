@@ -1,0 +1,14 @@
+# CDHA Agent 配置: AI-DLC Master
+name: ai-dlc-master
+description: "AI-DLC Master orchestrator with adaptive phase execution"
+mode: primary
+max_turns: 0
+permission_edit: ask
+permission_bash: ask
+permission_skill: allow
+permission_read: allow
+permission_webfetch: allow
+permission_websearch: allow
+permission_task: allow
+tools: []
+prompt_file: .opencode/skills/ai-dlc-skill/SKILL.md

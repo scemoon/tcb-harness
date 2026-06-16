@@ -57,6 +57,22 @@ limits:
   function_memory: 1536MB
   max_instances: 100
 
+compute_modes:
+  - id: cloudbase-functions
+    type: faas
+    default: true
+    description: "CloudBase Functions (SCF) — event-driven functions"
+    limits:
+      timeout: 60s
+      memory: 1536MB
+      max_instances: 100
+  - id: cloudbase-run
+    type: caas
+    description: "CloudBase Run — container hosting"
+    limits:
+      timeout: 3600s
+      memory: 4096MB
+
 capabilities:
   - serverless_functions
   - static_hosting
@@ -68,6 +84,7 @@ capabilities:
   - cdn_acceleration
   - stack_deploy
   - build_env_injection
+  - container_hosting
 ```
 
 ## Stack Deploy (recommended for shared environments)
