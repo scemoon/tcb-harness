@@ -124,7 +124,7 @@ cdh version                  # Show version
 
 ## Configuration
 
-Config file: `~/.cdh/cdh.config.yaml`
+Config file: `~/.cdha/cdh.config.yaml`
 
 ```yaml
 default_provider: minimaxi
@@ -145,7 +145,7 @@ providers:
 observability:
   trace_enabled: true
   trace_exporter: file
-  trace_dir: ~/.cdh/traces
+  trace_dir: ~/.cdha/traces
 
 tui:
   theme: auto
@@ -200,23 +200,39 @@ Environment variables are interpolated with `${VAR}` syntax in config values.
 │   ├── visuals/        # Visual helpers
 │   ├── data/           # Static assets (agents, images, sounds)
 │   └── cli.py          # TUI CLI (run, acp, settings, replay, serve, about)
-├── ai-dlc-skill/         # AI-DLC lifecycle skill (v3.0.0)
-│   ├── lifecycle/      # Phase definitions (understand, plan, verify, deliver)
-│   ├── practices/      # SDD, BDD, TDD practice guides
-│   ├── rules/          # Per-phase rule sets (UND, PLN, VRF, INT, STK, DLV, SEC)
-│   ├── templates/      # Project scaffolding + artifacts
-│   ├── workflows/      # Pipeline workflow YAMLs
-│   ├── providers/      # Cloud platform configs (TCB, Aliyun)
-│   ├── SKILL.md         # Entry point (multi-CLI compatible)
-│   └── skill.yaml       # Skill metadata
+├── ai-dlc-skill/         # AI-DLC lifecycle skill (v4.0.0)
+│   ├── SKILL.md         # Master orchestrator entry point
+│   ├── skill.yaml       # Skill metadata + component definitions
+│   ├── core/            # Core framework
+│   │   ├── adaptive-flow.md  # L1-L5 complexity matrix
+│   │   └── security.md       # SEC-001..007 rules
+│   ├── phases/          # 4 lifecycle phases
+│   │   ├── understand/  # Intent → Spec → BDD (entry, lifecycle, rules, prompt)
+│   │   ├── plan/        # Design → Task DAG → Test Plan
+│   │   ├── verify/      # TDD Red-Green-Refactor → Contract Test → Gates
+│   │   └── deliver/     # Stack Preview → e2e → Production + BVT
+│   ├── agents/          # Sub-agent definitions
+│   │   ├── master.md    # Master orchestrator instructions
+│   │   ├── understand-agent.md
+│   │   ├── plan-agent.md
+│   │   ├── verify-agent.md
+│   │   └── deliver-agent.md
+│   ├── components/      # 7 component skills (native, desktop, web, backend, wxa, mya, tta)
+│   ├── contracts/       # 3-layer contract system (api/events/functions)
+│   ├── providers/       # Cloud configs (TCB, Aliyun) with compute_modes
+│   ├── templates/       # Project scaffolding + artifacts per phase
+│   ├── practices/       # SDD, BDD, TDD practice guides
+│   ├── cross-tool/      # Export scripts (CDHA, Cursor, Cline, Copilot)
+│   ├── workflows/       # Pipeline workflow YAMLs
+│   ├── brownfield/      # Context discovery for existing projects
+│   ├── walkthrough/     # Change walkthrough automation
+│   └── architecture/    # Project structure documentation
 ├── npm/                  # npm package wrapper
 │   ├── cli.js           # Node.js shim (auto-installs Python dependency)
 │   ├── package.json     # npm package metadata
 │   └── build-package.sh # Build/publish script
 ├── .opencode/              # opencode integration
-│   ├── config.json        # Plugin config
-│   ├── plugin/            # CDH ai-dlc plugin (system prompt injection)
-│   ├── skills/            # Skill symlinks (→ ai-dlc-skill/)
+│   ├── skills/ai-dlc-skill → ../../ai-dlc-skill   # Skill symlink
 │   └── package.json       # @opencode-ai/plugin dependency
 ├── scripts/                # CI/Dev utilities
 │   └── check_tui_no_print.py  # AST-based guard against bare print() in TUI code
@@ -308,32 +324,37 @@ ai-dlc-skill/SKILL.md  ←  single source of truth (YAML frontmatter + markdown 
          ├── .claude/skills/ai-dlc-skill   → ../..        (Claude Code auto-load)
          ├── .agents/skills/ai-dlc-skill   → ../..        (OpenAI Codex / Cursor / Continue.dev)
          └── cdha/builtin_skills/ai-dlc    → ../../ai-dlc-skill  (CDH built-in)
-
-.opencode/plugin/cdh-ai-dlc.ts   ←  opencode system.transform (force-inject, optional)
 ```
 
 ### Discovery Paths
 
 CDH searches for skills in:
-- `~/.cdh/skills/<name>/SKILL.md` — User skills
+- `~/.cdha/skills/<name>/SKILL.md` — User skills
 - `builtin_skills/` — Skills bundled with CDH (ai-dlc, git, shell)
 - `.opencode/skills/<name>/SKILL.md` — OpenCode compatible
 - `.claude/skills/<name>/SKILL.md` — Claude Code compatible
 - `.agents/skills/<name>/SKILL.md` — Agent protocol compatible (OpenAI Codex, Cursor, Continue.dev)
 - Project root directories containing `SKILL.md` — Project-level skills
 
-### Built-in Skill: ai-dlc-skill
+### Built-in Skill: ai-dlc-skill (v4.0.0)
 
-The `ai-dlc-skill` implements the **AI-Driven Development Lifecycle (AI-DLC)** with four phases:
+The `ai-dlc-skill` implements the **AI-Driven Development Lifecycle (AI-DLC)** with adaptive orchestration:
 
-| Phase | Lifecycle Doc | Artifacts |
-|-------|---------------|-----------|
-| ① Understand | `lifecycle/understand.md` | spec-delta.md, `.feature` files, contracts/ specs |
-| ② Plan | `lifecycle/plan.md` | design.md, task-list.md |
-| ③ Verify | `lifecycle/verify.md` | tests, implementation, contract tests |
-| ④ Deliver | `lifecycle/deliver.md` | stack deploy, e2e reports, BVT |
+| Phase | Lifecycle Doc | Rules | Practices |
+|-------|---------------|-------|-----------|
+| ① Understand | `phases/understand/lifecycle.md` | `phases/understand/rules.md` (UND-001..006) | SDD, BDD |
+| ② Plan | `phases/plan/lifecycle.md` | `phases/plan/rules.md` (PLN-001..004) | SDD, TDD |
+| ③ Verify | `phases/verify/lifecycle.md` | `phases/verify/rules.md` (VRF-001..006 + INT-001..006) | BDD, TDD |
+| ④ Deliver | `phases/deliver/lifecycle.md` | `phases/deliver/rules.md` (DLV-001..004 + STK-001..006) | SDD, Cloud |
 
-When you run `cdh`, `opencode`, `claude`, or `openai codex` in this repo, the agent automatically loads ai-dlc-skill and follows the 4-phase workflow — no manual activation needed.
+The **adaptive flow** (`core/adaptive-flow.md`) automatically selects phases based on complexity (L1–L5):
+- L1 single-file fix → Verify only
+- L2 single-component → Understand → Verify
+- L3 multi-component → Understand → Plan → Verify
+- L4 full-stack + deploy → Understand → Plan → Verify → Deliver
+- L5 architecture refactoring → Plan → Verify
+
+When you run `cdh`, `opencode`, `claude`, or `openai codex` in this repo, the agent automatically loads ai-dlc-skill and follows the adaptive workflow — no manual activation needed.
 
 ### Skill Frontmatter
 

@@ -24,7 +24,7 @@ def cloud_spec_skill_loaded() -> bool:
 def ensure_cloud_spec_skill_installed() -> str | None:
     """Ensure cloud-spec-skill is accessible to agents.
 
-    Checks if SKILL.md exists in repo and copies it to ~/.cdh/skills/ if needed,
+    Checks if SKILL.md exists in repo and copies it to ~/.cdha/skills/ if needed,
     or updates if the repo version is newer.
     Returns error message if installation fails, None on success.
     """

@@ -16,7 +16,7 @@ from cdha.models.provider import ChatResponse, Message, ModelResponse, Provider,
 
 logger = logging.getLogger("cdha.provider.minimaxi")
 
-LOG_DIR = Path.home() / ".cdh" / "logs"
+LOG_DIR = Path.home() / ".cdha" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 

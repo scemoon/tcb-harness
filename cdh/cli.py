@@ -8,7 +8,7 @@ from cdha.cli import setup_logging
 from cdha.config import ensure_dirs, load_config, save_config
 
 
-_CDH_DIR = Path.home() / ".cdh"
+_CDH_DIR = Path.home() / ".cdha"
 
 _COMMON_HELP = """
 \b
@@ -24,9 +24,9 @@ Usage:
 
 \b
 Paths:
-  Config   ~/.cdh/cdh.config.yaml
-  Logs     ~/.cdh/logs/
-  Projects ~/.cdh/projects/
+  Config   ~/.cdha/cdh.config.yaml
+  Logs     ~/.cdha/logs/
+  Projects ~/.cdha/projects/
 """
 
 

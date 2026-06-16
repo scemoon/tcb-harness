@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PROJECT_ROOT="$(cd "$SKILL_DIR/../../.." && pwd)"
+PROJECT_ROOT="$(cd "$SKILL_DIR/.." && pwd)"
 
 mkdir -p "$PROJECT_ROOT/.github"
 

@@ -6,7 +6,7 @@ from typing import Any, Optional
 import yaml
 
 
-CLOUD_DEV_HARNESS_DIR = Path.home() / ".cdh"
+CLOUD_DEV_HARNESS_DIR = Path.home() / ".cdha"
 GLOBAL_CONFIG_PATH = CLOUD_DEV_HARNESS_DIR / "cdh.config.yaml"
 
 
@@ -22,7 +22,7 @@ class ObservabilityConfig:
     trace_enabled: bool = True
     trace_exporter: str = "file"
     otlp_endpoint: str = "http://localhost:4317"
-    trace_dir: str = "~/.cdh/traces"
+    trace_dir: str = "~/.cdha/traces"
 
 
 @dataclass
@@ -201,7 +201,7 @@ def _write_default_config():
             "trace_enabled": True,
             "trace_exporter": "file",
             "otlp_endpoint": "http://localhost:4317",
-            "trace_dir": "~/.cdh/traces",
+            "trace_dir": "~/.cdha/traces",
         },
         "attachments": {
             "max_size_mb": 10,

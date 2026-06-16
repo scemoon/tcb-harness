@@ -1243,10 +1243,9 @@ class Conversation(containers.Vertical):
                 # into the corresponding buffered tool_call entry.
                 for entry in self._replay_buffer:
                     if entry.get("kind") == "tool_call" and entry.get("tool_id") == tool_id:
-                        existing_content = entry["tool_call"].get("content", [])
                         new_content = tool_call.get("content", [])
                         if new_content:
-                            entry["tool_call"]["content"] = existing_content + new_content
+                            entry["tool_call"]["content"] = new_content
                         if status:
                             entry["tool_call"]["status"] = status
                         new_title = tool_call.get("title", "")

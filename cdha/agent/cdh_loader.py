@@ -11,7 +11,7 @@ def _walk_up_parents(workspace_root: Path):
     """Yield workspace root, then git root.
 
     Unlike :class:`~cdha.skills.loader.SkillLoader` we deliberately do
-    **not** yield ``Path.home()`` — the global ``~/.cdh/`` is the CDH
+    **not** yield ``Path.home()`` — the global ``~/.cdha/`` is the CDHA
     user-config directory, not a project-level ``.cdh/``, so including it
     would cause false-positive matches.
     """

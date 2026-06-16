@@ -278,7 +278,7 @@ class TestDailyLogRotation:
     def test_handler_attached_with_midnight_when(self, tmp_path: Path, monkeypatch):
         from cdha.cli import setup_logging, LOG_DIR
 
-        # Redirect LOG_DIR to a temp path so we don't pollute ~/.cdh.
+        # Redirect LOG_DIR to a temp path so we don't pollute ~/.cdha.
         monkeypatch.setattr("cdha.cli.LOG_DIR", tmp_path)
         monkeypatch.setattr("cdha.cli.LOG_FILE", tmp_path / "cdh.log")
 
