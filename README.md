@@ -2,6 +2,8 @@
 
 AI-powered terminal-based development framework for cloud-native applications, featuring a Textual TUI, multi-provider LLM support, MCP integration, and sandboxed execution.
 
+**Version 1.0.0**
+
 ## Features
 
 - **TUI Chat Interface** — Stream AI responses with rich markdown rendering, thinking blocks, tool use visualization, command autocomplete, and file attachment
@@ -16,7 +18,9 @@ AI-powered terminal-based development framework for cloud-native applications, f
 - **Task Management** — Task dependency tracking, cron scheduling
 - **ACP Protocol** — Agent Communication Protocol for inter-agent messaging
 - **HTTP/SSE Server** — Remote agent access via web interface
-- **CloudSpec Framework** — Vendor-neutral specification with multi-cloud support (TCB, Aliyun, AWS)
+- **Codebase Indexing** — BM25-based code search, chunking, and retrieval
+- **Memory Systems** — Pyramid, recall, and symbolic memory for long-term context
+- **Multi-Cloud Abstraction** — Vendor-neutral cloud resource management (TCB, Aliyun, AWS)
 - **Themes** — Dark and light UI themes with CSS customization
 
 ## Installation
@@ -39,7 +43,7 @@ Add this line to your `~/.bashrc` or `~/.zshrc` to make it permanent.
 ```bash
 npm install -g cdh
 ```
-Installs via [npm registry](https://www.npmjs.com/npm.com/package/cdh). Requires Node.js >= 16.
+Installs via [npm registry](https://www.npmjs.com/package/cdh). Requires Node.js >= 18.
 
 Or install from a local `.tgz` built in this repo:
 ```bash
@@ -63,7 +67,7 @@ cdh tui
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.14+
 - LLM provider API key(s)
 
 ## Usage
@@ -92,14 +96,17 @@ cdh                          # Launch TUI (agent store)
 cdh tui                      # Launch TUI (agent store)
 cdh tui --mode plan          # Start in plan mode
 cdh tui --agent <identity>   # Launch specific agent directly
-cdh config                   # Open configuration editor
+cdh config                   # Open configuration editor (TUI)
 cdh config set provider openai
 cdh config list              # Show full config
 cdh logs                     # View logs (last 20 lines)
-cdh logs --tail 100         # View last 100 log lines
+cdh logs --tail 100          # View last 100 log lines
 cdh logs --follow            # Follow log output
 cdh project                  # List projects
 cdh project show <name>      # Show project details
+cdh session list             # List sessions
+cdh session load <id>        # Load session
+cdh help                     # Show help
 cdh version                  # Show version
 ```
 
@@ -161,45 +168,63 @@ Environment variables are interpolated with `${VAR}` syntax in config values.
 ## Project Structure
 
 ```
-├── cdha/                  # Main Python package (CDH Agent)
-│   ├── agent/             # Agent engine, tools, sessions
-│   │   ├── agents/       # Agent types (build, plan, solo, explore, scout, etc.)
-│   │   └── tools/        # Tools (file, bash, web, lsp, mcp, sandbox, etc.)
-│   ├── models/           # LLM provider abstraction + 8 providers
-│   ├── mcp/              # Model Context Protocol client
-│   ├── skills/           # Skill system with multi-path discovery
-│   ├── storage/           # SQLite session store
-│   ├── trace/            # Distributed tracing (JSON + OTLP)
-│   ├── tasks/            # Task management with dependencies
-│   ├── memory/           # Memory systems (pyramid, recall, symbolic)
-│   └── server/            # HTTP/SSE agent server
+├── cdh/                  # Top-level CLI entry point
+│   ├── cli.py           # Click CLI (config, logs, projects, sessions, tui)
+│   ├── __init__.py
+│   └── __main__.py
+├── cdha/                 # Core agent framework (CDH Agent)
+│   ├── agent/           # Agent engine, tools, sessions, permissions
+│   │   ├── agents/     # Agent type definitions (build, plan, solo, explore, scout, ...)
+│   │   └── tools/      # 23 tools (file, bash, web, lsp, mcp, sandbox, git, cron, task, ...)
+│   ├── models/          # LLM provider abstraction + 7 providers
+│   │   └── providers/  # MiniMaxi, OpenAI, Anthropic, DeepSeek, MiniMax, GLM, Ollama
+│   ├── mcp/             # Model Context Protocol client (SSE + stdio)
+│   ├── skills/          # Skill system (loader, manager, frontmatter parsing)
+│   ├── builtin_skills/  # Bundled skills (ai-dlc, git, shell)
+│   ├── storage/         # SQLite-backed storage (sessions, projects)
+│   ├── trace/           # Distributed tracing (JSON + OTLP)
+│   ├── tasks/           # Task management with dependencies
+│   ├── memory/          # Memory systems (pyramid, recall, symbolic)
+│   ├── codebase/        # Codebase indexing & search (BM25)
+│   ├── server/          # HTTP/SSE agent server
+│   ├── cloud/           # Multi-cloud abstraction layer
+│   ├── cron/            # Cron scheduling
+│   ├── lsp/             # LSP integration
+│   └── utils/           # Helpers and utilities
 ├── tui/                  # Textual TUI (A2TUI)
-│   ├── screens/          # Main, store, settings, sessions screens
-│   ├── widgets/          # TUI widgets
-│   └── acp/              # ACP protocol implementation
-├── ai-dlc-skill/          # AI-DLC lifecycle skill (①Understand→②Plan→③Verify→④Deliver)
-│   ├── lifecycle/        # Phase definitions (understand, plan, verify, deliver)
-│   ├── practices/        # SDD, BDD, TDD practice guides
-│   ├── rules/            # Per-phase rule sets (UND, PLN, VRF, INT, STK, DLV, SEC)
-│   ├── templates/        # Project scaffolding + artifacts
-│   ├── workflows/        # ai-dlc pipeline workflow YAML
-│   ├── providers/        # Cloud platform configs (TCB, Aliyun)
-│   ├── skill.yaml        # Skill metadata
-│   ├── SKILL.md           # Entry point with frontmatter (multi-CLI compatible)
-│   ├── .claude/skills/   # Claude Code symlink bridge
-│   └── .agents/skills/   # OpenAI codex / Cursor / Continue.dev symlink bridge
-├── cloud-spec-skill/     # CloudSpec specification framework
-│   ├── rules/            # Development standards
-│   ├── providers/        # Cloud abstractions (TCB, Aliyun, AWS)
-│   └── templates/        # Project scaffolding
-├── .opencode/              # opencode CLI integration
+│   ├── screens/        # 22 TUI screens (main, store, settings, sessions, projects, ...)
+│   ├── widgets/        # 46 TUI widgets (chat, tool calls, terminal, agent response, ...)
+│   ├── acp/            # Agent Communication Protocol
+│   ├── ansi/           # ANSI escape sequence parser
+│   ├── prompt/         # Prompt extraction & resources
+│   ├── visuals/        # Visual helpers
+│   ├── data/           # Static assets (agents, images, sounds)
+│   └── cli.py          # TUI CLI (run, acp, settings, replay, serve, about)
+├── ai-dlc-skill/         # AI-DLC lifecycle skill (v3.0.0)
+│   ├── lifecycle/      # Phase definitions (understand, plan, verify, deliver)
+│   ├── practices/      # SDD, BDD, TDD practice guides
+│   ├── rules/          # Per-phase rule sets (UND, PLN, VRF, INT, STK, DLV, SEC)
+│   ├── templates/      # Project scaffolding + artifacts
+│   ├── workflows/      # Pipeline workflow YAMLs
+│   ├── providers/      # Cloud platform configs (TCB, Aliyun)
+│   ├── SKILL.md         # Entry point (multi-CLI compatible)
+│   └── skill.yaml       # Skill metadata
+├── npm/                  # npm package wrapper
+│   ├── cli.js           # Node.js shim (auto-installs Python dependency)
+│   ├── package.json     # npm package metadata
+│   └── build-package.sh # Build/publish script
+├── .opencode/              # opencode integration
 │   ├── config.json        # Plugin config
 │   ├── plugin/            # CDH ai-dlc plugin (system prompt injection)
 │   ├── skills/            # Skill symlinks (→ ai-dlc-skill/)
 │   └── package.json       # @opencode-ai/plugin dependency
-├── tests/                # pytest test suite
-├── install.sh            # GitHub release installer
-└── pyproject.toml
+├── scripts/                # CI/Dev utilities
+│   └── check_tui_no_print.py  # AST-based guard against bare print() in TUI code
+├── tests/                  # pytest test suite (14 files)
+├── .github/workflows/     # CI workflows
+├── install.sh             # GitHub release installer
+├── pyproject.toml          # Package metadata & dependencies
+└── version.md             # Version declaration
 ```
 
 ## Agents
@@ -372,7 +397,26 @@ Docker container isolation:
 | GLM | open.bigmodel.cn | glm-4-plus, glm-4-flash | `GLM_API_KEY` |
 | Ollama | localhost:11434 | llama2, codellama (local) | — |
 
-## CloudSpec Framework
+## Testing
 
-Vendor-neutral specification system with multi-cloud support (TCB, Aliyun, AWS).
-Rules: GEN-* (general), SEC-* (security), QLT-* (quality), SPC-* (spec).
+```bash
+# install dev dependencies
+uv sync --group dev
+
+# run tests
+pytest tests/
+
+# check for bare print() in TUI code
+python scripts/check_tui_no_print.py
+```
+
+CI runs on push/PR to `main` when files under `tui/ansi/` change.
+
+## Entry Points
+
+| Command | Entry Point | Description |
+|---------|-------------|-------------|
+| `cdh` | `cdh.cli:main` | Main user CLI (launches TUI, config, logs, projects) |
+| `cdha` | `cdha.cli:main` | Direct agent CLI access |
+| `cdh-agent-acp` | `cdha.agent.cdh_agent_acp:main` | ACP agent server |
+| `tui` | `tui.cli:main` | Standalone TUI launcher |
