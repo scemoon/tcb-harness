@@ -219,12 +219,6 @@ class ToolCall(containers.VerticalGroup):
             expand_icon = Content.from_markup(
                 "[$text-secondary]▼ " if self.expanded else "[$text-secondary]▶ "
             )
-        else:
-            expand_icon = Content.from_markup(
-                "[$text-secondary 30%]▼ "
-                if self.expanded
-                else "[$text-secondary 30%]▶ "
-            )
 
         header = Content.assemble(expand_icon, "🔧 ", title)
 
@@ -281,7 +275,8 @@ class ToolCall(containers.VerticalGroup):
     @on(events.Click, "ToolCallHeader")
     def on_click_tool_call_header(self, event: events.Click) -> None:
         event.stop()
-        self.expanded = not self.expanded
+        if self.has_content:
+            self.expanded = not self.expanded
 
     @on(events.Click, "ViewMore")
     def on_click_view_more(self, event: events.Click) -> None:

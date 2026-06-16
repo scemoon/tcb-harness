@@ -311,6 +311,16 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
     if not arguments:
         return []
 
+    if name == "Read":
+        return []
+
+    _HEADER_ONLY_TOOLS = frozenset({
+        "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskOutput", "TaskStop",
+        "TodoCreate", "TodoList", "TodoComplete", "Glob",
+    })
+    if name in _HEADER_ONLY_TOOLS:
+        return []
+
     if name == "Write":
         path = str(arguments.get("path", ""))
         content = str(arguments.get("content", ""))
@@ -345,14 +355,6 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
                     "type": "text",
                     "text": f"```bash\n$ {cmd}\n```",
                 },
-            }]
-
-    if name == "Read":
-        path = str(arguments.get("path", ""))
-        if path:
-            return [{
-                "type": "content",
-                "content": {"type": "text", "text": f"📄 {path}"},
             }]
 
     if name == "ApplyPatch":
@@ -436,8 +438,8 @@ def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
     if "error" in parsed:
         return str(parsed["error"])
     # Task / Todo tools: collapse verbose state echoes to a one-liner.
-    if tool_name in _QUIET_TASK_TOOLS:
-        return "✓ updated"
+    if tool_name in _STATUS_ONLY_TOOLS:
+        return ""
     if parsed.get("success") is True:
         if path := parsed.get("path"):
             return f"✓ {path}"
@@ -451,15 +453,11 @@ def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
     return result_text
 
 
-_QUIET_TASK_TOOLS = frozenset({
+_STATUS_ONLY_TOOLS = frozenset({
     "TaskCreate",
-    "TaskGet",
-    "TaskList",
     "TaskUpdate",
-    "TaskOutput",
     "TaskStop",
     "TodoCreate",
-    "TodoList",
     "TodoComplete",
 })
 
@@ -833,7 +831,7 @@ class CDHACPAdapter:
             tool_name = tool_name.split(":", 1)[0].strip()
         display_text = _format_tui_display_text(block.content, tool_name)
 
-        # Update title with path from result if not already set
+        # Update title with path/subject from result if not already set
         if block.content and block.tool_use_id in self.tool_calls:
             try:
                 parsed = json.loads(block.content)
@@ -843,8 +841,33 @@ class CDHACPAdapter:
                 if isinstance(parsed, dict) and parsed.get("success") is True:
                     current_title = self.tool_calls[block.tool_use_id].get("title", "")
                     if ":" not in current_title:
-                        if path := parsed.get("path"):
+                        if tool_name in ("TaskCreate", "TaskUpdate"):
+                            task_info = parsed.get("task", {})
+                            if isinstance(task_info, dict):
+                                if subject := task_info.get("subject", ""):
+                                    self.tool_calls[block.tool_use_id]["title"] = f"{current_title}: {subject}"
+                                elif path := parsed.get("path"):
+                                    self.tool_calls[block.tool_use_id]["title"] = f"{current_title}: {_short_path(path, self.agent._project_dir)}"
+                        elif path := parsed.get("path"):
                             self.tool_calls[block.tool_use_id]["title"] = f"{current_title}: {_short_path(path, self.agent._project_dir)}"
+
+        # Wrap multi-line results in a fenced code block for proper rendering.
+        # Use bash-style fence for Bash/Glob, detect language for Read.
+        if display_text and "\n" in display_text and "```" not in display_text:
+            lang = ""
+            tool_info = self.tool_calls.get(block.tool_use_id, {})
+            tname = tool_info.get("_tool_name", "")
+            targs = tool_info.get("_tool_args", {})
+            if tname in ("Bash", "Glob"):
+                lang = "bash"
+            elif tname == "Read" and isinstance(targs, dict):
+                path = str(targs.get("path", ""))
+                if path:
+                    lang = _language_for_path(path)
+            if lang:
+                display_text = f"```{lang}\n{display_text}\n```"
+            else:
+                display_text = f"```\n{display_text}\n```"
 
         content_block = [{
             "type": "content",
@@ -987,13 +1010,42 @@ class CDHACPAdapter:
                         content_blocks = _build_tool_call_content(
                             block.name, block.arguments or {}
                         )
+                        title = block.name
+                        args = block.arguments or {}
+                        if path := args.get("path", ""):
+                            title = f"{block.name}: {_short_path(path, self.agent._project_dir)}"
+                        elif block.name == "Bash":
+                            cmd = str(args.get("command", ""))
+                            title = f"Bash: {cmd}"
+                        elif block.name == "TaskCreate":
+                            subject = str(args.get("subject", ""))
+                            if subject:
+                                title = f"TaskCreate: {subject}"
+                        elif block.name == "TaskUpdate":
+                            subject = str(args.get("subject", ""))
+                            if subject:
+                                title = f"TaskUpdate: {subject}"
+                        elif block.name in ("TaskGet", "TaskStop", "TaskOutput"):
+                            tid = str(args.get("taskId", args.get("task_id", "")))
+                            if tid:
+                                title = f"{block.name}: {tid}"
+                        elif block.name == "TodoCreate":
+                            text = str(args.get("text", ""))
+                            if text:
+                                title = f"TodoCreate: {text[:40]}"
+                        elif block.name == "Glob":
+                            pattern = str(args.get("pattern", ""))
+                            if pattern:
+                                title = f"Glob: {pattern}"
                         self.tool_calls[block.id] = {
                             "sessionUpdate": "tool_call",
                             "toolCallId": block.id,
-                            "title": block.name,
+                            "title": title,
                             "kind": tool_kind,
                             "status": _wire_status(block.status.value),
                             "content": content_blocks,
+                            "_tool_name": block.name,
+                            "_tool_args": block.arguments or {},
                         }
                         self.send_session_update(self.tool_calls[block.id])
                     elif isinstance(block, ToolResult):
@@ -1409,6 +1461,7 @@ class CDHACPAdapter:
                         "kind": tool_kind,
                         "status": "in_progress",
                         "content": existing.get("content", []),
+                        "_tool_name": event.tool_name,
                     }
                     self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
@@ -1418,8 +1471,28 @@ class CDHACPAdapter:
                             if path := event.tool_args.get("path", ""):
                                 title = f"{event.tool_name}: {_short_path(path, self.agent._project_dir)}"
                             elif event.tool_name == "Bash":
-                                cmd = str(event.tool_args.get("command", ""))[:60]
+                                cmd = str(event.tool_args.get("command", ""))
                                 title = f"Bash: {cmd}"
+                            elif event.tool_name == "TaskCreate":
+                                subject = str(event.tool_args.get("subject", ""))
+                                if subject:
+                                    title = f"TaskCreate: {subject}"
+                            elif event.tool_name == "TaskUpdate":
+                                subject = str(event.tool_args.get("subject", ""))
+                                if subject:
+                                    title = f"TaskUpdate: {subject}"
+                            elif event.tool_name in ("TaskGet", "TaskStop", "TaskOutput"):
+                                tid = str(event.tool_args.get("taskId", event.tool_args.get("task_id", "")))
+                                if tid:
+                                    title = f"{event.tool_name}: {tid}"
+                            elif event.tool_name == "TodoCreate":
+                                text = str(event.tool_args.get("text", ""))
+                                if text:
+                                    title = f"TodoCreate: {text[:40]}"
+                            elif event.tool_name == "Glob":
+                                pattern = str(event.tool_args.get("pattern", ""))
+                                if pattern:
+                                    title = f"Glob: {pattern}"
                             content = _build_tool_call_content(
                                 event.tool_name, event.tool_args
                             )
@@ -1441,15 +1514,18 @@ class CDHACPAdapter:
                             "title": title,
                             "status": "pending",
                             "content": content,
+                            "_tool_name": event.tool_name,
+                            "_tool_args": event.tool_args,
                         })
                         self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.TOOL_RESULT:
                     status = "failed" if event.result_is_error else "completed"
+                    tname = self.tool_calls.get(event.tool_id, {}).get("_tool_name", "")
                     display_text = _format_tui_display_text(
-                        event.result_content or "", event.tool_name,
+                        event.result_content or "", tname,
                     )
 
-                    # Update title with path from result if not already set
+                    # Update title with path/subject from result if not already set
                     if event.result_content and event.tool_id in self.tool_calls:
                         try:
                             parsed = json.loads(event.result_content)
@@ -1459,6 +1535,13 @@ class CDHACPAdapter:
                             if isinstance(parsed, dict) and parsed.get("success") is True:
                                 current_title = self.tool_calls[event.tool_id].get("title", "")
                                 if ":" not in current_title:
+                                    tname = self.tool_calls[event.tool_id].get("_tool_name", "")
+                                    if tname in ("TaskCreate", "TaskUpdate"):
+                                        task_info = parsed.get("task", {})
+                                        if isinstance(task_info, dict):
+                                            if subject := task_info.get("subject", ""):
+                                                self.tool_calls[event.tool_id]["title"] = f"{current_title}: {subject}"
+                                                continue
                                     if path := parsed.get("path"):
                                         self.tool_calls[event.tool_id]["title"] = f"{current_title}: {_short_path(path, self.agent._project_dir)}"
 
@@ -1469,9 +1552,24 @@ class CDHACPAdapter:
                     # TUI now renders all text content as Markdown.
                     # Wrap multi-line results in a fenced code block so they
                     # display as a code block rather than a raw paragraph.
+                    # For Read results, detect language from the file path.
+                    # For Bash/Glob, use bash-style fence.
                     # Skip if already contains a code fence to avoid nesting.
                     if display_text and "\n" in display_text and "```" not in display_text:
-                        display_text = f"```\n{display_text}\n```"
+                        lang = ""
+                        tool_info = self.tool_calls.get(event.tool_id, {})
+                        tname = tool_info.get("_tool_name", "")
+                        targs = tool_info.get("_tool_args", {})
+                        if tname in ("Bash", "Glob"):
+                            lang = "bash"
+                        elif tname == "Read" and isinstance(targs, dict):
+                            path = str(targs.get("path", ""))
+                            if path:
+                                lang = _language_for_path(path)
+                        if lang:
+                            display_text = f"```{lang}\n{display_text}\n```"
+                        else:
+                            display_text = f"```\n{display_text}\n```"
                     content_block = [{
                         "type": "content",
                         "content": {"type": "text", "text": display_text},
