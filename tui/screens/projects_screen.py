@@ -121,6 +121,8 @@ class ProjectsScreen(ModalScreen[str]):
             self.notify(f".cdh already exists at {existing}", severity="warning")
             return
         name = target.name
+        from cdh.scaffold import scaffold_dlc_project
+        scaffold_dlc_project(target, name)
         CdhProjectLoader.init_project(target, name)
         self.notify(f"Initialized .cdh in {target}")
 

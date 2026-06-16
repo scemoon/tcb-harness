@@ -226,6 +226,8 @@ class ProjectsApp(App):
         except Exception:
             ws = Path.cwd().resolve()
         name = ws.name
+        from cdh.scaffold import scaffold_dlc_project
+        scaffold_dlc_project(ws, name)
         CdhProjectLoader.init_project(ws, name)
         projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
         projects_dir.mkdir(parents=True, exist_ok=True)
@@ -260,6 +262,8 @@ class ProjectsApp(App):
             self.notify(f".cdh already exists at {existing}", severity="warning")
             return
         name = target.name
+        from cdh.scaffold import scaffold_dlc_project
+        scaffold_dlc_project(target, name)
         CdhProjectLoader.init_project(target, name)
         self.notify(f"Initialized .cdh in {target}")
 

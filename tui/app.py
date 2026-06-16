@@ -1125,6 +1125,8 @@ class A2TUIApp(App, inherit_bindings=False):
                     return
                 name = project_path.name
                 from cdha.agent.cdh_loader import CdhProjectLoader
+                from cdh.scaffold import scaffold_dlc_project
+                scaffold_dlc_project(project_path, name)
                 CdhProjectLoader.init_project(project_path, name)
                 projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
                 projects_dir.mkdir(parents=True, exist_ok=True)

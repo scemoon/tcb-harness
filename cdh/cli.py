@@ -3,6 +3,7 @@ from typing import Optional
 
 import click
 
+from cdh.scaffold import scaffold_dlc_project
 from cdha.cli import cli as cdha_cli
 from cdha.cli import setup_logging
 from cdha.config import ensure_dirs, load_config, save_config
@@ -158,7 +159,7 @@ def project(action, name, path):
       select         Open project management TUI (default)
       list           List all projects
       show <name>    Show project details
-      new <name> [path]   Create a new project
+      new <name> [path]   Create a new project (with ai-dlc-skill scaffold if available)
       init [path]    Initialize .cdh in an existing directory (no registration)
       load <name>    Load a project (set as current)
     """
@@ -198,6 +199,7 @@ def project(action, name, path):
             return
         from cdha.agent.cdh_loader import CdhProjectLoader
         ws = Path(path).expanduser().resolve()
+        scaffold_dlc_project(ws, name)
         CdhProjectLoader.init_project(ws, name)
         proj_data = {"name": name, "path": str(ws), "description": ""}
         project_file = projects_dir / f"{name}.yaml"
@@ -211,6 +213,7 @@ def project(action, name, path):
         from cdha.agent.cdh_loader import CdhProjectLoader
         target = Path(name or ".").expanduser().resolve()
         project_name = target.name
+        scaffold_dlc_project(target, project_name)
         CdhProjectLoader.init_project(target, project_name)
         click.echo(f"Initialized .cdh in {target}")
     elif action == "load":

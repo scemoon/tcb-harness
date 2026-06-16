@@ -2406,23 +2406,27 @@ class Conversation(containers.Vertical):
             return True
         elif sub_cmd == "new":
             if not name:
-                self.notify("Project name required", title="/project new", severity="error")
+                self.notify("Usage: /project new <name> [path]", title="/project new", severity="error")
                 return True
             from pathlib import Path
             from cdha.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
+            from cdha.agent.cdh_loader import CdhProjectLoader
+            from cdh.scaffold import scaffold_dlc_project
             import yaml
             projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
             projects_dir.mkdir(parents=True, exist_ok=True)
             project_path = path or str(Path.cwd())
-            proj_data = {"name": name, "path": project_path, "description": ""}
+            ws = Path(project_path).expanduser().resolve()
+            scaffold_dlc_project(ws, name)
+            CdhProjectLoader.init_project(ws, name)
+            proj_data = {"name": name, "path": str(ws), "description": ""}
             project_file = projects_dir / f"{name}.yaml"
             project_file.write_text(yaml.dump(proj_data))
             cfg = load_config()
             cfg.current_project = name
-            cfg.current_project_path = project_path
+            cfg.current_project_path = str(ws)
             save_config(cfg)
-            new_project_dir = Path(project_path)
-            self.app.project_dir = new_project_dir
+            self.app.project_dir = ws
             self.post_message(messages.ProjectDirectoryUpdated())
             self.flash(f"Created and switched to project: {name}", style="success")
             return True
