@@ -32,7 +32,6 @@ Choose one of three install methods:
 curl -fsSL https://raw.githubusercontent.com/scemoon/cloud-dev-harness/main/install.sh | bash
 ```
 Downloads and installs the latest GitHub release via pip. The `cdh` shim is installed to `~/.local/bin/cdh`.  
-After install, both `cdh` and `onecode` commands are available globally (via Python entry points).  
 Add `~/.local/bin` to your PATH:
 
 ```bash
@@ -47,7 +46,7 @@ npm install -g cdh
 ```
 Installs via [npm registry](https://www.npmjs.com/package/cdh). Requires Node.js >= 18 and Python 3.14+.
 
-After install, both `cdh` and `onecode` commands are available globally.
+After install, the `cdh` command is available globally.
 
 Or install from a local `.tgz` built in this repo:
 ```bash
@@ -64,11 +63,9 @@ pip install -e .
 Best for development or if you want to track HEAD.
 
 ### verify
-After any install method, start the TUI via either command:
+After any install method, start the TUI:
 ```bash
-cdh        # Launch TUI (agent store)
-cdh tui    # Launch TUI (agent store)
-onecode    # Direct agent CLI
+cdh tui
 ```
 
 ## Requirements
@@ -362,7 +359,7 @@ The **adaptive flow** (`core/adaptive-flow.md`) automatically selects phases bas
 - L4 full-stack + deploy → Understand → Plan → Verify → Deliver
 - L5 architecture refactoring → Plan → Verify
 
-When you run `cdh`, `onecode`, `opencode`, `claude`, or `openai codex` in this repo, the agent automatically loads ai-dlc-skill and follows the adaptive workflow — no manual activation needed.
+When you run `cdh`, `opencode`, `claude`, or `openai codex` in this repo, the agent automatically loads ai-dlc-skill and follows the adaptive workflow — no manual activation needed.
 
 ### Skill Frontmatter
 
@@ -446,6 +443,5 @@ CI runs on push/PR to `main` when files under `tui/ansi/` change.
 | Command | Entry Point | Description |
 |---------|-------------|-------------|
 | `cdh` | `cdh.cli:main` | Main user CLI (launches TUI, config, logs, projects) |
-| `onecode` | `onecode.cli:main` | Direct agent CLI access |
-| `onecode-agent-acp` | `onecode.agent.onecode_agent_acp:main` | ACP agent server |
 | `tui` | `tui.cli:main` | Standalone TUI launcher |
+| `onecode-agent-acp` | `onecode.agent.onecode_agent_acp:main` | ACP agent server |

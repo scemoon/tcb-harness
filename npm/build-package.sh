@@ -69,7 +69,6 @@ cat > "$BUILD_DIR/package/package.json" << EOF
   },
   "bin": {
     "cdh": "cli.js",
-    "onecode": "onecode-cli.js",
     "cloud-dev-harness": "cli.js"
   },
   "engines": {

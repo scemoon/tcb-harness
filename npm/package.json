@@ -10,7 +10,6 @@
   },
   "bin": {
     "cdh": "cli.js",
-    "onecode": "onecode-cli.js",
     "cloud-dev-harness": "cli.js"
   },
   "engines": {
