@@ -149,6 +149,79 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content.lstrip("\n"), encoding="utf-8")
 
 
+def _build_project_yaml(active: list[dict]) -> dict:
+    return {
+        "stack": {
+            "topology": "monorepo",
+            "components": [
+                {
+                    "id": c["id"],
+                    "kind": c["kind"],
+                    "tech": c["tech"],
+                    "owns": c["owns"],
+                    "fr_prefix": c["fr_prefix"],
+                }
+                | ({"default_language": c["default_language"]} if c.get("default_language") else {})
+                | ({"default_ui_framework": c["default_ui_framework"]} if c.get("default_ui_framework") else {})
+                for c in active
+            ],
+            "cross_cutting": {
+                "fr_prefix": "INT",
+                "contracts": "contracts/",
+                "shared_types": "packages/shared/",
+            },
+        }
+    }
+
+
+def _build_component_table(active: list[dict]) -> str:
+    return "\n".join(
+        f"| {c['id']:8s} | {c['fr_prefix'] + '-FR-*':14s} | {c.get('default_language', '-'):17s} | {c.get('default_ui_framework', '-'):21s} | {c['owns']:20s} |"
+        for c in active
+    )
+
+
+def init_dlc_project(
+    workspace_root: Path,
+    project_name: str,
+    description: str = "",
+) -> bool:
+    """Scaffold only the basic project skeleton (root-level files + .cdh/).
+
+    Component directories under apps/ are NOT created; they are added
+    dynamically when the user selects which components to include.
+
+    Returns True if scaffolding was performed, False if ai-dlc-skill
+    is not available and the project was left untouched.
+    """
+    if not _detect_dlc_skill(workspace_root):
+        return False
+
+    root = workspace_root.resolve()
+    active = list(SKILL_YAML_COMPONENTS)
+
+    # --- project.yaml (definition only — no app dirs yet) ---
+    _write(root / "project.yaml", yaml.dump(_build_project_yaml(active), default_flow_style=False))
+
+    # --- requirements.md ---
+    _write(
+        root / "requirements.md",
+        REQUIREMENTS_MD.format(
+            project_name=project_name,
+            description=description or f"AI-DLC monorepo project: {project_name}",
+            component_table=_build_component_table(active),
+        ),
+    )
+
+    # --- .gitignore ---
+    _write(root / ".gitignore", GITIGNORE_CONTENT)
+
+    # --- CHANGELOG.md (root-level metadata) ---
+    _write(root / "CHANGELOG.md", CHANGELOG_MD)
+
+    return True
+
+
 def scaffold_dlc_project(
     workspace_root: Path,
     project_name: str,
@@ -171,41 +244,15 @@ def scaffold_dlc_project(
         active = list(SKILL_YAML_COMPONENTS)
 
     # --- project.yaml ---
-    project_yaml = {
-        "stack": {
-            "topology": "monorepo",
-            "components": [
-                {
-                    "id": c["id"],
-                    "kind": c["kind"],
-                    "tech": c["tech"],
-                    "owns": c["owns"],
-                    "fr_prefix": c["fr_prefix"],
-                }
-                | ({"default_language": c["default_language"]} if c.get("default_language") else {})
-                | ({"default_ui_framework": c["default_ui_framework"]} if c.get("default_ui_framework") else {})
-                for c in active
-            ],
-            "cross_cutting": {
-                "fr_prefix": "INT",
-                "contracts": "contracts/",
-                "shared_types": "packages/shared/",
-            },
-        }
-    }
-    _write(root / "project.yaml", yaml.dump(project_yaml, default_flow_style=False))
+    _write(root / "project.yaml", yaml.dump(_build_project_yaml(active), default_flow_style=False))
 
     # --- requirements.md ---
-    component_rows = "\n".join(
-        f"| {c['id']:8s} | {c['fr_prefix'] + '-FR-*':14s} | {c.get('default_language', '-'):17s} | {c.get('default_ui_framework', '-'):21s} | {c['owns']:20s} |"
-        for c in active
-    )
     _write(
         root / "requirements.md",
         REQUIREMENTS_MD.format(
             project_name=project_name,
             description=description or f"AI-DLC monorepo project: {project_name}",
-            component_table=component_rows,
+            component_table=_build_component_table(active),
         ),
     )
 

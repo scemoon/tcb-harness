@@ -211,9 +211,10 @@ def project(action, name, path):
         click.echo(f"Created project '{name}' at {ws}")
     elif action == "init":
         from onecode.agent.cdh_loader import CdhProjectLoader
+        from cdh.scaffold import init_dlc_project
         target = Path(name or ".").expanduser().resolve()
         project_name = target.name
-        scaffold_dlc_project(target, project_name)
+        init_dlc_project(target, project_name)
         CdhProjectLoader.init_project(target, project_name)
         click.echo(f"Initialized .cdh in {target}")
     elif action == "load":
