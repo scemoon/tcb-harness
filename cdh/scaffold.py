@@ -145,6 +145,7 @@ def _gitkeep(path: Path) -> None:
 
 
 def _write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content.lstrip("\n"), encoding="utf-8")
 
 
