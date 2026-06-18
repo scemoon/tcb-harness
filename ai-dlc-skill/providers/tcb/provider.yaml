@@ -85,6 +85,12 @@ capabilities:
   - stack_deploy
   - build_env_injection
   - container_hosting
+
+storage:
+  object_storage: cloudbase-storage
+  document_db: docdb
+  relational_db: mysql
+  cdn: tencent-cloud-cdn
 ```
 
 ## Stack Deploy (recommended for shared environments)

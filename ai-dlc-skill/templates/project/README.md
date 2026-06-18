@@ -4,16 +4,16 @@
 
 ## Stack
 
-| Component | FR Prefix | Directory | Purpose |
-|-----------|-----------|-----------|---------|
-| native | `NATIVE-FR-*` | `apps/native/` | Native mobile client |
-| desktop | `DESKTOP-FR-*` | `apps/desktop/` | Desktop client |
-| web | `WEB-FR-*` | `apps/web/` | Browser frontend |
-| backend | `BE-FR-*` | `apps/backend/` | Service / API |
-| wxa | `WXA-FR-*` | `apps/wxa/` | WeChat Mini Program |
-| mya | `MYA-FR-*` | `apps/mya/` | Mini Program (e.g. Alipay) |
-| tta | `TTA-FR-*` | `apps/tta/` | TikTok Mini Program |
-| contracts | `INT-FR-*` | `contracts/`, `packages/shared/` | Cross-component contracts |
+| Component | FR Prefix | Default Language | Default UI Framework | Directory | Purpose |
+|-----------|-----------|-----------------|---------------------|-----------|---------|
+| native | `NATIVE-FR-*` | Dart | Flutter SDK | `apps/native/` | Native mobile client |
+| desktop | `DESKTOP-FR-*` | TypeScript | Electron + React | `apps/desktop/` | Desktop client |
+| web | `WEB-FR-*` | TypeScript | Next.js | `apps/web/` | Browser frontend |
+| backend | `BE-FR-*` | Python / Node / Go | FastAPI / Express / Fiber | `apps/backend/` | Service / API |
+| wxa | `WXA-FR-*` | JavaScript | Vant Weapp | `apps/wxa/` | WeChat Mini Program |
+| mya | `MYA-FR-*` | JavaScript | Ant Design Mini | `apps/mya/` | Mini Program (e.g. Alipay) |
+| tta | `TTA-FR-*` | TypeScript | — | `apps/tta/` | TikTok Mini Program |
+| contracts | `INT-FR-*` | — | — | `contracts/`, `packages/shared/` | Cross-component contracts |
 
 Cloud: {{cloud_provider}} (default: TCB).
 

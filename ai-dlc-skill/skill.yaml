@@ -27,16 +27,22 @@ stack:
     - id: native
       kind: mobile
       tech: react-native | flutter
+      default_language: dart
+      default_ui_framework: flutter-sdk
       owns: apps/native
       fr_prefix: NATIVE
     - id: desktop
       kind: desktop
       tech: electron | tauri
+      default_language: typescript
+      default_ui_framework: electron-react
       owns: apps/desktop
       fr_prefix: DESKTOP
     - id: web
       kind: frontend
       tech: react | vue | svelte
+      default_language: typescript
+      default_ui_framework: nextjs
       owns: apps/web
       fr_prefix: WEB
     - id: backend
@@ -47,16 +53,21 @@ stack:
     - id: wxa
       kind: mini-program
       tech: miniprogram
+      default_language: javascript
+      default_ui_framework: vant-weapp
       owns: apps/wxa
       fr_prefix: WXA
     - id: mya
       kind: mini-program
       tech: miniprogram
+      default_language: javascript
+      default_ui_framework: ant-design-mini
       owns: apps/mya
       fr_prefix: MYA
     - id: tta
       kind: mini-program
       tech: miniprogram
+      default_language: typescript
       owns: apps/tta
       fr_prefix: TTA
   cross_cutting:
@@ -69,6 +80,19 @@ stack:
     - integration
     - e2e
     - cross-stack
+  storage:
+    default_provider: tcb
+    providers:
+      tcb:
+        object_storage: cloudbase-storage
+        document_db: docdb
+        relational_db: mysql
+        cdn: tencent-cloud-cdn
+      aliyun:
+        object_storage: oss
+        document_db: mongodb
+        relational_db: rds-mysql
+        cdn: aliyun-cdn
 
 integration:
   contract_first: true

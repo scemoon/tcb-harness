@@ -64,13 +64,13 @@ AI-DLC monorepo project. Stack: native + desktop + web + backend + wxa + mya + t
 stack:
   topology: monorepo
   components:
-    - id: native    { fr_prefix: NATIVE, tech: react-native,  dir: apps/native }
-    - id: desktop   { fr_prefix: DESKTOP, tech: electron,     dir: apps/desktop }
-    - id: web       { fr_prefix: WEB,    tech: react,         dir: apps/web }
-    - id: backend   { fr_prefix: BE,     tech: python,        dir: apps/backend }
-    - id: wxa       { fr_prefix: WXA,    tech: miniprogram,   dir: apps/wxa }
-    - id: mya       { fr_prefix: MYA,    tech: miniprogram,   dir: apps/mya }
-    - id: tta       { fr_prefix: TTA,    tech: miniprogram,   dir: apps/tta }
+    - id: native    { fr_prefix: NATIVE, tech: react-native | flutter,        dir: apps/native,  default_language: dart,        default_ui_framework: flutter-sdk }
+    - id: desktop   { fr_prefix: DESKTOP, tech: electron | tauri,            dir: apps/desktop, default_language: typescript,   default_ui_framework: electron-react }
+    - id: web       { fr_prefix: WEB,    tech: react | vue | svelte,        dir: apps/web,     default_language: typescript,   default_ui_framework: nextjs }
+    - id: backend   { fr_prefix: BE,     tech: python | node | go,          dir: apps/backend }
+    - id: wxa       { fr_prefix: WXA,    tech: miniprogram,                 dir: apps/wxa,     default_language: javascript,   default_ui_framework: vant-weapp }
+    - id: mya       { fr_prefix: MYA,    tech: miniprogram,                 dir: apps/mya,     default_language: javascript,   default_ui_framework: ant-design-mini }
+    - id: tta       { fr_prefix: TTA,    tech: miniprogram,                 dir: apps/tta,     default_language: typescript }
   cross_cutting:
     fr_prefix: INT
     contracts: contracts/

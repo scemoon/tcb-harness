@@ -5,13 +5,13 @@
 ```
 {{project_root}}/
 ├── apps/
-│   ├── native/          # NATIVE-FR-*   Mobile (React Native / Flutter)
-│   ├── desktop/         # DESKTOP-FR-*  Desktop (Electron / Tauri)
-│   ├── web/             # WEB-FR-*      Browser (React / Vue / Svelte)
+│   ├── native/          # NATIVE-FR-*   Mobile (Flutter/Dart)
+│   ├── desktop/         # DESKTOP-FR-*  Desktop (Electron/TypeScript)
+│   ├── web/             # WEB-FR-*      Browser (Next.js/TypeScript)
 │   ├── backend/         # BE-FR-*       Service (Python / Node / Go)
-│   ├── wxa/             # WXA-FR-*      WeChat Mini Program
-│   ├── mya/             # MYA-FR-*      Alipay Mini Program
-│   └── tta/             # TTA-FR-*      TikTok Mini Program
+│   ├── wxa/             # WXA-FR-*      WeChat Mini Program (Vant Weapp/JavaScript)
+│   ├── mya/             # MYA-FR-*      Alipay Mini Program (Ant Design Mini/JavaScript)
+│   └── tta/             # TTA-FR-*      TikTok Mini Program (TypeScript)
 ├── contracts/           # INT-FR-*      OpenAPI / AsyncAPI / Runtime Contract
 │   ├── api/
 │   ├── events/

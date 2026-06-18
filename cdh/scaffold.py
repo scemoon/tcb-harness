@@ -9,13 +9,13 @@ import yaml
 SKILL_NAME = "ai-dlc-skill"
 
 SKILL_YAML_COMPONENTS = [
-    {"id": "native", "kind": "mobile", "tech": "react-native | flutter", "owns": "apps/native", "fr_prefix": "NATIVE"},
-    {"id": "desktop", "kind": "desktop", "tech": "electron | tauri", "owns": "apps/desktop", "fr_prefix": "DESKTOP"},
-    {"id": "web", "kind": "frontend", "tech": "react | vue | svelte", "owns": "apps/web", "fr_prefix": "WEB"},
+    {"id": "native", "kind": "mobile", "tech": "react-native | flutter", "default_language": "dart", "default_ui_framework": "flutter-sdk", "owns": "apps/native", "fr_prefix": "NATIVE"},
+    {"id": "desktop", "kind": "desktop", "tech": "electron | tauri", "default_language": "typescript", "default_ui_framework": "electron-react", "owns": "apps/desktop", "fr_prefix": "DESKTOP"},
+    {"id": "web", "kind": "frontend", "tech": "react | vue | svelte", "default_language": "typescript", "default_ui_framework": "nextjs", "owns": "apps/web", "fr_prefix": "WEB"},
     {"id": "backend", "kind": "service", "tech": "python | node | go", "owns": "apps/backend", "fr_prefix": "BE"},
-    {"id": "wxa", "kind": "mini-program", "tech": "miniprogram", "owns": "apps/wxa", "fr_prefix": "WXA"},
-    {"id": "mya", "kind": "mini-program", "tech": "miniprogram", "owns": "apps/mya", "fr_prefix": "MYA"},
-    {"id": "tta", "kind": "mini-program", "tech": "miniprogram", "owns": "apps/tta", "fr_prefix": "TTA"},
+    {"id": "wxa", "kind": "mini-program", "tech": "miniprogram", "default_language": "javascript", "default_ui_framework": "vant-weapp", "owns": "apps/wxa", "fr_prefix": "WXA"},
+    {"id": "mya", "kind": "mini-program", "tech": "miniprogram", "default_language": "javascript", "default_ui_framework": "ant-design-mini", "owns": "apps/mya", "fr_prefix": "MYA"},
+    {"id": "tta", "kind": "mini-program", "tech": "miniprogram", "default_language": "typescript", "owns": "apps/tta", "fr_prefix": "TTA"},
 ]
 
 TCB_PROVIDER_YAML = """provider:
@@ -23,6 +23,12 @@ TCB_PROVIDER_YAML = """provider:
   display_name: Tencent CloudBase
   default: true
   version: 3.0.0
+
+storage:
+  object_storage: cloudbase-storage
+  document_db: docdb
+  relational_db: mysql
+  cdn: tencent-cloud-cdn
 """
 
 TCB_DEPLOYMENT_YAML = """environments:
@@ -104,8 +110,8 @@ REQUIREMENTS_MD = """# {project_name}
 
 Monorepo multi-component stack with the following components:
 
-| Component | FR Prefix | Directory |
-|-----------|-----------|-----------|
+| Component | FR Prefix | Default Language | Default UI Framework | Directory |
+|-----------|-----------|-----------------|---------------------|-----------|
 {component_table}
 
 ## Quality Gates
@@ -175,6 +181,8 @@ def scaffold_dlc_project(
                     "owns": c["owns"],
                     "fr_prefix": c["fr_prefix"],
                 }
+                | ({"default_language": c["default_language"]} if c.get("default_language") else {})
+                | ({"default_ui_framework": c["default_ui_framework"]} if c.get("default_ui_framework") else {})
                 for c in active
             ],
             "cross_cutting": {
@@ -188,7 +196,7 @@ def scaffold_dlc_project(
 
     # --- requirements.md ---
     component_rows = "\n".join(
-        f"| {c['id']:8s} | {c['fr_prefix'] + '-FR-*':14s} | {c['owns']:20s} |"
+        f"| {c['id']:8s} | {c['fr_prefix'] + '-FR-*':14s} | {c.get('default_language', '-'):17s} | {c.get('default_ui_framework', '-'):21s} | {c['owns']:20s} |"
         for c in active
     )
     _write(
