@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cdha.agent.agents.types import AgentPermission, BuildAgent, PlanAgent, SoloAgent
-from cdha.agent.permissions_store import PermissionStore
-from cdha.agent.session import AgentSession
+from onecode.agent.agents.types import AgentPermission, BuildAgent, PlanAgent, SoloAgent
+from onecode.agent.permissions_store import PermissionStore
+from onecode.agent.session import AgentSession
 
 
 # ── PermissionStore tests ──────────────────────────────────────────────────
@@ -109,7 +109,7 @@ class TestCheckToolPermission:
         
         We import the actual method from engine module.
         """
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
 
         class FakeApp:
             config = type("cfg", (), {"default_provider": "minimaxi", "default_model": "minimax-m1-671b", "providers": {}})()
@@ -119,7 +119,7 @@ class TestCheckToolPermission:
         return engine
 
     def test_ask_returns_requires_approval(self):
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
         engine = self._make_engine_mock(BuildAgent())
         result = engine._check_tool_permission("Bash", {})
         assert result is not None
@@ -127,7 +127,7 @@ class TestCheckToolPermission:
         assert parsed.get("requires_approval") is True
 
     def test_allow_returns_none(self):
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
         agent = BuildAgent()
         setattr(agent, "permission_bash", AgentPermission.ALLOW)
         engine = self._make_engine_mock(agent)
@@ -135,7 +135,7 @@ class TestCheckToolPermission:
         assert result is None
 
     def test_deny_returns_denied_message(self):
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
         agent = BuildAgent()
         setattr(agent, "permission_bash", AgentPermission.DENY)
         engine = self._make_engine_mock(agent)
@@ -147,7 +147,7 @@ class TestCheckToolPermission:
     def test_setattr_after_allow_always_then_check(self):
         """Simulate the exact flow: user clicks 'Allow always' → setattr
         → next tool call → _check_tool_permission returns None."""
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
 
         # BuildAgent defaults: permission_bash = ASK
         agent = BuildAgent()
@@ -164,7 +164,7 @@ class TestCheckToolPermission:
 
     def test_reject_always_then_check(self):
         """User clicks 'Reject always' → setattr → next call is denied."""
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
 
         agent = BuildAgent()
         setattr(agent, "permission_bash", AgentPermission.DENY)
@@ -178,7 +178,7 @@ class TestCheckToolPermission:
     def test_permission_store_reapply_via_setattr(self):
         """Integration: PermissionStore.set_override → apply_to →
         _check_tool_permission sees ALLOW even after creating a fresh agent."""
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
 
         store = PermissionStore()
         store.set_override("bash", AgentPermission.ALLOW)
@@ -192,13 +192,13 @@ class TestCheckToolPermission:
         assert result is None
 
     def test_unknown_tool_name_returns_none(self):
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
         engine = self._make_engine_mock(BuildAgent())
         result = engine._check_tool_permission("NonExistentTool", {})
 
     def test_all_tool_names_mapped(self):
         """Every tool in _TOOL_NAME_TO_PERM_KEY maps to a valid attr name."""
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
 
         agent = BuildAgent()
         for tool_name, perm_key in AgentEngine._TOOL_NAME_TO_PERM_KEY.items():
@@ -219,7 +219,7 @@ class TestPermStoreSubagentInheritance:
     child engines spawned via ``_spawn_subagent_async_streaming``."""
 
     def test_subagent_receives_parent_perm_store(self):
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
 
         class FakeApp:
             config = type("cfg", (), {"default_provider": "minimaxi", "default_model": "minimax-m1-671b", "providers": {}})()
@@ -236,7 +236,7 @@ class TestPermStoreSubagentInheritance:
     def test_subagent_inherits_live_override(self):
         """Override set on parent after child creation is visible in child
         (because they share the same PermissionStore instance)."""
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
 
         class FakeApp:
             config = type("cfg", (), {"default_provider": "minimaxi", "default_model": "minimax-m1-671b", "providers": {}})()
@@ -255,7 +255,7 @@ class TestPermStoreSubagentInheritance:
 
     def test_set_agent_auto_applies_perm_store(self):
         """After Engine.__init__ with perm_store, set_agent() must auto-apply."""
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
 
         class FakeApp:
             config = type("cfg", (), {"default_provider": "minimaxi", "default_model": "minimax-m1-671b", "providers": {}})()
@@ -297,7 +297,7 @@ class TestPermStorePersistence:
     def test_project_loader_persistence(self, tmp_path):
         """Use CdhProjectLoader to save permissions to .cdh/permissions.json
         and then load them back."""
-        from cdha.agent.cdh_loader import CdhProjectLoader
+        from onecode.agent.cdh_loader import CdhProjectLoader
 
         cdh_dir = tmp_path / ".cdh"
         cdh_dir.mkdir()
@@ -320,14 +320,14 @@ class TestPermStorePersistence:
 
     def test_project_loader_persistence_no_cdh_dir(self, tmp_path):
         """load_permissions should return {} when .cdh/ doesn't exist."""
-        from cdha.agent.cdh_loader import CdhProjectLoader
+        from onecode.agent.cdh_loader import CdhProjectLoader
 
         no_dir = tmp_path / "nonexistent"
         result = CdhProjectLoader.load_permissions(no_dir)
         assert result == {}
 
     def test_reset_permission_via_clear_and_reapply(self):
-        """Simulate /reset-permission: clear override + set_agent reapply."""
+        """Simulate /permission: clear override + set_agent reapply."""
         store = PermissionStore()
         store.set_override("bash", AgentPermission.DENY)
 
@@ -335,7 +335,7 @@ class TestPermStorePersistence:
         store.apply_to(agent)
         assert agent.permission_bash == AgentPermission.DENY
 
-        # Simulate /reset-permission bash
+        # Simulate /permission bash
         store.clear_override("bash")
         agent2 = BuildAgent()
         store.apply_to(agent2)
@@ -349,7 +349,7 @@ class TestContextStatsPersistence:
     """Verify that context usage stats survive save_session → load_session."""
 
     def _make_engine(self) -> AgentEngine:
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
         class FakeApp:
             config = type("cfg", (), {"default_provider": "minimaxi", "default_model": "minimax-m1-671b", "max_tokens": 4096, "providers": {}})()
         return AgentEngine(FakeApp(), project_dir=Path.cwd())
@@ -402,7 +402,7 @@ class TestContextStatsPersistence:
 
     def test_build_session_usage_fallback(self):
         """_build_session_usage falls back to engine.total_tokens when _turn_usages is empty."""
-        from cdha.agent.cdh_agent_acp import CDHACPAdapter
+        from onecode.agent.onecode_agent_acp import CDHACPAdapter
         engine = self._make_engine()
         engine.total_tokens = 999
         engine._turn_usages = []  # empty

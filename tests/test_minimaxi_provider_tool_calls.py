@@ -10,7 +10,7 @@ engine expects.
 """
 from __future__ import annotations
 
-from cdha.models.providers.minimaxi_provider import (
+from onecode.models.providers.minimaxi_provider import (
     _accumulate_tool_call_delta,
     _finalize_stream_tool_calls,
 )

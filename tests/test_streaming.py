@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from cdha.agent.cdh_agent_acp import CDHACPAdapter
+from onecode.agent.onecode_agent_acp import CDHACPAdapter
 
 
 def _make_spy_adapter() -> tuple[CDHACPAdapter, Mock]:
@@ -167,7 +167,7 @@ class TestBuildToolCallContent:
     """_build_tool_call_content produces correct content blocks."""
 
     def test_write_emits_path_and_code_fence(self):
-        from cdha.agent.cdh_agent_acp import _build_tool_call_content
+        from onecode.agent.onecode_agent_acp import _build_tool_call_content
 
         result = _build_tool_call_content("Write", {"path": "/tmp/test.py", "content": "print(1)"})
         assert len(result) == 1
@@ -179,7 +179,7 @@ class TestBuildToolCallContent:
         assert "print(1)" in text
 
     def test_read_emits_path_only(self):
-        from cdha.agent.cdh_agent_acp import _build_tool_call_content
+        from onecode.agent.onecode_agent_acp import _build_tool_call_content
 
         result = _build_tool_call_content("Read", {"path": "/tmp/file.txt"})
         assert len(result) == 1
@@ -188,7 +188,7 @@ class TestBuildToolCallContent:
         assert "```" not in text
 
     def test_edit_emits_diff_block(self):
-        from cdha.agent.cdh_agent_acp import _build_tool_call_content
+        from onecode.agent.onecode_agent_acp import _build_tool_call_content
 
         result = _build_tool_call_content("Edit", {
             "path": "/tmp/file.py",
@@ -202,7 +202,7 @@ class TestBuildToolCallContent:
         assert "print(2)" in result[0]["newText"]
 
     def test_bash_emits_bash_fence(self):
-        from cdha.agent.cdh_agent_acp import _build_tool_call_content
+        from onecode.agent.onecode_agent_acp import _build_tool_call_content
 
         result = _build_tool_call_content("Bash", {"command": "ls -la"})
         assert len(result) == 1
@@ -211,7 +211,7 @@ class TestBuildToolCallContent:
         assert "$ ls -la" in text
 
     def test_unknown_tool_falls_back_to_json(self):
-        from cdha.agent.cdh_agent_acp import _build_tool_call_content
+        from onecode.agent.onecode_agent_acp import _build_tool_call_content
 
         result = _build_tool_call_content("FooBar", {"key": "val"})
         assert len(result) == 1
@@ -221,13 +221,13 @@ class TestBuildToolCallContent:
         assert "val" in text
 
     def test_empty_args_returns_empty(self):
-        from cdha.agent.cdh_agent_acp import _build_tool_call_content
+        from onecode.agent.onecode_agent_acp import _build_tool_call_content
 
         result = _build_tool_call_content("Read", {})
         assert result == []
 
     def test_none_name_returns_empty(self):
-        from cdha.agent.cdh_agent_acp import _build_tool_call_content
+        from onecode.agent.onecode_agent_acp import _build_tool_call_content
 
         result = _build_tool_call_content(None, {"a": "b"})
         assert len(result) == 1
@@ -238,21 +238,21 @@ class TestFilterToolCallText:
     """_filter_tool_call_text removes tool call markers from agent text."""
 
     def test_removes_complete_tool_call(self):
-        from cdha.agent.cdh_agent_acp import _filter_tool_call_text
+        from onecode.agent.onecode_agent_acp import _filter_tool_call_text
 
         text = "before [TOOL_CALL]{tool => \"Read\"}[/TOOL_CALL] after"
         result = _filter_tool_call_text(text)
         assert result == "before  after"
 
     def test_keeps_text_without_markers(self):
-        from cdha.agent.cdh_agent_acp import _filter_tool_call_text
+        from onecode.agent.onecode_agent_acp import _filter_tool_call_text
 
         text = "just plain text"
         result = _filter_tool_call_text(text)
         assert result == "just plain text"
 
     def test_handles_incomplete_tool_call(self):
-        from cdha.agent.cdh_agent_acp import _filter_tool_call_text
+        from onecode.agent.onecode_agent_acp import _filter_tool_call_text
 
         text = "before [TOOL_CALL]{tool => \"Read\""
         result = _filter_tool_call_text(text)
@@ -260,7 +260,7 @@ class TestFilterToolCallText:
         assert result == text
 
     def test_multiple_tool_calls(self):
-        from cdha.agent.cdh_agent_acp import _filter_tool_call_text
+        from onecode.agent.onecode_agent_acp import _filter_tool_call_text
 
         text = ("a[TOOL_CALL]{tool => \"R\"}[/TOOL_CALL]b"
                 "[TOOL_CALL]{tool => \"W\"}[/TOOL_CALL]c")
@@ -272,7 +272,7 @@ class TestExtractLegacyToolCall:
     """_extract_legacy_tool_call parses tool call blocks correctly."""
 
     def test_extracts_name_and_path_arg(self):
-        from cdha.agent.cdh_agent_acp import _extract_legacy_tool_call
+        from onecode.agent.onecode_agent_acp import _extract_legacy_tool_call
 
         text = ("prefix [TOOL_CALL]{tool => \"Read\", args => {--path \"/a\"}}"
                 "[/TOOL_CALL] suffix")
@@ -282,7 +282,7 @@ class TestExtractLegacyToolCall:
         assert result["arguments"]["path"] == "/a"
 
     def test_extracts_write_with_content(self):
-        from cdha.agent.cdh_agent_acp import _extract_legacy_tool_call
+        from onecode.agent.onecode_agent_acp import _extract_legacy_tool_call
 
         text = ("[TOOL_CALL]{tool => \"Write\", args => {"
                 "--path \"f.py\" --content \"print('hi')\"}}[/TOOL_CALL]")
@@ -293,19 +293,19 @@ class TestExtractLegacyToolCall:
         assert result["arguments"]["content"] == "print('hi')"
 
     def test_no_tool_call_returns_none(self):
-        from cdha.agent.cdh_agent_acp import _extract_legacy_tool_call
+        from onecode.agent.onecode_agent_acp import _extract_legacy_tool_call
 
         result = _extract_legacy_tool_call("just text")
         assert result is None
 
     def test_incomplete_no_close_marker_returns_none(self):
-        from cdha.agent.cdh_agent_acp import _extract_legacy_tool_call
+        from onecode.agent.onecode_agent_acp import _extract_legacy_tool_call
 
         result = _extract_legacy_tool_call("[TOOL_CALL]{tool => \"Read\"")
         assert result is None
 
     def test_returns_span_positions(self):
-        from cdha.agent.cdh_agent_acp import _extract_legacy_tool_call
+        from onecode.agent.onecode_agent_acp import _extract_legacy_tool_call
 
         text = "x[TOOL_CALL]{tool=>\"R\"}[/TOOL_CALL]y"
         result = _extract_legacy_tool_call(text)
@@ -318,7 +318,7 @@ class TestContentToBlocks:
     """_content_to_blocks converts stored message content to blocks."""
 
     def _convert(self, content):
-        from cdha.agent.cdh_agent_acp import CDHACPAdapter
+        from onecode.agent.onecode_agent_acp import CDHACPAdapter
         return CDHACPAdapter._content_to_blocks(content)
 
     def test_string_with_tool_call_produces_tool_call(self):

@@ -8,7 +8,7 @@ echo "AI-DLC Cross-Tool Export"
 echo "========================"
 echo ""
 
-for tool in cdha cursor cline copilot; do
+for tool in onecode cursor cline copilot; do
   export_script="$SCRIPT_DIR/$tool/export.sh"
   if [ -f "$export_script" ]; then
     echo "[$tool] Running $export_script..."

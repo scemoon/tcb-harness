@@ -6,7 +6,7 @@ from textual import getters
 from tui.app import A2TUIApp
 from tui.widgets.grid_select import GridSelect
 from tui.widgets.project_summary import ProjectSummary
-from cdha.config import CLOUD_DEV_HARNESS_DIR
+from onecode.config import CLOUD_DEV_HARNESS_DIR
 
 
 class ProjectGridSelect(GridSelect):

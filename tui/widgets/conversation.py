@@ -2362,7 +2362,7 @@ class Conversation(containers.Vertical):
 
         if sub_cmd == "list":
             from pathlib import Path
-            from cdha.config import CLOUD_DEV_HARNESS_DIR
+            from onecode.config import CLOUD_DEV_HARNESS_DIR
             projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
             if not projects_dir.exists():
                 self.notify("No projects found", title="/project list")
@@ -2381,7 +2381,7 @@ class Conversation(containers.Vertical):
                 self.notify("Project name required", title="/project load", severity="error")
                 return True
             from pathlib import Path
-            from cdha.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
+            from onecode.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
             projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
             project_file = None
             for ext in ["yaml", "yml", "json"]:
@@ -2409,8 +2409,8 @@ class Conversation(containers.Vertical):
                 self.notify("Usage: /project new <name> [path]", title="/project new", severity="error")
                 return True
             from pathlib import Path
-            from cdha.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
-            from cdha.agent.cdh_loader import CdhProjectLoader
+            from onecode.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
+            from onecode.agent.cdh_loader import CdhProjectLoader
             from cdh.scaffold import scaffold_dlc_project
             import yaml
             projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"

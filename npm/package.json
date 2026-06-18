@@ -20,7 +20,7 @@
     "package.json",
     "pyproject.toml",
     "cdh",
-    "cdha",
+    "onecode",
     "tui",
     "ai-dlc-skill"
   ],

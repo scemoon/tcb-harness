@@ -330,7 +330,7 @@ class A2TUIApp(App, inherit_bindings=False):
         if project_dir:
             self.project_dir = Path(project_dir).expanduser().resolve()
         else:
-            from cdha.config import load_config, save_config
+            from onecode.config import load_config, save_config
             cfg = load_config()
             if cfg.current_project_path:
                 project_path = Path(cfg.current_project_path).expanduser().resolve()
@@ -694,7 +694,7 @@ class A2TUIApp(App, inherit_bindings=False):
     def _sync_cdh_config(self, key: str, value: object) -> None:
         """Sync cdh config to GlobalConfig when tui settings change."""
         try:
-            from cdha.config import load_config, save_config
+            from onecode.config import load_config, save_config
             cfg = load_config()
             cdh_key = key[4:]
             if cdh_key == "mode":
@@ -774,7 +774,7 @@ class A2TUIApp(App, inherit_bindings=False):
     def _load_cdh_config(self) -> None:
         """Load cdh config into tui settings on startup."""
         try:
-            from cdha.config import load_config
+            from onecode.config import load_config
             cfg = load_config()
             cdh_settings = {
                 "cdh.mode": cfg.default_mode,
@@ -857,7 +857,7 @@ class A2TUIApp(App, inherit_bindings=False):
         else:
             project_path = Path(self.project_dir)
             # Check project-level .cdh/last_session.json
-            from cdha.agent.cdh_loader import CdhProjectLoader
+            from onecode.agent.cdh_loader import CdhProjectLoader
             cdh_dir = CdhProjectLoader.find_cdh_dir(project_path)
             if cdh_dir:
                 last_session = CdhProjectLoader.load_last_session(cdh_dir)
@@ -1105,8 +1105,8 @@ class A2TUIApp(App, inherit_bindings=False):
     @work
     async def action_projects(self) -> None:
         from pathlib import Path
-        from cdha.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
-        from cdha.config_screen import EditFieldScreen
+        from onecode.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
+        from onecode.config_screen import EditFieldScreen
         import yaml
 
         result = await self.push_screen_wait("projects")
@@ -1124,7 +1124,7 @@ class A2TUIApp(App, inherit_bindings=False):
                     self.notify("Invalid path", severity="error")
                     return
                 name = project_path.name
-                from cdha.agent.cdh_loader import CdhProjectLoader
+                from onecode.agent.cdh_loader import CdhProjectLoader
                 from cdh.scaffold import scaffold_dlc_project
                 scaffold_dlc_project(project_path, name)
                 CdhProjectLoader.init_project(project_path, name)

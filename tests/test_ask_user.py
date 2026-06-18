@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cdha.agent.agents.types import BuildAgent
-from cdha.agent.engine import AgentEngine
+from onecode.agent.agents.types import BuildAgent
+from onecode.agent.engine import AgentEngine
 
 
 def _make_engine():
@@ -113,7 +113,7 @@ class TestAskUserReask:
 
     def test_ask_user_reask_timeout_constant_is_60_seconds(self):
         """The re-ask interval should be 1 minute as the user requested."""
-        from cdha.agent.cdh_agent_acp import CDHACPAdapter
+        from onecode.agent.onecode_agent_acp import CDHACPAdapter
         # Verify the source contains the right constant
         import inspect
         src = inspect.getsource(CDHACPAdapter.session_prompt)
@@ -123,7 +123,7 @@ class TestAskUserReask:
 
     def test_ask_user_sends_brief_remind_on_first_timeout(self):
         """On first timeout, send '请确认' reminder, not the full question."""
-        from cdha.agent.cdh_agent_acp import CDHACPAdapter
+        from onecode.agent.onecode_agent_acp import CDHACPAdapter
         import inspect
         src = inspect.getsource(CDHACPAdapter.session_prompt)
         # The reminder should be brief ("请确认") and not include the full question
@@ -136,7 +136,7 @@ class TestAskUserReask:
         """On second timeout (after 2 minutes total), use the default option
         rather than cancelling, so the agent can continue with a sensible
         choice."""
-        from cdha.agent.cdh_agent_acp import CDHACPAdapter
+        from onecode.agent.onecode_agent_acp import CDHACPAdapter
         import inspect
         src = inspect.getsource(CDHACPAdapter.session_prompt)
         # On second timeout, the adapter must call the default-picker and
@@ -147,7 +147,7 @@ class TestAskUserReask:
 
     def test_pick_default_uses_marked_default(self):
         """When an option has default=True, it wins over the first option."""
-        from cdha.agent.cdh_agent_acp import CDHACPAdapter
+        from onecode.agent.onecode_agent_acp import CDHACPAdapter
         from dataclasses import dataclass
         # Build a minimal stand-in for the StreamEvent carrying ask fields
         @dataclass
@@ -164,7 +164,7 @@ class TestAskUserReask:
 
     def test_pick_default_falls_back_to_first(self):
         """When no option is marked default, fall back to the first one."""
-        from cdha.agent.cdh_agent_acp import CDHACPAdapter
+        from onecode.agent.onecode_agent_acp import CDHACPAdapter
         from dataclasses import dataclass
         @dataclass
         class FakeEvent:
@@ -180,7 +180,7 @@ class TestAskUserReask:
 
     def test_pick_default_handles_multi_question(self):
         """Multi-question prompts return a JSON dict of {idx: default_value}."""
-        from cdha.agent.cdh_agent_acp import CDHACPAdapter
+        from onecode.agent.onecode_agent_acp import CDHACPAdapter
         from dataclasses import dataclass
         import json as _json
         @dataclass
@@ -198,7 +198,7 @@ class TestAskUserReask:
 
     def test_pick_default_handles_no_options(self):
         """Free-text questions (no options) return empty string."""
-        from cdha.agent.cdh_agent_acp import CDHACPAdapter
+        from onecode.agent.onecode_agent_acp import CDHACPAdapter
         from dataclasses import dataclass
         @dataclass
         class FakeEvent:

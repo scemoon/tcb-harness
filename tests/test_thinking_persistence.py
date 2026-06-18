@@ -19,7 +19,7 @@ class TestThinkingPersistence:
     """Engine must persist thinking blocks into context for session replay."""
 
     def _make_engine(self):
-        from cdha.agent.engine import AgentEngine
+        from onecode.agent.engine import AgentEngine
         return AgentEngine(app=MagicMock())
 
     def test_thinking_blocks_in_response_text_are_stored_in_context(self):
@@ -72,7 +72,7 @@ class TestThinkingPersistence:
     def test_session_replay_can_extract_thinking_blocks(self):
         """End-to-end: the context format with thinking dicts can be
         converted back to ThinkBlock objects via _content_to_blocks."""
-        from cdha.agent.cdh_agent_acp import CDHACPAdapter
+        from onecode.agent.onecode_agent_acp import CDHACPAdapter
 
         content = [
             {"type": "thinking", "thinking": "Plan: read file first."},
@@ -86,7 +86,7 @@ class TestThinkingPersistence:
             },
         ]
         blocks = CDHACPAdapter._content_to_blocks(content)
-        from cdha.models.messages import ThinkBlock, TextBlock, ToolCall as MsgToolCall
+        from onecode.models.messages import ThinkBlock, TextBlock, ToolCall as MsgToolCall
 
         assert any(isinstance(b, ThinkBlock) for b in blocks)
         assert any(isinstance(b, TextBlock) for b in blocks)

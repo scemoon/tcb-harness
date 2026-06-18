@@ -9,9 +9,9 @@ from textual.reactive import var
 from textual.widget import Widget
 from textual.widgets import Button, Label, Static
 
-from cdha.config import CLOUD_DEV_HARNESS_DIR, load_config, save_config
-from cdha.agent.cdh_loader import CdhProjectLoader
-from cdha.config_screen import EditFieldScreen
+from onecode.config import CLOUD_DEV_HARNESS_DIR, load_config, save_config
+from onecode.agent.cdh_loader import CdhProjectLoader
+from onecode.config_screen import EditFieldScreen
 
 import yaml
 

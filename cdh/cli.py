@@ -4,12 +4,12 @@ from typing import Optional
 import click
 
 from cdh.scaffold import scaffold_dlc_project
-from cdha.cli import cli as cdha_cli
-from cdha.cli import setup_logging
-from cdha.config import ensure_dirs, load_config, save_config
+from onecode.cli import cli as onecode_cli
+from onecode.cli import setup_logging
+from onecode.config import ensure_dirs, load_config, save_config
 
 
-_CDH_DIR = Path.home() / ".cdha"
+_CDH_DIR = Path.home() / ".onecode"
 
 _COMMON_HELP = """
 \b
@@ -25,15 +25,15 @@ Usage:
 
 \b
 Paths:
-  Config   ~/.cdha/cdh.config.yaml
-  Logs     ~/.cdha/logs/
-  Projects ~/.cdha/projects/
+  Config   ~/.onecode/onecode.config.yaml
+  Logs     ~/.onecode/logs/
+  Projects ~/.onecode/projects/
 """
 
 
 @click.group(
     invoke_without_command=True,
-    cls=type(cdha_cli),
+    cls=type(onecode_cli),
     context_settings=dict(max_content_width=100),
     short_help="Cloud Dev Harness - AI agent framework with TUI.",
     epilog=_COMMON_HELP,
@@ -70,12 +70,12 @@ def config(ctx):
     including providers, models, cloud platforms, agent parameters.
     """
     if ctx.invoked_subcommand is None:
-        from cdha.config_screen import main as config_main
+        from onecode.config_screen import main as config_main
         config_main()
 
 
-# Reuse subcommands from cdha's config group (mode, model, provider, cloud, log-level, skill, mcp, list)
-for _cfg_cmd in cdha_cli.get_command(None, "config").commands.values():
+# Reuse subcommands from onecode's config group (mode, model, provider, cloud, log-level, skill, mcp, list)
+for _cfg_cmd in onecode_cli.get_command(None, "config").commands.values():
     if _cfg_cmd.name not in config.commands and _cfg_cmd.name not in ("tui",):
         config.add_command(_cfg_cmd)
 
@@ -197,7 +197,7 @@ def project(action, name, path):
         if not name:
             click.echo("Usage: cdh project new <name> [path]")
             return
-        from cdha.agent.cdh_loader import CdhProjectLoader
+        from onecode.agent.cdh_loader import CdhProjectLoader
         ws = Path(path).expanduser().resolve()
         scaffold_dlc_project(ws, name)
         CdhProjectLoader.init_project(ws, name)
@@ -210,7 +210,7 @@ def project(action, name, path):
         save_config(cfg)
         click.echo(f"Created project '{name}' at {ws}")
     elif action == "init":
-        from cdha.agent.cdh_loader import CdhProjectLoader
+        from onecode.agent.cdh_loader import CdhProjectLoader
         target = Path(name or ".").expanduser().resolve()
         project_name = target.name
         scaffold_dlc_project(target, project_name)
@@ -340,16 +340,16 @@ def help_cmd(command):
 @cli.command(short_help="Show version info")
 def version():
     """Show CDH version and build information."""
-    from cdha import __version__
+    from onecode import __version__
     click.echo(f"cdh version {__version__}")
 
 
-# Attach remaining cdha subcommands selectively
+# Attach remaining onecode subcommands selectively
 _skip = {"config", "init", "set", "list", "tui", "help", "version", "mcp"}
-for cmd_name in cdha_cli.commands:
+for cmd_name in onecode_cli.commands:
     if cmd_name in _skip:
         continue
-    cli.add_command(cdha_cli.get_command(None, cmd_name))
+    cli.add_command(onecode_cli.get_command(None, cmd_name))
 
 
 def main():

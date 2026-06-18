@@ -67,10 +67,10 @@ class Agent(TypedDict):
     run_command: dict[OS, str]
     """Command to run the agent, by OS or wildcard."""
     commands_prefix: NotRequired[str]
-    """Prefix for slash commands registered by this agent (e.g. `"cdha:"`)."""
+    """Prefix for slash commands registered by this agent (e.g. \`"onecode:"\`)."""
     commands_module: NotRequired[str]
     """Python module path to a commands module with a `register_commands()` function.
     If set, the TUI will import this module and call `register_commands()` to register
-    platform-specific slash commands (e.g. `cdha:mode`, `cdha:spec`)."""
+    platform-specific slash commands (e.g. \`onecode:mode\`, \`onecode:spec\`).\"""
     actions: dict[OS, dict[Action, Command]]
     """Scripts to perform actions, typically at least to install the agent."""

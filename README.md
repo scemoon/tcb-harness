@@ -124,7 +124,7 @@ cdh version                  # Show version
 
 ## Configuration
 
-Config file: `~/.cdha/cdh.config.yaml`
+Config file: `~/.onecode/onecode.config.yaml`
 
 ```yaml
 default_provider: minimaxi
@@ -145,7 +145,7 @@ providers:
 observability:
   trace_enabled: true
   trace_exporter: file
-  trace_dir: ~/.cdha/traces
+  trace_dir: ~/.onecode/traces
 
 tui:
   theme: auto
@@ -172,7 +172,7 @@ Environment variables are interpolated with `${VAR}` syntax in config values.
 │   ├── cli.py           # Click CLI (config, logs, projects, sessions, tui)
 │   ├── __init__.py
 │   └── __main__.py
-├── cdha/                 # Core agent framework (CDH Agent)
+├── onecode/              # Core agent framework (onecode Agent)
 │   ├── agent/           # Agent engine, tools, sessions, permissions
 │   │   ├── agents/     # Agent type definitions (build, plan, solo, explore, scout, ...)
 │   │   └── tools/      # 23 tools (file, bash, web, lsp, mcp, sandbox, git, cron, task, ...)
@@ -323,13 +323,13 @@ ai-dlc-skill/SKILL.md  ←  single source of truth (YAML frontmatter + markdown 
          ├── .opencode/skills/ai-dlc-skill → ../..        (opencode auto-load)
          ├── .claude/skills/ai-dlc-skill   → ../..        (Claude Code auto-load)
          ├── .agents/skills/ai-dlc-skill   → ../..        (OpenAI Codex / Cursor / Continue.dev)
-         └── cdha/builtin_skills/ai-dlc    → ../../ai-dlc-skill  (CDH built-in)
+         └── onecode/builtin_skills/ai-dlc    → ../../ai-dlc-skill  (onecode built-in)
 ```
 
 ### Discovery Paths
 
 CDH searches for skills in:
-- `~/.cdha/skills/<name>/SKILL.md` — User skills
+- `~/.onecode/skills/<name>/SKILL.md` — User skills
 - `builtin_skills/` — Skills bundled with CDH (ai-dlc, git, shell)
 - `.opencode/skills/<name>/SKILL.md` — OpenCode compatible
 - `.claude/skills/<name>/SKILL.md` — Claude Code compatible
@@ -438,6 +438,6 @@ CI runs on push/PR to `main` when files under `tui/ansi/` change.
 | Command | Entry Point | Description |
 |---------|-------------|-------------|
 | `cdh` | `cdh.cli:main` | Main user CLI (launches TUI, config, logs, projects) |
-| `cdha` | `cdha.cli:main` | Direct agent CLI access |
-| `cdh-agent-acp` | `cdha.agent.cdh_agent_acp:main` | ACP agent server |
+| `onecode` | `onecode.cli:main` | Direct agent CLI access |
+| `onecode-agent-acp` | `onecode.agent.onecode_agent_acp:main` | ACP agent server |
 | `tui` | `tui.cli:main` | Standalone TUI launcher |

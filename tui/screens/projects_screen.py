@@ -11,7 +11,7 @@ from textual import containers
 from textual import on
 
 
-from cdha.config import CLOUD_DEV_HARNESS_DIR
+from onecode.config import CLOUD_DEV_HARNESS_DIR
 
 from tui.app import A2TUIApp
 from tui.widgets.grid_select import GridSelect
@@ -93,8 +93,8 @@ class ProjectsScreen(ModalScreen[str]):
 
     def action_init_project(self) -> None:
         from pathlib import Path
-        from cdha.config_screen import EditFieldScreen
-        from cdha.agent.cdh_loader import CdhProjectLoader
+        from onecode.config_screen import EditFieldScreen
+        from onecode.agent.cdh_loader import CdhProjectLoader
 
         default_path = str(Path.cwd().resolve())
         self.app.push_screen(
@@ -104,7 +104,7 @@ class ProjectsScreen(ModalScreen[str]):
 
     def _on_init_path(self, path_str: str | None) -> None:
         from pathlib import Path
-        from cdha.agent.cdh_loader import CdhProjectLoader
+        from onecode.agent.cdh_loader import CdhProjectLoader
 
         if not path_str:
             return

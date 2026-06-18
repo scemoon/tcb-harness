@@ -29,7 +29,7 @@ from tui.widgets.conversation import Conversation
 from tui.widgets.project_directory_tree import ProjectDirectoryTree
 from tui.widgets.side_bar import SideBar
 from tui.widgets.session_tabs import SessionsTabs, SessionLabel
-from cdha.agent.cdh_loader import CdhProjectLoader
+from onecode.agent.cdh_loader import CdhProjectLoader
 
 
 class ModeProvider(Provider):
@@ -261,8 +261,8 @@ class MainScreen(Screen, can_focus=False):
     @on(Click, "#init-cdh-hint")
     def on_init_cdh_click(self) -> None:
         from pathlib import Path
-        from cdha.config_screen import EditFieldScreen
-        from cdha.agent.cdh_loader import CdhProjectLoader
+        from onecode.config_screen import EditFieldScreen
+        from onecode.agent.cdh_loader import CdhProjectLoader
 
         default_path = str(self.project_path.resolve())
         self.app.push_screen(
@@ -272,7 +272,7 @@ class MainScreen(Screen, can_focus=False):
 
     def _on_init_cdh_path(self, path_str: str | None) -> None:
         from pathlib import Path
-        from cdha.agent.cdh_loader import CdhProjectLoader
+        from onecode.agent.cdh_loader import CdhProjectLoader
 
         if not path_str:
             return

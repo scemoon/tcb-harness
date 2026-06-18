@@ -36,8 +36,8 @@ dependencies = [
 
 [project.scripts]
 cdh = "cdh.cli:main"
-cdh-agent-acp = "cdha.agent.cdh_agent_acp:main"
-cdha = "cdha.cli:main"
+onecode-agent-acp = "onecode.agent.onecode_agent_acp:main"
+onecode = "onecode.cli:main"
 tui = "tui.cli:main"
 
 [build-system]
@@ -45,7 +45,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["cdha*", "cdh*", "tui*"]
+include = ["onecode*", "cdh*", "tui*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -12,7 +12,7 @@ from textual import containers
 from textual import on
 
 
-from cdha.config import CLOUD_DEV_HARNESS_DIR
+from onecode.config import CLOUD_DEV_HARNESS_DIR
 
 from tui.app import A2TUIApp
 from tui.db import DB

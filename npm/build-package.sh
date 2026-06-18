@@ -49,7 +49,7 @@ mkdir -p "$BUILD_DIR/package" "$PKG_DIR"
 cp "$SCRIPT_DIR/package.json" "$BUILD_DIR/package/"
 cp "$SCRIPT_DIR/cli.js" "$BUILD_DIR/package/"
 rsync -a --no-implied-dirs "$REPO_ROOT/cdh/" "$BUILD_DIR/package/cdh/"
-rsync -a --no-implied-dirs "$REPO_ROOT/cdha/" "$BUILD_DIR/package/cdha/"
+rsync -a --no-implied-dirs "$REPO_ROOT/onecode/" "$BUILD_DIR/package/onecode/"
 rsync -a --no-implied-dirs "$REPO_ROOT/tui/" "$BUILD_DIR/package/tui/"
 rsync -a --no-implied-dirs --exclude='.agents' --exclude='.claude' "$REPO_ROOT/ai-dlc-skill/" "$BUILD_DIR/package/ai-dlc-skill/"
 cp "$REPO_ROOT/pyproject.toml" "$BUILD_DIR/package/"
@@ -77,7 +77,7 @@ cat > "$BUILD_DIR/package/package.json" << EOF
     "package.json",
     "pyproject.toml",
     "cdh",
-    "cdha",
+    "onecode",
     "tui",
     "ai-dlc-skill"
   ],

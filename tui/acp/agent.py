@@ -673,7 +673,7 @@ class Agent(AgentBase):
         if self.session_pk is None:
             return
         try:
-            from cdha.agent.cdh_loader import CdhProjectLoader
+            from onecode.agent.cdh_loader import CdhProjectLoader
 
             cdh_dir = CdhProjectLoader.find_cdh_dir(self.project_root_path)
             if cdh_dir is None:

@@ -65,7 +65,7 @@ def get_log() -> Path:
         Path to log directory.
 
     """
-    path = get_state() / "logs"
+    path = Path.home() / ".onecode" / "logs"
     with suppress(OSError):
         path.mkdir(0o700, exist_ok=True, parents=True)
     return path

@@ -6,8 +6,8 @@ from unittest.mock import Mock, patch, MagicMock
 
 import pytest
 
-from cdha.agent.cdh_agent_acp import CDHACPAdapter
-from cdha.agent.context import Message
+from onecode.agent.onecode_agent_acp import CDHACPAdapter
+from onecode.agent.context import Message
 
 
 def _collect_updates(adapter: CDHACPAdapter) -> list[dict]:
@@ -30,8 +30,8 @@ def adapter():
     return a
 
 
-@patch("cdha.agent.cdh_agent_acp.load_config")
-@patch("cdha.agent.cdh_agent_acp._create_engine")
+@patch("onecode.agent.onecode_agent_acp.load_config")
+@patch("onecode.agent.onecode_agent_acp._create_engine")
 async def test_session_load_legacy_tool_call(mock_create_engine, mock_load_config, adapter):
     """Session load with legacy [TOOL_CALL] format produces tool_call updates."""
     mock_engine = MagicMock()
@@ -58,8 +58,8 @@ async def test_session_load_legacy_tool_call(mock_create_engine, mock_load_confi
     assert len(tool_calls[0].get("content", [])) > 0
 
 
-@patch("cdha.agent.cdh_agent_acp.load_config")
-@patch("cdha.agent.cdh_agent_acp._create_engine")
+@patch("onecode.agent.onecode_agent_acp.load_config")
+@patch("onecode.agent.onecode_agent_acp._create_engine")
 async def test_session_load_agent_message_blocks(mock_create_engine, mock_load_config, adapter):
     """Session load with new AgentMessage block format."""
     mock_engine = MagicMock()
@@ -83,8 +83,8 @@ async def test_session_load_agent_message_blocks(mock_create_engine, mock_load_c
     assert "hello world" in chunks[0]["content"]["text"]
 
 
-@patch("cdha.agent.cdh_agent_acp.load_config")
-@patch("cdha.agent.cdh_agent_acp._create_engine")
+@patch("onecode.agent.onecode_agent_acp.load_config")
+@patch("onecode.agent.onecode_agent_acp._create_engine")
 async def test_session_load_multiple_tool_calls(mock_create_engine, mock_load_config, adapter):
     """Session with multiple tool calls sends a tool_call for each."""
     mock_engine = MagicMock()
@@ -107,8 +107,8 @@ async def test_session_load_multiple_tool_calls(mock_create_engine, mock_load_co
     assert tool_calls[0]["toolCallId"] != tool_calls[1]["toolCallId"]
 
 
-@patch("cdha.agent.cdh_agent_acp.load_config")
-@patch("cdha.agent.cdh_agent_acp._create_engine")
+@patch("onecode.agent.onecode_agent_acp.load_config")
+@patch("onecode.agent.onecode_agent_acp._create_engine")
 async def test_session_load_tool_result_role(mock_create_engine, mock_load_config, adapter):
     """Session with separate 'tool' role messages emits tool_call_update."""
     mock_engine = MagicMock()

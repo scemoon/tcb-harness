@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from cdha.agent.cdh_agent_acp import _format_tui_display_text
+from onecode.agent.onecode_agent_acp import _format_tui_display_text
 
 
 class TestFormatTuiDisplayText:
