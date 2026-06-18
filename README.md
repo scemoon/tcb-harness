@@ -31,7 +31,9 @@ Choose one of three install methods:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/scemoon/cloud-dev-harness/main/install.sh | bash
 ```
-Downloads and installs the latest GitHub release via pip. The `cdh` shim is installed to `~/.local/bin/cdh`. Add this to your PATH:
+Downloads and installs the latest GitHub release via pip. The `cdh` shim is installed to `~/.local/bin/cdh`.  
+After install, both `cdh` and `onecode` commands are available globally (via Python entry points).  
+Add `~/.local/bin` to your PATH:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -62,9 +64,11 @@ pip install -e .
 Best for development or if you want to track HEAD.
 
 ### verify
-After any install method, start the TUI:
+After any install method, start the TUI via either command:
 ```bash
-cdh tui
+cdh        # Launch TUI (agent store)
+cdh tui    # Launch TUI (agent store)
+onecode    # Direct agent CLI
 ```
 
 ## Requirements
@@ -224,7 +228,7 @@ Environment variables are interpolated with `${VAR}` syntax in config values.
 │   ├── providers/       # Cloud configs (TCB, Aliyun) with compute_modes
 │   ├── templates/       # Project scaffolding + artifacts per phase
 │   ├── practices/       # SDD, BDD, TDD practice guides
-│   ├── cross-tool/      # Export scripts (CDHA, Cursor, Cline, Copilot)
+│   ├── cross-tool/      # Export scripts (onecode, Cursor, Cline, Copilot)
 │   ├── workflows/       # Pipeline workflow YAMLs
 │   ├── brownfield/      # Context discovery for existing projects
 │   ├── walkthrough/     # Change walkthrough automation
@@ -358,7 +362,7 @@ The **adaptive flow** (`core/adaptive-flow.md`) automatically selects phases bas
 - L4 full-stack + deploy → Understand → Plan → Verify → Deliver
 - L5 architecture refactoring → Plan → Verify
 
-When you run `cdh`, `opencode`, `claude`, or `openai codex` in this repo, the agent automatically loads ai-dlc-skill and follows the adaptive workflow — no manual activation needed.
+When you run `cdh`, `onecode`, `opencode`, `claude`, or `openai codex` in this repo, the agent automatically loads ai-dlc-skill and follows the adaptive workflow — no manual activation needed.
 
 ### Skill Frontmatter
 
