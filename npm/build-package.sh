@@ -48,6 +48,8 @@ fi
 mkdir -p "$BUILD_DIR/package" "$PKG_DIR"
 cp "$SCRIPT_DIR/package.json" "$BUILD_DIR/package/"
 cp "$SCRIPT_DIR/cli.js" "$BUILD_DIR/package/"
+cp "$SCRIPT_DIR/onecode-cli.js" "$BUILD_DIR/package/"
+cp "$SCRIPT_DIR/run.js" "$BUILD_DIR/package/"
 rsync -a --no-implied-dirs "$REPO_ROOT/cdh/" "$BUILD_DIR/package/cdh/"
 rsync -a --no-implied-dirs "$REPO_ROOT/onecode/" "$BUILD_DIR/package/onecode/"
 rsync -a --no-implied-dirs "$REPO_ROOT/tui/" "$BUILD_DIR/package/tui/"
@@ -67,6 +69,7 @@ cat > "$BUILD_DIR/package/package.json" << EOF
   },
   "bin": {
     "cdh": "cli.js",
+    "onecode": "onecode-cli.js",
     "cloud-dev-harness": "cli.js"
   },
   "engines": {
@@ -74,6 +77,8 @@ cat > "$BUILD_DIR/package/package.json" << EOF
   },
   "files": [
     "cli.js",
+    "onecode-cli.js",
+    "run.js",
     "package.json",
     "pyproject.toml",
     "cdh",

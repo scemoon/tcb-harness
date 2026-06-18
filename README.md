@@ -43,7 +43,9 @@ Add this line to your `~/.bashrc` or `~/.zshrc` to make it permanent.
 ```bash
 npm install -g cdh
 ```
-Installs via [npm registry](https://www.npmjs.com/package/cdh). Requires Node.js >= 18.
+Installs via [npm registry](https://www.npmjs.com/package/cdh). Requires Node.js >= 18 and Python 3.14+.
+
+After install, both `cdh` and `onecode` commands are available globally.
 
 Or install from a local `.tgz` built in this repo:
 ```bash
@@ -228,7 +230,9 @@ Environment variables are interpolated with `${VAR}` syntax in config values.
 │   ├── walkthrough/     # Change walkthrough automation
 │   └── architecture/    # Project structure documentation
 ├── npm/                  # npm package wrapper
-│   ├── cli.js           # Node.js shim (auto-installs Python dependency)
+│   ├── cli.js           # Node.js shim for `cdh` command
+│   ├── onecode-cli.js   # Node.js shim for `onecode` command
+│   ├── run.js           # Shared logic (Python version check, install, spawn)
 │   ├── package.json     # npm package metadata
 │   └── build-package.sh # Build/publish script
 ├── .opencode/              # opencode integration

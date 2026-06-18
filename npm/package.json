@@ -10,6 +10,7 @@
   },
   "bin": {
     "cdh": "cli.js",
+    "onecode": "onecode-cli.js",
     "cloud-dev-harness": "cli.js"
   },
   "engines": {
@@ -17,6 +18,8 @@
   },
   "files": [
     "cli.js",
+    "onecode-cli.js",
+    "run.js",
     "package.json",
     "pyproject.toml",
     "cdh",
