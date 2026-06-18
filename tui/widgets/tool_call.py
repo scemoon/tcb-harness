@@ -206,6 +206,20 @@ class ToolCall(containers.VerticalGroup):
             elif tool_call_expand == "both":
                 self.expanded = status in ("completed", "failed")
 
+    _TOOL_ICONS: dict[str, str] = {
+        "Task": "🧠",
+        "Agent": "🧠",
+        "TaskCreate": "📋",
+        "TaskGet": "📋",
+        "TaskList": "📋",
+        "TaskUpdate": "📋",
+        "TaskOutput": "📋",
+        "TaskStop": "📋",
+        "TodoCreate": "📋",
+        "TodoList": "📋",
+        "TodoComplete": "📋",
+    }
+
     @property
     def tool_call_header_content(self) -> Content:
         tool_call = self.tool_call
@@ -214,13 +228,16 @@ class ToolCall(containers.VerticalGroup):
         title = tool_call.get("title", "title")
         status = tool_call.get("status", "pending")
 
+        tool_name = title.split(":")[0] if ":" in title else title
+        icon = self._TOOL_ICONS.get(tool_name, "🔧")
+
         expand_icon: Content = Content()
         if self.has_content:
             expand_icon = Content.from_markup(
                 "[$text-secondary]▼ " if self.expanded else "[$text-secondary]▶ "
             )
 
-        header = Content.assemble(expand_icon, "🔧 ", title)
+        header = Content.assemble(expand_icon, f"{icon} ", title)
 
         if status == "pending":
             header += Content.assemble(" ⌛")

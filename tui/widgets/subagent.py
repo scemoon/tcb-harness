@@ -62,7 +62,7 @@ class SubAgent(containers.VerticalGroup):
         self.set_class(True, f"-status-{self.status}")
         label = pill(self.agent_type, "$warning-muted", "$text-warning")
         yield SubAgentHeader(
-            f"🔄 Sub‑agent: {self.agent_type} {label}",
+            f"🧠 Sub‑agent: {self.agent_type} {label}",
             markup=False,
         )
         yield SubAgentContent("")
@@ -81,7 +81,7 @@ class SubAgent(containers.VerticalGroup):
         self.set_class(False, "-status-running")
         try:
             self.query_one(SubAgentHeader).update(
-                f"✅ Sub‑agent: {self.agent_type} — completed"
+                f"🧠 Sub‑agent: {self.agent_type} — completed ✅"
             )
         except Exception:
             pass
