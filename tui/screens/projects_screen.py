@@ -17,6 +17,7 @@ from tui.app import A2TUIApp
 from tui.widgets.grid_select import GridSelect
 from tui.widgets.project_grid_select import ProjectGridSelect
 from tui.widgets.project_summary import ProjectSummary
+from tui.screens.component_picker import ComponentPickerScreen
 
 
 CONFIRM_TIMEOUT = 5.0
@@ -89,12 +90,72 @@ class ProjectsScreen(ModalScreen[str]):
         self.notify(f"Deleted project: {project_name}")
 
     def action_new_project(self) -> None:
-        self.dismiss("__new__")
+        from pathlib import Path
+        from onecode.config_screen import EditFieldScreen
+
+        default_path = str(Path.cwd().resolve())
+        self.app.push_screen(
+            EditFieldScreen("Project path", default_path),
+            self._on_new_project_path,
+        )
+
+    def _on_new_project_path(self, path_str: str | None) -> None:
+        from pathlib import Path
+
+        if not path_str:
+            return
+        try:
+            target = Path(path_str).expanduser().resolve()
+        except Exception:
+            self.notify("Invalid path", severity="error")
+            return
+        self.app.push_screen(
+            ComponentPickerScreen(
+                title="New Project — Select Components",
+                subtitle=(
+                    f"Project path: {target}\n"
+                    "Cross-cutting items (contracts, shared types, etc.) are created automatically."
+                ),
+                allow_empty=False,
+            ),
+            lambda picked: self._do_new_project(target, picked),
+        )
+
+    def _do_new_project(
+        self,
+        target: "Path",
+        components: list[str] | None,
+    ) -> None:
+        from pathlib import Path
+        from onecode.agent.cdh_loader import CdhProjectLoader
+
+        if not components:
+            return
+        name = target.name
+        from cdh.scaffold import scaffold_dlc_project
+
+        try:
+            scaffold_dlc_project(target, name, components=components)
+        except ValueError as e:
+            self.notify(str(e), severity="error")
+            return
+        CdhProjectLoader.init_project(target, name)
+        import yaml
+        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir.mkdir(parents=True, exist_ok=True)
+        proj_data = {"name": name, "path": str(target), "description": ""}
+        (projects_dir / f"{name}.yaml").write_text(yaml.dump(proj_data))
+        widget = ProjectSummary(name, str(target), id=name)
+        self.project_grid_select.mount(widget)
+        self.project_grid_select.highlighted = len(self.project_grid_select.children) - 1
+        self.notify(
+            f"Created project '{name}' at {target} "
+            f"(components: {', '.join(components)})"
+        )
 
     def action_init_project(self) -> None:
         from pathlib import Path
         from onecode.config_screen import EditFieldScreen
-        from onecode.agent.cdh_loader import CdhProjectLoader
 
         default_path = str(Path.cwd().resolve())
         self.app.push_screen(
@@ -117,14 +178,57 @@ class ProjectsScreen(ModalScreen[str]):
             self.notify("Invalid path", severity="error")
             return
         existing = CdhProjectLoader.find_cdh_dir(target)
-        if existing is not None:
+        if existing is not None and existing.parent == target:
             self.notify(f".cdh already exists at {existing}", severity="warning")
             return
+        self.app.push_screen(
+            ComponentPickerScreen(
+                title="Init .cdh — Select Components",
+                subtitle=(
+                    f"Directory: {target}\n"
+                    "Pick the components already present in this directory. "
+                    "Empty selection is allowed (no apps/ created)."
+                ),
+                allow_empty=True,
+            ),
+            lambda picked: self._do_init_project(target, picked),
+        )
+
+    def _do_init_project(
+        self,
+        target: "Path",
+        components: list[str] | None,
+    ) -> None:
+        from pathlib import Path
+        from onecode.agent.cdh_loader import CdhProjectLoader
+        from cdh.scaffold import add_component, init_dlc_project
+
         name = target.name
-        from cdh.scaffold import scaffold_dlc_project
-        scaffold_dlc_project(target, name)
+        try:
+            init_dlc_project(target, name)
+        except ValueError as e:
+            self.notify(str(e), severity="error")
+            return
+        for cid in components or []:
+            try:
+                add_component(target, cid)
+            except ValueError as e:
+                self.notify(str(e), severity="error")
         CdhProjectLoader.init_project(target, name)
-        self.notify(f"Initialized .cdh in {target}")
+        import yaml
+        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir.mkdir(parents=True, exist_ok=True)
+        proj_data = {"name": name, "path": str(target), "description": ""}
+        (projects_dir / f"{name}.yaml").write_text(yaml.dump(proj_data))
+        widget = ProjectSummary(name, str(target), id=name)
+        self.project_grid_select.mount(widget)
+        self.project_grid_select.highlighted = len(self.project_grid_select.children) - 1
+        suffix = (
+            f" (components: {', '.join(components)})"
+            if components
+            else " (no components)"
+        )
+        self.notify(f"Initialized .cdh in {target}{suffix}")
 
     @on(GridSelect.Selected)
     def on_selected(self, event: GridSelect.Selected) -> None:
@@ -135,7 +239,7 @@ class ProjectsScreen(ModalScreen[str]):
 
     @on(widgets.Button.Pressed, "#new-project")
     def on_new_project(self) -> None:
-        self.dismiss("__new__")
+        self.action_new_project()
 
     @on(widgets.Button.Pressed, "#init-project")
     def on_init_project(self) -> None:

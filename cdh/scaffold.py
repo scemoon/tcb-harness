@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -8,15 +9,152 @@ import yaml
 
 SKILL_NAME = "ai-dlc-skill"
 
-SKILL_YAML_COMPONENTS = [
-    {"id": "native", "kind": "mobile", "tech": "react-native | flutter", "default_language": "dart", "default_ui_framework": "flutter-sdk", "owns": "apps/native", "fr_prefix": "NATIVE"},
-    {"id": "desktop", "kind": "desktop", "tech": "electron | tauri", "default_language": "typescript", "default_ui_framework": "electron-react", "owns": "apps/desktop", "fr_prefix": "DESKTOP"},
-    {"id": "web", "kind": "frontend", "tech": "react | vue | svelte", "default_language": "typescript", "default_ui_framework": "nextjs", "owns": "apps/web", "fr_prefix": "WEB"},
-    {"id": "backend", "kind": "service", "tech": "python | node | go", "owns": "apps/backend", "fr_prefix": "BE"},
-    {"id": "wxa", "kind": "mini-program", "tech": "miniprogram", "default_language": "javascript", "default_ui_framework": "vant-weapp", "owns": "apps/wxa", "fr_prefix": "WXA"},
-    {"id": "mya", "kind": "mini-program", "tech": "miniprogram", "default_language": "javascript", "default_ui_framework": "ant-design-mini", "owns": "apps/mya", "fr_prefix": "MYA"},
-    {"id": "tta", "kind": "mini-program", "tech": "miniprogram", "default_language": "typescript", "owns": "apps/tta", "fr_prefix": "TTA"},
-]
+
+@dataclass(frozen=True)
+class ComponentSpec:
+    id: str
+    kind: str
+    owns: str
+    fr_prefix: str
+    tech: str
+    label: str
+    description: str
+
+
+@dataclass(frozen=True)
+class CrossCutSpec:
+    id: str
+    paths: tuple[str, ...]
+    label: str
+    description: str
+
+
+COMPONENTS: tuple[ComponentSpec, ...] = (
+    ComponentSpec(
+        id="native",
+        kind="mobile",
+        owns="apps/native",
+        fr_prefix="NATIVE",
+        tech="react-native | flutter",
+        label="Mobile App",
+        description="iOS/Android cross-platform (RN/Flutter)",
+    ),
+    ComponentSpec(
+        id="desktop",
+        kind="desktop",
+        owns="apps/desktop",
+        fr_prefix="DESKTOP",
+        tech="electron | tauri",
+        label="Desktop App",
+        description="Cross-platform desktop (Electron/Tauri)",
+    ),
+    ComponentSpec(
+        id="web",
+        kind="frontend",
+        owns="apps/web",
+        fr_prefix="WEB",
+        tech="react | vue | svelte",
+        label="Web Frontend",
+        description="Browser SPA/SSR (React/Vue/Svelte)",
+    ),
+    ComponentSpec(
+        id="backend",
+        kind="service",
+        owns="apps/backend",
+        fr_prefix="BE",
+        tech="python | node | go",
+        label="Backend Service",
+        description="HTTP API/microservice (Python/Node/Go)",
+    ),
+    ComponentSpec(
+        id="wxa",
+        kind="mini-program",
+        owns="apps/wxa",
+        fr_prefix="WXA",
+        tech="miniprogram",
+        label="WeChat Mini-Program",
+        description="WeChat ecosystem mini-program",
+    ),
+    ComponentSpec(
+        id="mya",
+        kind="mini-program",
+        owns="apps/mya",
+        fr_prefix="MYA",
+        tech="miniprogram",
+        label="Alipay Mini-Program",
+        description="Alipay ecosystem mini-program",
+    ),
+    ComponentSpec(
+        id="tta",
+        kind="mini-program",
+        owns="apps/tta",
+        fr_prefix="TTA",
+        tech="miniprogram",
+        label="TikTok Mini-Program",
+        description="TikTok/Douyin ecosystem mini-program",
+    ),
+)
+
+
+COMPONENT_BY_ID: dict[str, ComponentSpec] = {c.id: c for c in COMPONENTS}
+
+
+CROSS_CUTTING: tuple[CrossCutSpec, ...] = (
+    CrossCutSpec(
+        id="contracts",
+        paths=("contracts/api", "contracts/events", "contracts/CHANGELOG.md"),
+        label="Interface Contracts",
+        description="API/event contracts and changelog",
+    ),
+    CrossCutSpec(
+        id="shared",
+        paths=("packages/shared",),
+        label="Shared Types",
+        description="Cross-component shared types package",
+    ),
+    CrossCutSpec(
+        id="openspec",
+        paths=("openspec/changes",),
+        label="OpenSpec Changes",
+        description="OpenSpec change proposals",
+    ),
+    CrossCutSpec(
+        id="cross_stack_features",
+        paths=("features/cross-stack",),
+        label="Cross-Stack BDD",
+        description="End-to-end BDD features across components",
+    ),
+    CrossCutSpec(
+        id="cross_stack_tests",
+        paths=("tests/contract", "tests/cross-stack"),
+        label="Cross-Stack Tests",
+        description="Contract tests and cross-stack integration tests",
+    ),
+    CrossCutSpec(
+        id="provider",
+        paths=(
+            "providers/tcb/provider.yaml",
+            "providers/tcb/deployment.yaml",
+            "providers/tcb/preview.yaml",
+        ),
+        label="Cloud Provider",
+        description="TCB (Tencent CloudBase) provider config",
+    ),
+    CrossCutSpec(
+        id="tools",
+        paths=(
+            "tools/deploy_stack.py",
+            "tools/contract_diff.py",
+            "tools/generate_shared.py",
+        ),
+        label="Tooling Scripts",
+        description="deploy_stack / contract_diff / generate_shared stubs",
+    ),
+)
+
+
+CROSS_CUTTING_BY_ID: dict[str, CrossCutSpec] = {c.id: c for c in CROSS_CUTTING}
+
 
 TCB_PROVIDER_YAML = """provider:
   name: tcb
@@ -149,36 +287,101 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content.lstrip("\n"), encoding="utf-8")
 
 
-def _build_project_yaml(active: list[dict]) -> dict:
+def _component_to_dict(c: ComponentSpec) -> dict:
+    out = {
+        "id": c.id,
+        "kind": c.kind,
+        "tech": c.tech,
+        "owns": c.owns,
+        "fr_prefix": c.fr_prefix,
+    }
+    return out
+
+
+def _build_project_yaml(active: list[ComponentSpec], cross_cutting_ids: list[str]) -> dict:
+    cross_cutting: dict = {"fr_prefix": "INT"}
+    if "contracts" in cross_cutting_ids:
+        cross_cutting["contracts"] = "contracts/"
+    if "shared" in cross_cutting_ids:
+        cross_cutting["shared_types"] = "packages/shared/"
     return {
         "stack": {
             "topology": "monorepo",
-            "components": [
-                {
-                    "id": c["id"],
-                    "kind": c["kind"],
-                    "tech": c["tech"],
-                    "owns": c["owns"],
-                    "fr_prefix": c["fr_prefix"],
-                }
-                | ({"default_language": c["default_language"]} if c.get("default_language") else {})
-                | ({"default_ui_framework": c["default_ui_framework"]} if c.get("default_ui_framework") else {})
-                for c in active
-            ],
-            "cross_cutting": {
-                "fr_prefix": "INT",
-                "contracts": "contracts/",
-                "shared_types": "packages/shared/",
-            },
+            "components": [_component_to_dict(c) for c in active],
+            "cross_cutting": cross_cutting,
         }
     }
 
 
-def _build_component_table(active: list[dict]) -> str:
+def _build_component_table(active: list[ComponentSpec]) -> str:
+    if not active:
+        return "| (none)       | -             | -                 | -                   | -                   |"
     return "\n".join(
-        f"| {c['id']:8s} | {c['fr_prefix'] + '-FR-*':14s} | {c.get('default_language', '-'):17s} | {c.get('default_ui_framework', '-'):21s} | {c['owns']:20s} |"
+        f"| {c.id:8s} | {c.fr_prefix + '-FR-*':14s} | {'-':17s} | {'-':21s} | {c.owns:20s} |"
         for c in active
     )
+
+
+def _scaffold_component(c: ComponentSpec, root: Path) -> None:
+    comp_dir = root / c.owns
+    _mkdir(comp_dir / "src")
+    _mkdir(comp_dir / "tests" / "unit")
+    _mkdir(comp_dir / "tests" / "e2e")
+    _mkdir(comp_dir / "features")
+    _gitkeep(comp_dir / "src")
+    _gitkeep(comp_dir / "tests" / "unit")
+    _gitkeep(comp_dir / "tests" / "e2e")
+    _gitkeep(comp_dir / "features")
+    _gitkeep(comp_dir)
+
+
+def _scaffold_cross_cutting(cross_ids: list[str], root: Path) -> None:
+    for cid in cross_ids:
+        spec = CROSS_CUTTING_BY_ID.get(cid)
+        if spec is None:
+            continue
+        for p in spec.paths:
+            target = root / p
+            if p.endswith((".yaml", ".py", ".md")):
+                if p == "contracts/CHANGELOG.md":
+                    _write(target, CHANGELOG_MD)
+                elif p == "providers/tcb/provider.yaml":
+                    _write(target, TCB_PROVIDER_YAML)
+                elif p == "providers/tcb/deployment.yaml":
+                    _write(target, TCB_DEPLOYMENT_YAML)
+                elif p == "providers/tcb/preview.yaml":
+                    _write(target, TCB_PREVIEW_YAML)
+                elif p.startswith("tools/") and p.endswith(".py"):
+                    _write(target, TOOL_STUB)
+                    target.chmod(0o755)
+                else:
+                    _write(target, "")
+            else:
+                _mkdir(target)
+                _gitkeep(target)
+
+
+def _write_project_yaml(
+    root: Path,
+    project_name: str,
+    active: list[ComponentSpec],
+    cross_cutting_ids: list[str],
+    description: str,
+) -> None:
+    _write(
+        root / "project.yaml",
+        yaml.dump(_build_project_yaml(active, cross_cutting_ids), default_flow_style=False),
+    )
+    _write(
+        root / "requirements.md",
+        REQUIREMENTS_MD.format(
+            project_name=project_name,
+            description=description or f"AI-DLC monorepo project: {project_name}",
+            component_table=_build_component_table(active),
+        ),
+    )
+    _write(root / ".gitignore", GITIGNORE_CONTENT)
+    _write(root / "CHANGELOG.md", CHANGELOG_MD)
 
 
 def init_dlc_project(
@@ -186,10 +389,11 @@ def init_dlc_project(
     project_name: str,
     description: str = "",
 ) -> bool:
-    """Scaffold only the basic project skeleton (root-level files + .cdh/).
+    """Scaffold project metadata only (no apps/*, no cross-cutting dirs).
 
-    Component directories under apps/ are NOT created; they are added
-    dynamically when the user selects which components to include.
+    Writes project.yaml (with empty components list), requirements.md,
+    .gitignore, and CHANGELOG.md. The user is expected to add components
+    and cross-cutting items later via add_component / add_cross_cutting.
 
     Returns True if scaffolding was performed, False if ai-dlc-skill
     is not available and the project was left untouched.
@@ -198,115 +402,170 @@ def init_dlc_project(
         return False
 
     root = workspace_root.resolve()
-    active = list(SKILL_YAML_COMPONENTS)
-
-    # --- project.yaml (definition only — no app dirs yet) ---
-    _write(root / "project.yaml", yaml.dump(_build_project_yaml(active), default_flow_style=False))
-
-    # --- requirements.md ---
-    _write(
-        root / "requirements.md",
-        REQUIREMENTS_MD.format(
-            project_name=project_name,
-            description=description or f"AI-DLC monorepo project: {project_name}",
-            component_table=_build_component_table(active),
-        ),
+    _write_project_yaml(
+        root=root,
+        project_name=project_name,
+        active=[],
+        cross_cutting_ids=[],
+        description=description,
     )
-
-    # --- .gitignore ---
-    _write(root / ".gitignore", GITIGNORE_CONTENT)
-
-    # --- CHANGELOG.md (root-level metadata) ---
-    _write(root / "CHANGELOG.md", CHANGELOG_MD)
-
     return True
 
 
 def scaffold_dlc_project(
     workspace_root: Path,
     project_name: str,
-    components: Optional[list[str]] = None,
+    components: list[str],
     description: str = "",
 ) -> bool:
     """Scaffold a full ai-dlc-skill monorepo project structure.
 
+    The user must explicitly select at least one application component.
+    All cross-cutting items (contracts, shared types, openspec, etc.)
+    are always created.
+
+    Args:
+        components: list of component ids (e.g. ["web", "backend"]).
+                   Must be non-empty.
+
     Returns True if scaffolding was performed, False if ai-dlc-skill
     is not available and the project was left untouched.
+
+    Raises ValueError if components is empty or contains unknown ids.
     """
+    if not components:
+        raise ValueError(
+            "At least one application component is required "
+            "(e.g. 'web', 'backend', 'native')."
+        )
+
+    unknown = [c for c in components if c not in COMPONENT_BY_ID]
+    if unknown:
+        raise ValueError(
+            f"Unknown component id(s): {', '.join(unknown)}. "
+            f"Valid ids: {', '.join(COMPONENT_BY_ID)}."
+        )
+
     if not _detect_dlc_skill(workspace_root):
         return False
 
     root = workspace_root.resolve()
+    active = [COMPONENT_BY_ID[cid] for cid in components]
+    all_cross_ids = [c.id for c in CROSS_CUTTING]
 
-    if components is not None:
-        active = [c for c in SKILL_YAML_COMPONENTS if c["id"] in components]
-    else:
-        active = list(SKILL_YAML_COMPONENTS)
-
-    # --- project.yaml ---
-    _write(root / "project.yaml", yaml.dump(_build_project_yaml(active), default_flow_style=False))
-
-    # --- requirements.md ---
-    _write(
-        root / "requirements.md",
-        REQUIREMENTS_MD.format(
-            project_name=project_name,
-            description=description or f"AI-DLC monorepo project: {project_name}",
-            component_table=_build_component_table(active),
-        ),
+    _write_project_yaml(
+        root=root,
+        project_name=project_name,
+        active=active,
+        cross_cutting_ids=all_cross_ids,
+        description=description,
     )
 
-    # --- .gitignore ---
-    _write(root / ".gitignore", GITIGNORE_CONTENT)
-
-    # --- apps/{component}/ src/ tests/ features/ ---
     for c in active:
-        comp_dir = root / c["owns"]
-        _mkdir(comp_dir / "src")
-        _mkdir(comp_dir / "tests" / "unit")
-        _mkdir(comp_dir / "tests" / "e2e")
-        _mkdir(comp_dir / "features")
-        _gitkeep(comp_dir / "src")
-        _gitkeep(comp_dir / "tests" / "unit")
-        _gitkeep(comp_dir / "tests" / "e2e")
-        _gitkeep(comp_dir / "features")
-        _gitkeep(comp_dir)
+        _scaffold_component(c, root)
 
-    # --- contracts/{api,events}/ + CHANGELOG.md ---
-    _mkdir(root / "contracts" / "api")
-    _mkdir(root / "contracts" / "events")
-    _gitkeep(root / "contracts" / "api")
-    _gitkeep(root / "contracts" / "events")
-    _write(root / "contracts" / "CHANGELOG.md", CHANGELOG_MD)
-
-    # --- packages/shared/ ---
-    _mkdir(root / "packages" / "shared")
-    _gitkeep(root / "packages" / "shared")
-
-    # --- features/cross-stack/ ---
-    _mkdir(root / "features" / "cross-stack")
-    _gitkeep(root / "features" / "cross-stack")
-
-    # --- tests/{contract,cross-stack}/ ---
-    _mkdir(root / "tests" / "contract")
-    _mkdir(root / "tests" / "cross-stack")
-    _gitkeep(root / "tests" / "contract")
-    _gitkeep(root / "tests" / "cross-stack")
-
-    # --- openspec/changes/ ---
-    _mkdir(root / "openspec" / "changes")
-    _gitkeep(root / "openspec" / "changes")
-
-    # --- providers/tcb/ ---
-    _mkdir(root / "providers" / "tcb")
-    _write(root / "providers" / "tcb" / "provider.yaml", TCB_PROVIDER_YAML)
-    _write(root / "providers" / "tcb" / "deployment.yaml", TCB_DEPLOYMENT_YAML)
-    _write(root / "providers" / "tcb" / "preview.yaml", TCB_PREVIEW_YAML)
-
-    # --- tools/ stub scripts ---
-    _mkdir(root / "tools")
-    for tool in ("deploy_stack.py", "contract_diff.py", "generate_shared.py"):
-        _write(root / "tools" / tool, TOOL_STUB)
-        (root / "tools" / tool).chmod(0o755)
+    _scaffold_cross_cutting(all_cross_ids, root)
 
     return True
+
+
+def add_component(
+    workspace_root: Path,
+    component_id: str,
+) -> bool:
+    """Add a single application component to an existing project.
+
+    Creates apps/<owns>/{src,tests/unit,tests/e2e,features} with
+    .gitkeep files and updates project.yaml's stack.components list.
+
+    Returns True if the component was added, False if it was already
+    present. Raises ValueError on unknown component id.
+    """
+    spec = COMPONENT_BY_ID.get(component_id)
+    if spec is None:
+        raise ValueError(
+            f"Unknown component id: {component_id}. "
+            f"Valid ids: {', '.join(COMPONENT_BY_ID)}."
+        )
+
+    root = workspace_root.resolve()
+    project_yaml = root / "project.yaml"
+    if not project_yaml.exists():
+        raise FileNotFoundError(
+            f"project.yaml not found at {root}. Run 'cdh project init' first."
+        )
+
+    data = yaml.safe_load(project_yaml.read_text(encoding="utf-8")) or {}
+    components = data.get("stack", {}).get("components", []) or []
+    if any(c.get("id") == component_id for c in components):
+        return False
+
+    _scaffold_component(spec, root)
+
+    components.append(_component_to_dict(spec))
+    data["stack"]["components"] = components
+    project_yaml.write_text(
+        yaml.dump(data, default_flow_style=False),
+        encoding="utf-8",
+    )
+    return True
+
+
+def add_cross_cutting(
+    workspace_root: Path,
+    cross_id: str,
+) -> bool:
+    """Add a single cross-cutting item to an existing project.
+
+    Creates the relevant directories/files and updates project.yaml
+    so that stack.cross_cutting references the new path.
+
+    Returns True if the item was added, False if it was already present.
+    Raises ValueError on unknown cross-cutting id.
+    """
+    spec = CROSS_CUTTING_BY_ID.get(cross_id)
+    if spec is None:
+        raise ValueError(
+            f"Unknown cross-cutting id: {cross_id}. "
+            f"Valid ids: {', '.join(CROSS_CUTTING_BY_ID)}."
+        )
+
+    root = workspace_root.resolve()
+    project_yaml = root / "project.yaml"
+    if not project_yaml.exists():
+        raise FileNotFoundError(
+            f"project.yaml not found at {root}. Run 'cdh project init' first."
+        )
+
+    cross_paths = [root / p for p in spec.paths]
+    if all(p.exists() for p in cross_paths):
+        return False
+
+    _scaffold_cross_cutting([cross_id], root)
+
+    data = yaml.safe_load(project_yaml.read_text(encoding="utf-8")) or {}
+    cross_cutting = data.setdefault("stack", {}).setdefault("cross_cutting", {})
+    if cross_id == "contracts":
+        cross_cutting["contracts"] = "contracts/"
+    elif cross_id == "shared":
+        cross_cutting["shared_types"] = "packages/shared/"
+
+    project_yaml.write_text(
+        yaml.dump(data, default_flow_style=False),
+        encoding="utf-8",
+    )
+    return True
+
+
+__all__ = [
+    "COMPONENTS",
+    "COMPONENT_BY_ID",
+    "CROSS_CUTTING",
+    "CROSS_CUTTING_BY_ID",
+    "ComponentSpec",
+    "CrossCutSpec",
+    "init_dlc_project",
+    "scaffold_dlc_project",
+    "add_component",
+    "add_cross_cutting",
+]
