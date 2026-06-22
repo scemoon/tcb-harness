@@ -47,6 +47,16 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["onecode*", "cdh*", "tui*"]
 
+[tool.setuptools.package-data]
+tui = [
+    "tui.tcss",
+    "screens/*.tcss",
+    "data/**/*",
+]
+onecode = [
+    "builtin_skills/**/*",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 
