@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const { spawn, execSync } = require('child_process');
 const path = require('path');
+const pkg = require('./package.json');
 
 function exec(cmd, opts = {}) {
   try {
@@ -35,7 +36,13 @@ function run(pythonModule) {
   const PKG_DIR = __dirname;
   const PYTHON_ENV_DIR = path.join(require('os').homedir(), '.onecode', 'python');
 
-  const isPostinstall = process.argv.length <= 2;
+  const args = process.argv.slice(2);
+  if (args.includes('--version') || args.includes('-v')) {
+    console.log(pkg.version);
+    process.exit(0);
+  }
+
+  const isPostinstall = process.env.npm_lifecycle_event === 'postinstall' || process.env.npm_command === 'install';
   const py = checkPython();
 
   if (!py.ok) {
@@ -46,7 +53,11 @@ function run(pythonModule) {
       exec(`uv venv "${PYTHON_ENV_DIR}"`);
       const venvPython = path.join(PYTHON_ENV_DIR, 'bin', 'python');
       console.log('cdh: Installing cloud-dev-harness...');
-      exec(`"${venvPython}" -m pip install -e "${PKG_DIR}"`);
+      const r = exec(`uv pip install "${PKG_DIR}" --python "${venvPython}"`);
+      if (!r.ok) {
+        console.error('cdh: Install failed:', r.out);
+        process.exit(1);
+      }
       if (isPostinstall) {
         console.log('cdh: Installed. Add to PATH: export PATH="$HOME/.onecode/python/bin:$PATH"');
         process.exit(0);
@@ -62,7 +73,13 @@ function run(pythonModule) {
 
   if (!checkCdhInstalled(py.pythonCmd)) {
     console.log('cdh: Installing cloud-dev-harness...');
-    exec(`${py.pythonCmd} -m pip install "${PKG_DIR}"`);
+    const r = checkUv()
+      ? exec(`uv pip install "${PKG_DIR}" --python "${py.pythonCmd}"`)
+      : exec(`${py.pythonCmd} -m pip install "${PKG_DIR}"`);
+    if (!r.ok) {
+      console.error('cdh: Install failed:', r.out);
+      process.exit(1);
+    }
   }
 
   if (isPostinstall) {
@@ -70,8 +87,8 @@ function run(pythonModule) {
     process.exit(0);
   }
 
-  const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
-  const cmd = spawn(py.pythonCmd, ['-m', pythonModule, ...args], {
+  const passthroughArgs = process.argv.slice(2).filter(a => a !== '--version' && a !== '-v');
+  const cmd = spawn(py.pythonCmd, ['-m', pythonModule, ...passthroughArgs], {
     stdio: 'inherit',
     cwd: PKG_DIR,
   });

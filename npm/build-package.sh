@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
 PKG_DIR="$SCRIPT_DIR/npm_pkg"
-PKG_FILE="$PKG_DIR/cdh-*.tgz"
+PKG_FILE="$PKG_DIR/scemoon-cdh-*.tgz"
 VERSION="$(node -e "console.log(require('$SCRIPT_DIR/package.json').version)")"
 
 usage() {
@@ -58,7 +58,7 @@ cp "$REPO_ROOT/pyproject.toml" "$BUILD_DIR/package/"
 
 cat > "$BUILD_DIR/package/package.json" << EOF
 {
-  "name": "cdh",
+  "name": "@scemoon/cdh",
   "version": "${VERSION}",
   "description": "Cloud Dev Harness - cloud-native development Agent framework",
   "keywords": ["ai", "agent", "cloud", "development", "cli", "tui"],
@@ -93,20 +93,20 @@ EOF
 
 cd "$BUILD_DIR/package"
 npm pack
-mv cdh-${VERSION}.tgz "$PKG_DIR/"
+mv scemoon-cdh-${VERSION}.tgz "$PKG_DIR/"
 cd "$SCRIPT_DIR"
 rm -rf "$BUILD_DIR"
-echo "Package created: npm_pkg/cdh-${VERSION}.tgz"
+echo "Package created: npm_pkg/scemoon-cdh-${VERSION}.tgz"
 
 if [ "$cmd" = "publish" ]; then
-  if [ "$1" = "--dry-run" ]; then
+  if [ "${1:-}" = "--dry-run" ]; then
     echo "Dry run - skipping upload"
   else
     echo "Publishing to npm..."
-    npm publish "$PKG_DIR/cdh-${VERSION}.tgz"
+    npm publish "$PKG_DIR/scemoon-cdh-${VERSION}.tgz" --access=public
     echo "Uploading to GitHub Release v${VERSION}..."
-    gh release create "v${VERSION}" "$PKG_DIR/cdh-${VERSION}.tgz" \
+    gh release create "v${VERSION}" "$PKG_DIR/scemoon-cdh-${VERSION}.tgz" \
       --title "CDH v${VERSION}" \
-      --notes "npm package: cdh v${VERSION}"
+      --notes "npm package: @scemoon/cdh v${VERSION}"
   fi
 fi
