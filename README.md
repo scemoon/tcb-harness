@@ -97,14 +97,13 @@ cdh tui
 ```bash
 cdh                          # Launch TUI (agent store)
 cdh tui                      # Launch TUI (agent store)
-cdh tui --mode plan          # Start in plan mode
-cdh tui --agent <identity>   # Launch specific agent directly
-cdh config                   # Open configuration editor (TUI)
-cdh config set provider openai
-cdh config list              # Show full config
-cdh logs                     # View logs (last 20 lines)
-cdh logs --tail 100          # View last 100 log lines
-cdh logs --follow            # Follow log output
+cdh onecode config           # Open configuration editor (TUI)
+cdh onecode config list      # Show full config
+cdh onecode config model get # Show current default model
+cdh onecode codebase index   # Build the codebase index
+cdh onecode codebase search "query"
+cdh onecode skill list
+cdh onecode mcp list
 cdh project                  # List projects
 cdh project show <name>      # Show project details
 cdh session list             # List sessions
@@ -113,15 +112,22 @@ cdh help                     # Show help
 cdh version                  # Show version
 ```
 
+Logs live at `~/.cdh/logs/cdh.log` (daily-rotated) and can be inspected with
+`tail -n 100 ~/.cdh/logs/cdh.log` or any external log viewer.
+
 ### Key Commands
 
 | Command | Purpose |
 |---------|---------|
-| `/model switch <name>` | Switch LLM model |
-| `/provider switch <name>` | Switch provider |
-| `/mode <plan\|agent\|solo>` | Change agent mode |
-| `/skill list/add/remove` | Manage skills |
-| `/mcp list/add/remove` | MCP server management |
+| `/onecode:status` | One-shot view of provider/model/mode/skills/MCP state |
+| `/onecode:provider` | Show available providers with current marker (accepts `set <name\|n>`) |
+| `/onecode:model` | Show known models for current provider (accepts `set <name\|n>`) |
+| `/onecode:skill list` | List installed skills with status |
+| `/onecode:skill enable\|disable <name\|n>` | Toggle a skill (number from the list) |
+| `/onecode:skill add\|remove <name>` | Scaffold or delete a skill |
+| `/onecode:mcp list` | List configured MCP servers |
+| `/onecode:mcp enable\|disable\|remove <name\|n>` | Manage a server |
+| `/onecode:mcp add <name> <url>` | Add an SSE MCP server |
 | `/clear` | Clear chat log |
 | `/theme` | Toggle dark/light theme |
 
@@ -172,7 +178,7 @@ Environment variables are interpolated with `${VAR}` syntax in config values.
 
 ```
 ├── cdh/                  # Top-level CLI entry point
-│   ├── cli.py           # Click CLI (config, logs, projects, sessions, tui)
+│   ├── cli.py           # Click CLI (config, projects, sessions, tui)
 │   ├── __init__.py
 │   └── __main__.py
 ├── onecode/              # Core agent framework (onecode Agent)
@@ -442,6 +448,6 @@ CI runs on push/PR to `main` when files under `tui/ansi/` change.
 
 | Command | Entry Point | Description |
 |---------|-------------|-------------|
-| `cdh` | `cdh.cli:main` | Main user CLI (launches TUI, config, logs, projects) |
+| `cdh` | `cdh.cli:main` | Main user CLI (launches TUI, config, projects) |
 | `tui` | `tui.cli:main` | Standalone TUI launcher |
 | `onecode-agent-acp` | `onecode.agent.onecode_agent_acp:main` | ACP agent server |

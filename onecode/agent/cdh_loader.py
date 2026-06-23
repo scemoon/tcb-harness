@@ -11,7 +11,7 @@ def _walk_up_parents(workspace_root: Path):
     """Yield workspace root, then git root.
 
     Unlike :class:`~onecode.skills.loader.SkillLoader` we deliberately do
-    **not** yield ``Path.home()`` — the global ``~/.onecode/`` is the onecode
+    **not** yield ``Path.home()`` — the global ``~/.cdh/`` is the onecode
     user-config directory, not a project-level ``.cdh/``, so including it
     would cause false-positive matches.
     """
@@ -41,6 +41,7 @@ class CdhProjectLoader:
     """
 
     CDH_DIRNAME = ".cdh"
+    STATE_FILENAME = "state.json"
     LAST_SESSION_FILENAME = "last_session.json"
     TASKS_FILENAME = "tasks.json"
     PERMISSIONS_FILENAME = "permissions.json"
@@ -82,13 +83,22 @@ class CdhProjectLoader:
     @staticmethod
     def load_project_state(cdh_dir: Path) -> dict:
         """Read ``.cdh/state.json``."""
-        state_path = cdh_dir / "state.json"
+        state_path = cdh_dir / CdhProjectLoader.STATE_FILENAME
         if state_path.exists():
             try:
                 return json.loads(state_path.read_text(encoding="utf-8"))
             except Exception:
                 pass
         return {}
+
+    @staticmethod
+    def save_state(cdh_dir: Path, state_data: dict) -> None:
+        """Save project state to ``.cdh/state.json``."""
+        path = cdh_dir / CdhProjectLoader.STATE_FILENAME
+        path.write_text(
+            json.dumps(state_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     @staticmethod
     def get_skill_content(cdh_dir: Path) -> str:
@@ -247,8 +257,8 @@ class CdhProjectLoader:
         config_path = cdh_dir / "config.yaml"
         config_path.write_text(yaml.dump(config, default_flow_style=False), encoding="utf-8")
 
-        state = {"current_phase": phase}
-        state_path = cdh_dir / "state.json"
+        state = {"current_phase": phase, "completed_phases": [], "gate_results": {}}
+        state_path = cdh_dir / CdhProjectLoader.STATE_FILENAME
         state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
         skill_path = cdh_dir / "SKILL.md"

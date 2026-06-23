@@ -6,7 +6,7 @@ from typing import Optional
 
 from onecode.config import ensure_dirs, load_config, save_config
 
-LOG_DIR = Path.home() / ".onecode" / "logs"
+LOG_DIR = Path.home() / ".cdh" / "logs"
 LOG_FILE = LOG_DIR / "cdh.log"
 LOG_BACKUP_COUNT = 7  # keep 7 days of history
 
@@ -16,7 +16,7 @@ _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 def setup_logging(log_level: str = "INFO") -> logging.Logger:
     """Configure root logging to write to a daily-rotated ``cdh.log`` file.
 
-    The active log is always ``~/.onecode/logs/cdh.log``; at midnight it is
+    The active log is always ``~/.cdh/logs/cdh.log``; at midnight it is
     rolled to ``cdh.log.YYYY-MM-DD`` and a fresh file is started.  Up to
     :data:`LOG_BACKUP_COUNT` days of history are retained.
 
@@ -67,7 +67,7 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
     default="INFO",
     show_default=True,
     envvar="CDH_LOG_LEVEL",
-    help="Root logger verbosity. Defaults to INFO; daily-rotated to ~/.onecode/logs/cdh.log.",
+    help="Root logger verbosity. Defaults to INFO; daily-rotated to ~/.cdh/logs/cdh.log.",
 )
 def cli(log_level: str):
     """CDH Agent CLI - Cloud Dev Harness Agent commands."""

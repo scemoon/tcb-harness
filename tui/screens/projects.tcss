@@ -20,6 +20,16 @@ ProjectsScreen {
         text-style: italic;
     }
 
+    #actions {
+        height: auto;
+        align-horizontal: center;
+        margin: 0 1 1 1;
+    }
+
+    #actions Button {
+        margin: 0 1;
+    }
+
 
     ProjectGridSelect {
         &:empty {

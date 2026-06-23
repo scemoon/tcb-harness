@@ -28,6 +28,32 @@ class DirectoryChanged(Message):
         return isinstance(message, DirectoryChanged)
 
 
+_NOISY_DIR_NAMES = frozenset(
+    {
+        ".venv",
+        ".git",
+        ".pytest_cache",
+        "__pycache__",
+        ".mypy_cache",
+        "node_modules",
+        ".uv-cache",
+        "dist",
+        "build",
+        ".idea",
+    }
+)
+
+
+def _is_noisy_path(path: str) -> bool:
+    """Return True when *path* lives inside a directory we want to
+    ignore for change notifications (virtualenvs, caches, build output…).
+    """
+    if not path:
+        return False
+    parts = path.replace("\\", "/").split("/")
+    return any(part in _NOISY_DIR_NAMES for part in parts)
+
+
 class _PathEventDispatcher(FileSystemEventHandler):
     """Dispatches file system events to multiple DirectoryWatcher instances."""
 
@@ -53,7 +79,15 @@ class _PathEventDispatcher(FileSystemEventHandler):
             return bool(self._watchers)
 
     def on_any_event(self, event: FileSystemEvent) -> None:
-        """Dispatch events to all registered watchers."""
+        """Dispatch events to all registered watchers.
+
+        Events for paths inside noisy directories (virtualenvs, caches,
+        build output, etc.) are dropped so they don't flood the UI.
+        """
+        src = getattr(event, "src_path", "") or ""
+        dest = getattr(event, "dest_path", "") or ""
+        if _is_noisy_path(src) or _is_noisy_path(dest):
+            return
         with self._lock:
             watchers = list(self._watchers)
 

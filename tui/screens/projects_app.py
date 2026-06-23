@@ -226,13 +226,24 @@ class ProjectsApp(App):
         except Exception:
             ws = Path.cwd().resolve()
         name = ws.name
-        from cdh.scaffold import scaffold_dlc_project
-        scaffold_dlc_project(ws, name)
-        CdhProjectLoader.init_project(ws, name)
         projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
         projects_dir.mkdir(parents=True, exist_ok=True)
+        proj_file = projects_dir / f"{name}.yaml"
+        if proj_file.exists():
+            self.notify(
+                f"Project '{name}' already exists in the project list",
+                severity="error",
+            )
+            return
+        from cdh.scaffold import scaffold_dlc_project
+        try:
+            scaffold_dlc_project(ws, name)
+        except (ValueError, RuntimeError) as e:
+            self.notify(str(e), severity="error")
+            return
+        CdhProjectLoader.init_project(ws, name)
         proj_data = {"name": name, "path": str(ws), "description": ""}
-        (projects_dir / f"{name}.yaml").write_text(yaml.dump(proj_data))
+        proj_file.write_text(yaml.dump(proj_data))
         cfg = load_config()
         cfg.current_project = name
         cfg.current_project_path = str(ws)
@@ -262,9 +273,26 @@ class ProjectsApp(App):
             self.notify(f".cdh already exists at {existing}", severity="warning")
             return
         name = target.name
+        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir.mkdir(parents=True, exist_ok=True)
+        proj_file = projects_dir / f"{name}.yaml"
+        if proj_file.exists():
+            self.notify(
+                f"Project '{name}' already exists in the project list",
+                severity="error",
+            )
+            return
         from cdh.scaffold import init_dlc_project
-        init_dlc_project(target, name)
+        try:
+            init_dlc_project(target, name)
+        except (ValueError, RuntimeError) as e:
+            self.notify(str(e), severity="error")
+            return
         CdhProjectLoader.init_project(target, name)
+        import yaml
+        proj_data = {"name": name, "path": str(target), "description": ""}
+        proj_file.write_text(yaml.dump(proj_data))
+        self._refresh()
         self.notify(f"Initialized .cdh in {target}")
 
     def _load_project(self) -> None:

@@ -600,6 +600,15 @@ class Agent(AgentBase):
             db = DB()
             await db.session_update_last_used(self.session_pk)
 
+        # Save session before terminating
+        if self.session_id is not None:
+            try:
+                with self.request():
+                    response = api.session_save(self.session_id)
+                await asyncio.wait_for(response.wait(), timeout=3)
+            except Exception:
+                pass
+
         if self._process is not None:
             try:
                 self._process.terminate()
@@ -670,7 +679,7 @@ class Agent(AgentBase):
         await self._save_last_session_to_cdh()
 
     async def _save_last_session_to_cdh(self) -> None:
-        if self.session_pk is None:
+        if self.session_id is None:
             return
         try:
             from onecode.agent.cdh_loader import CdhProjectLoader
@@ -678,14 +687,13 @@ class Agent(AgentBase):
             cdh_dir = CdhProjectLoader.find_cdh_dir(self.project_root_path)
             if cdh_dir is None:
                 return
-            CdhProjectLoader.save_last_session(
-                cdh_dir,
-                {
-                    "agent_session_id": self.session_id,
-                    "session_pk": self.session_pk,
-                    "agent_identity": self._agent_data["identity"],
-                },
-            )
+            data: dict = {
+                "agent_session_id": self.session_id,
+                "agent_identity": self._agent_data["identity"],
+            }
+            if self.session_pk is not None:
+                data["session_pk"] = self.session_pk
+            CdhProjectLoader.save_last_session(cdh_dir, data)
         except Exception:
             pass
 
@@ -781,6 +789,11 @@ class Agent(AgentBase):
                         cwd = session_cwd
                     if agent_data := meta.get("agent_data"):
                         self._agent_data = agent_data
+        else:
+            db = DB()
+            if (session := await db.session_get_by_agent_session_id(self.session_id)) is not None:
+                self.session_pk = session["id"]
+                session_title = session.get("title") or "Untitled"
 
         with self.request():
             session_load_response = api.session_load(cwd, [], self.session_id)
@@ -800,6 +813,20 @@ class Agent(AgentBase):
                 for mode in available_modes
             }
             self.post_message(messages.SetModes(current_mode, modes_update))
+
+        if self.session_pk is None:
+            self._pending_session_data = {
+                "session_name": session_title or "Untitled",
+                "agent_name": self._agent_data["name"],
+                "agent_identity": self._agent_data["identity"],
+                "session_id": self.session_id,
+                "protocol": "acp",
+                "meta": {
+                    "cwd": str(self.project_root_path),
+                    "agent_data": self._agent_data,
+                },
+            }
+            await self._ensure_db_session()
 
         if session_title:
             self.post_message(tui_messages.SessionUpdate(name=session_title))
@@ -870,6 +897,12 @@ class Agent(AgentBase):
             return
         db = DB()
         await db.session_update_title(self.session_pk, name)
+        if self.session_id:
+            from onecode.agent.session import AgentSession
+            session = AgentSession(self.session_id)
+            if session.load():
+                session.name = name
+                session.save()
         self.post_message(tui_messages.SessionUpdate(name=name))
 
     async def acp_session_cancel(self) -> bool:

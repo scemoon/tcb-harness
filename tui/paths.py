@@ -2,7 +2,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Final
 
-from xdg_base_dirs import xdg_config_home, xdg_data_home, xdg_state_home
+from xdg_base_dirs import xdg_config_home, xdg_data_home
 
 
 APP_NAME: Final[str] = "tui"
@@ -39,7 +39,7 @@ def get_config() -> Path:
 
 def get_state() -> Path:
     """Return (possibly creating) the application state directory."""
-    path = xdg_state_home() / APP_NAME
+    path = Path.home() / ".cdh" / "state" / APP_NAME
     with suppress(OSError):
         path.mkdir(0o700, exist_ok=True, parents=True)
     return path
@@ -65,7 +65,7 @@ def get_log() -> Path:
         Path to log directory.
 
     """
-    path = Path.home() / ".onecode" / "logs"
+    path = Path.home() / ".cdh" / "logs"
     with suppress(OSError):
         path.mkdir(0o700, exist_ok=True, parents=True)
     return path

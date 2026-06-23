@@ -160,7 +160,8 @@ class EditFieldScreen(ModalScreen[str]):
 
     @on(Button.Pressed, "#edit-save")
     def on_save(self) -> None:
-        self.dismiss(self.query_one("#edit-input", Input).value)
+        value = self.query_one("#edit-input", Input).value.strip()
+        self.dismiss(value or None)
 
     @on(Button.Pressed, "#edit-cancel")
     def on_cancel(self) -> None:
@@ -168,7 +169,8 @@ class EditFieldScreen(ModalScreen[str]):
 
     @on(Input.Submitted)
     def on_input_submitted(self) -> None:
-        self.dismiss(self.query_one("#edit-input", Input).value)
+        value = self.query_one("#edit-input", Input).value.strip()
+        self.dismiss(value or None)
 
     def action_dismiss_modal(self) -> None:
         self.dismiss(None)

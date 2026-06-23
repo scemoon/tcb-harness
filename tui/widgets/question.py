@@ -247,7 +247,7 @@ class Question(containers.VerticalGroup, can_focus=True):
         self.options = ask.options
         self.selection = 0
         self.selected = False
-        self.refresh(recompose=True, layout=True)
+        self.refresh(recompose=True)
 
     def compose(self) -> ComposeResult:
 

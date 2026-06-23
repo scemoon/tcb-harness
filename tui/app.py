@@ -363,6 +363,7 @@ class A2TUIApp(App, inherit_bindings=False):
         session_id = getattr(conv.agent, "session_id", None) or conv._agent_session_id or ""
         self._exit_metrics = {
             "session_id": session_id,
+            "session_pk": conv._session_pk,
             "tool_call_total": conv._tool_call_total,
             "tool_call_success": conv._tool_call_success,
             "tool_call_failed": conv._tool_call_failed,
@@ -876,11 +877,16 @@ class A2TUIApp(App, inherit_bindings=False):
                             )
                             return
                     if agent_identity:
-                        self.launch_agent(
-                            agent_identity,
-                            agent_session_id=agent_session_id,
-                        )
-                        return
+                        try:
+                            from tui.agents import read_agents
+                            if agent_identity in await read_agents():
+                                self.launch_agent(
+                                    agent_identity,
+                                    agent_session_id=agent_session_id,
+                                )
+                                return
+                        except Exception:
+                            pass
 
             if agent_identity := self._resolve_launch_agent():
                 self.launch_agent(agent_identity, project_path=project_path)
@@ -999,9 +1005,27 @@ class A2TUIApp(App, inherit_bindings=False):
         except Exception:
             pass
         sid = (self._exit_metrics.get("session_id", "") or "")[:36] if self._exit_metrics else ""
+        session_pk = self._exit_metrics.get("session_pk") if self._exit_metrics else None
+        # Format the session ID for display: prefer the short `cdh
+        # session list` form (`session-<pk>` + agent_session_id prefix)
+        # so the displayed value matches what users see in
+        # `cdh session list` and what they pass to `cdh session load`.
+        if session_pk is not None:
+            display_id = f"session-{session_pk} ({sid[:8]})" if sid else f"session-{session_pk}"
+            hint = f"  Reload with: cdh session load {session_pk}\n"
+        elif sid:
+            display_id = sid
+            hint = ""
+        else:
+            display_id = "-"
+            hint = ""
         try:
             with open("/dev/tty", "w") as tty:
-                tty.write(f"\n  CDH powering down. Goodbye!\n  Session ID: {sid or '-'}\n")
+                tty.write(
+                    f"\n  CDH powering down. Goodbye!\n"
+                    f"  Session ID: {display_id}\n"
+                    f"{hint}"
+                )
         except Exception:
             pass
         import os
@@ -1110,6 +1134,17 @@ class A2TUIApp(App, inherit_bindings=False):
         import yaml
 
         result = await self.push_screen_wait("projects")
+        if result is None:
+            cfg = load_config()
+            if cfg.current_project:
+                projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+                pf = projects_dir / f"{cfg.current_project}.yaml"
+                if not pf.exists():
+                    cfg.current_project = None
+                    cfg.current_project_path = None
+                    save_config(cfg)
+                    self.project_dir = None
+                    self.screen.post_message(messages.ProjectDirectoryUpdated())
         if result is not None:
             if result == "__new__":
                 default_path = str((self.project_dir or Path.cwd()).resolve())

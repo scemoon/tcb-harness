@@ -102,7 +102,7 @@ class MainScreen(Screen, can_focus=False):
     column = reactive(False)
     column_width = reactive(80)
     scrollbar = reactive("")
-    project_path: var[Path] = var(Path("./").expanduser().absolute())
+    project_path: var[Path | None] = var(Path("./").expanduser().absolute())
 
     app = getters.app(A2TUIApp)
 
@@ -218,8 +218,37 @@ class MainScreen(Screen, can_focus=False):
 
     @on(messages.ProjectDirectoryUpdated)
     async def on_project_directory_update(self) -> None:
-        self.project_path = self.app.project_dir
+        new_dir = self.app.project_dir
         sidebar = self.query_one(SideBar)
+        if new_dir is None:
+            try:
+                self.project_path = new_dir
+            except Exception:
+                pass
+            sidebar.remove_panel("project-panel")
+            if not sidebar.has_panel("no-project-panel"):
+                await sidebar.add_panel(
+                    SideBar.Panel(
+                        "No Project",
+                        Static(
+                            "[bold]No .cdh project[/]\n\nClick to initialize .cdh in this directory",
+                            id="init-cdh-hint",
+                        ),
+                        id="no-project-panel",
+                    ),
+                )
+            if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
+                mf.refresh_files()
+            self._swap_directory_watcher(None)
+            return
+        if self.project_path == new_dir and sidebar.has_panel("project-panel"):
+            if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
+                mf.refresh_files()
+            return
+        try:
+            self.project_path = new_dir
+        except Exception:
+            pass
         cdh_dir = CdhProjectLoader.find_cdh_dir(self.project_path)
         if cdh_dir is not None:
             sidebar.remove_panel("no-project-panel")
@@ -257,6 +286,20 @@ class MainScreen(Screen, can_focus=False):
                 )
         if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
             mf.refresh_files()
+        self._swap_directory_watcher(new_dir if cdh_dir is not None else None)
+
+    def _swap_directory_watcher(self, project_path: Path | None) -> None:
+        try:
+            self.conversation.directory_watcher_swap(project_path)
+        except Exception:
+            pass
+
+    def _has_project_panel(self) -> bool:
+        try:
+            sidebar = self.query_one(SideBar)
+        except Exception:
+            return False
+        return sidebar.has_panel("project-panel")
 
     @on(Click, "#init-cdh-hint")
     def on_init_cdh_click(self) -> None:
@@ -289,8 +332,12 @@ class MainScreen(Screen, can_focus=False):
             self.notify(f".cdh already exists at {existing}", severity="warning")
             return
         name = target.name
-        from cdh.scaffold import scaffold_dlc_project
-        scaffold_dlc_project(target, name)
+        from cdh.scaffold import init_dlc_project
+        try:
+            init_dlc_project(target, name)
+        except (ValueError, RuntimeError) as e:
+            self.notify(str(e), severity="error")
+            return
         CdhProjectLoader.init_project(target, name)
         self.notify(f"Initialized .cdh in {target}")
         self.post_message(messages.ProjectDirectoryUpdated())

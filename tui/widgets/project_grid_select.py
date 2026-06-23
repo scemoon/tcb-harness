@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import yaml
 from textual.app import ComposeResult
 from textual import getters
 
@@ -7,6 +8,24 @@ from tui.app import A2TUIApp
 from tui.widgets.grid_select import GridSelect
 from tui.widgets.project_summary import ProjectSummary
 from onecode.config import CLOUD_DEV_HARNESS_DIR
+
+
+def _read_project_path(pf: Path) -> str:
+    """Return the project directory path stored in ``pf``, or the
+    yaml/json file path as a fallback."""
+    try:
+        if pf.suffix == ".json":
+            import json
+
+            data = json.loads(pf.read_text(encoding="utf-8")) or {}
+        else:
+            data = yaml.safe_load(pf.read_text(encoding="utf-8")) or {}
+        path = data.get("path")
+        if isinstance(path, str) and path:
+            return path
+    except Exception:
+        pass
+    return str(pf)
 
 
 class ProjectGridSelect(GridSelect):
@@ -32,4 +51,7 @@ class ProjectGridSelect(GridSelect):
         projects_dir.mkdir(parents=True, exist_ok=True)
         project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
         for pf in sorted(project_files):
-            yield ProjectSummary(pf.stem, str(pf), id=pf.stem)
+            yield ProjectSummary(pf.stem, _read_project_path(pf), id=pf.stem)
+
+    def refresh(self, **kwargs) -> None:
+        super().refresh(**kwargs)

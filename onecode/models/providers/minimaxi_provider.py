@@ -16,7 +16,7 @@ from onecode.models.provider import ChatResponse, Message, ModelResponse, Provid
 
 logger = logging.getLogger("onecode.provider.minimaxi")
 
-LOG_DIR = Path.home() / ".onecode" / "logs"
+LOG_DIR = Path.home() / ".cdh" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -111,12 +111,27 @@ class MiniMaxiProvider(Provider):
         self._endpoint = endpoint or "https://api.minimaxi.com/v1"
         self._request_count = 0
 
+    def _pick_default_model(self, requested: str) -> str:
+        """Resolve the effective default model.
+
+        ``cn-cp-`` prefixed keys belong to the ``minimax-cn-coding-plan``
+        tier and must use ``MiniMax-M3``.  Any other key keeps the
+        requested model (or the historical ``MiniMax-M2.7`` fallback).
+        """
+        if requested and requested != "MiniMax-M2.7":
+            return requested
+        key = (self.api_key or "").strip()
+        if key.startswith("cn-cp-"):
+            return "MiniMax-M3"
+        return requested or "MiniMax-M2.7"
+
     def is_anthropic_style(self) -> bool:
         return False
 
     async def chat(
-        self, messages: list[Message], model: str = "MiniMax-M2.7", **kwargs
+        self, messages: list[Message], model: str = "", **kwargs
     ) -> ModelResponse:
+        model = self._pick_default_model(model)
         self._request_count += 1
         req_id = f"req_{self._request_count}_{int(time.time())}"
         logger.info(f"[{req_id}] chat() called with model={model}, messages={len(messages)}")
@@ -133,17 +148,27 @@ class MiniMaxiProvider(Provider):
         try:
             async with httpx.AsyncClient(timeout=120) as client:
                 logger.info(f"[{req_id}] Sending request to {self._endpoint}/chat/completions")
+                outgoing_payload = {
+                    "model": model,
+                    "messages": self.prepare_messages(messages),
+                    **kwargs,
+                }
+                # Debug-only: log the post-`prepare_messages` wire payload
+                # so we can see exactly which messages reach the gateway
+                # when the upstream returns (2013) or any other 400.
+                # Disabled at INFO/WARN — set log_level: debug to enable.
+                logger.debug(
+                    "[%s] OUTGOING PAYLOAD (chat):\n%s",
+                    req_id,
+                    json.dumps(outgoing_payload, ensure_ascii=False, indent=2),
+                )
                 resp = await client.post(
                     f"{self._endpoint}/chat/completions",
                     headers={
                         "Authorization": f"Bearer {key}",
                         "content-type": "application/json",
                     },
-                    json={
-                        "model": model,
-                        "messages": self.prepare_messages(messages),
-                        **kwargs,
-                    },
+                    json=outgoing_payload,
                 )
                 elapsed = time.time() - start_time
                 logger.info(f"[{req_id}] Response status: {resp.status_code}, elapsed: {elapsed:.2f}s")
@@ -152,10 +177,14 @@ class MiniMaxiProvider(Provider):
                     error_text = resp.text
                     logger.error(f"[{req_id}] Non-2xx HTTP {resp.status_code}: {error_text[:500]}")
                     _log_request(model, messages, error=f"HTTP {resp.status_code}: {error_text[:500]}")
-                    raise Provider.classify_http_error(
+                    classified = Provider.classify_http_error(
                         resp.status_code, error_text,
                         retry_after=retry_after_seconds(resp),
                     )
+                    body_excerpt = (error_text or "").strip()[:200]
+                    if body_excerpt and classified.__class__.__name__ == "ProviderError":
+                        classified.args = (f"{classified.args[0]}: {body_excerpt}",)
+                    raise classified
 
                 data = resp.json()
                 choice = data.get("choices", [{}])[0]
@@ -209,6 +238,21 @@ class MiniMaxiProvider(Provider):
 
         try:
             async with httpx.AsyncClient(timeout=300) as client:
+                outgoing_payload = {
+                    "model": model,
+                    "messages": self.prepare_messages(messages),
+                    "stream": True,
+                    **kwargs,
+                }
+                # Debug-only: log the post-`prepare_messages` wire payload
+                # so we can see exactly which messages reach the gateway
+                # when the upstream returns (2013) or any other 400.
+                # Disabled at INFO/WARN — set log_level: debug to enable.
+                logger.debug(
+                    "[%s] OUTGOING PAYLOAD (chat_stream_response):\n%s",
+                    req_id,
+                    json.dumps(outgoing_payload, ensure_ascii=False, indent=2),
+                )
                 async with client.stream(
                     "POST",
                     f"{self._endpoint}/chat/completions",
@@ -216,12 +260,7 @@ class MiniMaxiProvider(Provider):
                         "Authorization": f"Bearer {key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": model,
-                        "messages": self.prepare_messages(messages),
-                        "stream": True,
-                        **kwargs,
-                    },
+                    json=outgoing_payload,
                 ) as resp:
                     if resp.status_code >= 400:
                         error_body = (await resp.aread()).decode("utf-8", errors="replace")
@@ -280,8 +319,9 @@ class MiniMaxiProvider(Provider):
         return ChatResponse(content="".join(content_parts), tool_uses=tool_uses)
 
     async def chat_stream(
-        self, messages: list[Message], model: str = "MiniMax-M2.7", **kwargs
+        self, messages: list[Message], model: str = "", **kwargs
     ) -> AsyncIterator[str]:
+        model = self._pick_default_model(model)
         self._request_count += 1
         req_id = f"req_{self._request_count}_{int(time.time())}"
         logger.info(f"[{req_id}] chat_stream() called with model={model}, messages={len(messages)}")
@@ -303,6 +343,17 @@ class MiniMaxiProvider(Provider):
                 logger.info(f"[{req_id}] Sending stream request to {self._endpoint}/chat/completions")
                 logger.info(f"[{req_id}] Request: model={model}, messages_count={len(messages)}")
 
+                outgoing_payload = {
+                    "model": model,
+                    "messages": self.prepare_messages(messages),
+                    "stream": True,
+                }
+                # Debug-only: same wire-payload log as chat() — see comment above.
+                logger.debug(
+                    "[%s] OUTGOING PAYLOAD (chat_stream):\n%s",
+                    req_id,
+                    json.dumps(outgoing_payload, ensure_ascii=False, indent=2),
+                )
                 async with client.stream(
                     "POST",
                     f"{self._endpoint}/chat/completions",
@@ -310,11 +361,7 @@ class MiniMaxiProvider(Provider):
                         "Authorization": f"Bearer {key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": model,
-                        "messages": self.prepare_messages(messages),
-                        "stream": True,
-                    },
+                    json=outgoing_payload,
                 ) as resp:
                     logger.info(f"[{req_id}] Stream response status: {resp.status_code}")
                     if resp.status_code != 200:
@@ -322,10 +369,14 @@ class MiniMaxiProvider(Provider):
                         error_text = error_body.decode("utf-8", errors="replace")
                         logger.error(f"[{req_id}] Stream error HTTP {resp.status_code}: {error_text[:1000]}")
                         _log_request(model, messages, error=f"HTTP {resp.status_code}: {error_text[:500]}")
-                        raise Provider.classify_http_error(
+                        classified = Provider.classify_http_error(
                             resp.status_code, error_text,
                             retry_after=retry_after_seconds(resp),
                         )
+                        body_excerpt = error_text.strip()[:200]
+                        if body_excerpt and classified.__class__.__name__ == "ProviderError":
+                            classified.args = (f"{classified.args[0]}: {body_excerpt}",)
+                        raise classified
 
                     async for line in resp.aiter_lines():
                         if line.startswith("data: ") and line[6:] != "[DONE]":

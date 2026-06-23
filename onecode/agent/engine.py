@@ -684,8 +684,12 @@ class AgentEngine:
         emit a fresh plan event.  Decoupling the callback from the emit
         keeps the public API synchronous and avoids re-entrancy when
         subagents mutate the same TaskManager concurrently.
+
+        Also persists tasks to ``.cdh/tasks.json`` immediately so they
+        survive a crash or Ctrl+C before the next ACP turn boundary.
         """
         self._plan_dirty = True
+        self.save_tasks_to_project()
 
     @property
     def _workspace(self) -> Path:
@@ -1237,7 +1241,7 @@ class AgentEngine:
             # Log the raw model response so developers can verify the
             # model is actually emitting ``<thinking>`` markers (and not
             # bleeding planning prose into the visible answer).  Goes
-            # to the onecode root logger → ~/.onecode/logs/cdh.log when
+            # to the onecode root logger → ~/.cdh/logs/cdh.log when
             # ``setup_logging(DEBUG)`` is in effect.
             logger.debug(
                 "RAW_RESPONSE turn=%d text_len=%d first_200=%r "

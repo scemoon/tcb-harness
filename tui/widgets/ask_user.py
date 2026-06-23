@@ -260,5 +260,5 @@ class AskUserWidget(VerticalGroup):
     def _finish(self, value: str) -> None:
         self._answer = value
         self._done = True
-        self.refresh(recompose=True, layout=True)
+        self.refresh(recompose=True)
         self.post_message(AskUserSubmitted(value, self._tool_id))

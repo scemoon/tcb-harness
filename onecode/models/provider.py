@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -296,6 +297,8 @@ class ModelResponse:
 class Provider(ABC):
     name: str = ""
 
+    _prep_logger = logging.getLogger("onecode.provider.prepare")
+
     @abstractmethod
     async def chat(
         self, messages: list[Message], model: str, **kwargs
@@ -317,22 +320,245 @@ class Provider(ABC):
         return key or ""
 
     def prepare_messages(self, messages: list["Message"]) -> list[dict]:
-        """Prepare messages for API call. Handles tool, tool_use, tool_result blocks properly."""
-        system_parts = []
-        non_system = []
+        """Prepare messages for API call. Handles tool, tool_use, tool_result blocks properly.
+
+        Hardening applied before serialization:
+        1. Drop ``tool`` messages with empty content and no ``tool_call_id``
+           (the OpenAI-compatible API rejects these with HTTP 400).
+        2. Coalesce runs of consecutive identical ``user`` content into one
+           message (some MiniMax gateways reject back-to-back duplicates).
+        3. Cap the combined system-prompt length at 32 KiB, keeping the
+           highest-priority blocks (``AGENT_CONFIG`` → ``REACT_PHASE`` →
+           newest skills) and dropping older skill bodies first.
+        4. Drop ``tool`` messages whose ``tool_call_id`` is not present in
+           the immediately preceding assistant message's ``tool_calls`` —
+           the MiniMax gateway returns ``(2013) tool call result does not
+           follow tool call`` otherwise.
+        5. When a tool message is dropped (empty or orphan), also strip
+           the matching ``tool_call`` entry from the *owning* assistant
+           message — i.e. the assistant that originally emitted that
+           ``tool_call.id``.  Without this, the request still contains
+           an ``assistant.tool_calls`` reference with no following
+           ``tool`` result, which MiniMax rejects with the same (2013)
+           error (``tool call and result not match`` in the stricter
+           validator).  Tracking is per-id, not per-last-assistant, so
+           drops that span multiple turns (e.g. an empty result from
+           turn 1 and a legitimate one from turn 2) are each routed
+           back to the right assistant.
+        """
+        _SYSTEM_CAP_BYTES = 32 * 1024
+        log = Provider._prep_logger
+        dropped_empty_tools = 0
+        dropped_orphan_tools = 0
+        coalesced_user_msgs = 0
+
+        system_parts: list[tuple[str, str]] = []  # (marker, body)
+        non_system: list[dict] = []
 
         for m in messages:
             if m.role == "system":
-                system_parts.append(m.to_api_content())
+                body = m.to_api_content()
+                marker = ""
+                if "<!-- AGENT_CONFIG -->" in body:
+                    marker = "AGENT_CONFIG"
+                elif "<!-- REACT_PHASE -->" in body:
+                    marker = "REACT_PHASE"
+                elif "<!-- SKILL:" in body:
+                    marker = "SKILL"
+                elif "<!-- CDH_PROJECT -->" in body:
+                    marker = "CDH_PROJECT"
+                if body:
+                    system_parts.append((marker, body))
+            elif m.role == "tool":
+                api = m.to_api_dict()
+                has_id = bool(api.get("tool_call_id"))
+                has_content = bool((api.get("content") or "").strip())
+                if not has_id or not has_content:
+                    dropped_empty_tools += 1
+                    log.debug(
+                        "prepare_messages: dropped empty tool message (id=%r content_len=%d)",
+                        api.get("tool_call_id"),
+                        len(api.get("content") or ""),
+                    )
+                    continue
+                non_system.append(api)
             else:
                 non_system.append(m.to_api_dict())
 
-        if len(system_parts) > 1:
-            combined_system = "\n\n".join(system_parts)
-        elif system_parts:
-            combined_system = system_parts[0]
-        else:
-            combined_system = ""
+        coalesced: list[dict] = []
+        for msg in non_system:
+            if (
+                msg.get("role") == "user"
+                and coalesced
+                and coalesced[-1].get("role") == "user"
+                and (msg.get("content") or "") == (coalesced[-1].get("content") or "")
+                and not msg.get("tool_calls")
+                and not coalesced[-1].get("tool_calls")
+            ):
+                coalesced_user_msgs += 1
+                continue
+            coalesced.append(msg)
+        non_system = coalesced
+
+        # First pass: walk messages, drop orphan tool messages, and build
+        # a per-id map of ``tc_id -> owning assistant index`` so we know
+        # exactly which assistant emitted each ``tool_call`` entry.
+        linked: list[dict] = []
+        last_assistant_tc_ids: set[str] = set()
+        # Maps tool_call.id -> index in ``linked`` of the assistant that
+        # currently owns it.  Rebuilt whenever a new assistant message
+        # is appended (matches the same reset semantics as
+        # ``last_assistant_tc_ids``).
+        tc_owner: dict[str, int] = {}
+        for msg in non_system:
+            if msg.get("role") == "tool":
+                tcid = msg.get("tool_call_id") or ""
+                if tcid not in last_assistant_tc_ids:
+                    dropped_orphan_tools += 1
+                    log.debug(
+                        "prepare_messages: dropped orphan tool message "
+                        "(tool_call_id=%r not in preceding assistant.tool_calls)",
+                        tcid,
+                    )
+                    continue
+                linked.append(msg)
+                continue
+            new_index = len(linked)
+            linked.append(msg)
+            if msg.get("role") == "assistant":
+                last_assistant_tc_ids = {
+                    tc.get("id") for tc in (msg.get("tool_calls") or []) if tc.get("id")
+                }
+                for tc in msg.get("tool_calls") or []:
+                    tcid = tc.get("id")
+                    if tcid:
+                        tc_owner[tcid] = new_index
+            else:
+                last_assistant_tc_ids = set()
+        non_system = linked
+
+        # Second pass: any tool_call whose matching tool message was
+        # dropped (empty content caught above, or otherwise missing)
+        # must be removed from the *owning* assistant message — not just
+        # the last assistant.  We do this in two steps:
+        #   1. Walk the full list and collect every tool_call_id that
+        #      appears in any tool message — these are the "seen" ids.
+        #   2. Walk again and, for each assistant message, find any
+        #      tool_call.id that is NOT in the seen set.  Those are
+        #      dangling entries that must be stripped.
+        seen_tool_ids: set[str] = set()
+        for msg in non_system:
+            if msg.get("role") == "tool":
+                tcid = msg.get("tool_call_id") or ""
+                if tcid:
+                    seen_tool_ids.add(tcid)
+
+        dangling: dict[int, set[str]] = {}
+        for msg in non_system:
+            if msg.get("role") != "assistant":
+                continue
+            tcs = msg.get("tool_calls") or []
+            if not tcs:
+                continue
+            for tc in tcs:
+                tcid = tc.get("id") or ""
+                if tcid and tcid not in seen_tool_ids:
+                    owner_idx = tc_owner.get(tcid)
+                    if owner_idx is not None:
+                        dangling.setdefault(owner_idx, set()).add(tcid)
+        # Also strip tool_call entries with an empty id — those can
+        # never be matched to a tool result and would be silently
+        # dangling.  This mirrors the upstream filter in the first-pass
+        # tool tracking (``if tc.get("id")`` / ``if tcid``).
+        for msg in non_system:
+            if msg.get("role") != "assistant":
+                continue
+            tcs = msg.get("tool_calls") or []
+            if not tcs:
+                continue
+            kept = [tc for tc in tcs if tc.get("id")]
+            if len(kept) < len(tcs):
+                log.debug(
+                    "prepare_messages: stripped %d empty-id tool_call entr%s "
+                    "from assistant message",
+                    len(tcs) - len(kept),
+                    "y" if len(tcs) - len(kept) == 1 else "ies",
+                )
+                if kept:
+                    msg["tool_calls"] = kept
+                else:
+                    msg.pop("tool_calls", None)
+
+        # Apply the cleanup: strip dangling tool_call entries.  Empty
+        # ``tool_calls`` lists are removed entirely.
+        if dangling:
+            total_stripped = 0
+            for idx, ids in dangling.items():
+                assistant_msg = non_system[idx]
+                tcs = assistant_msg.get("tool_calls") or []
+                kept = [tc for tc in tcs if (tc.get("id") or "") not in ids]
+                stripped = len(tcs) - len(kept)
+                if stripped:
+                    total_stripped += stripped
+                    log.debug(
+                        "prepare_messages: stripped %d dangling tool_call entr%s "
+                        "from assistant message idx=%d (ids=%r)",
+                        stripped,
+                        "y" if stripped == 1 else "ies",
+                        idx,
+                        sorted(ids),
+                    )
+                    if kept:
+                        assistant_msg["tool_calls"] = kept
+                    else:
+                        assistant_msg.pop("tool_calls", None)
+            if total_stripped:
+                log.info(
+                    "prepare_messages(%s): stripped %d dangling tool_call entr%s across %d assistant message(s)",
+                    self.name or "?",
+                    total_stripped,
+                    "y" if total_stripped == 1 else "ies",
+                    len(dangling),
+                )
+
+        if dropped_empty_tools or dropped_orphan_tools or coalesced_user_msgs:
+            log.info(
+                "prepare_messages(%s): dropped empty_tools=%d orphan_tools=%d "
+                "coalesced_user=%d (input=%d output=%d)",
+                self.name or "?",
+                dropped_empty_tools,
+                dropped_orphan_tools,
+                coalesced_user_msgs,
+                len(messages),
+                len(non_system) + (1 if system_parts else 0),
+            )
+
+        combined_system = ""
+        if system_parts:
+            combined_parts = [body for _, body in system_parts]
+            combined_system = "\n\n".join(combined_parts)
+            if len(combined_system.encode("utf-8")) > _SYSTEM_CAP_BYTES:
+                priority = {"AGENT_CONFIG": 0, "REACT_PHASE": 1, "CDH_PROJECT": 2, "SKILL": 3}
+                ordered = sorted(
+                    range(len(system_parts)),
+                    key=lambda i: (priority.get(system_parts[i][0], 9), -i),
+                )
+                kept_indices: set[int] = set()
+                running = 0
+                for idx in ordered:
+                    marker, body = system_parts[idx]
+                    size = len(body.encode("utf-8")) + 2
+                    if marker == "AGENT_CONFIG":
+                        kept_indices.add(idx)
+                        running = max(running, size)
+                        continue
+                    if running + size <= _SYSTEM_CAP_BYTES:
+                        kept_indices.add(idx)
+                        running += size
+                kept = [body for i, body in enumerate(combined_parts) if i in kept_indices]
+                if not any("<!-- AGENT_CONFIG -->" in b for b in kept) and system_parts:
+                    kept.insert(0, system_parts[0][1])
+                combined_system = "\n\n".join(kept).encode("utf-8")[:_SYSTEM_CAP_BYTES].decode("utf-8", errors="ignore")
 
         if combined_system:
             non_system.insert(0, {"role": "system", "content": combined_system})
@@ -412,6 +638,7 @@ class Provider(ABC):
             TransientProviderError,
         )
         snippet = (body or "").strip()
+        body_excerpt = snippet[:200] if snippet else ""
         if status_code == 429:
             return RateLimitError(
                 "rate limit exceeded", status_code=status_code,
@@ -426,11 +653,13 @@ class Provider(ABC):
                 "context length exceeded", status_code=status_code, body=snippet,
             )
         if 500 <= status_code < 600:
+            msg = f"upstream {status_code}: {body_excerpt}" if body_excerpt else f"upstream {status_code}"
             return TransientProviderError(
-                f"upstream {status_code}", status_code=status_code, body=snippet,
+                msg, status_code=status_code, body=snippet,
             )
+        msg = f"upstream error {status_code}: {body_excerpt}" if body_excerpt else f"upstream error {status_code}"
         return ProviderError(
-            f"upstream error {status_code}", status_code=status_code, body=snippet,
+            msg, status_code=status_code, body=snippet,
         )
 
 

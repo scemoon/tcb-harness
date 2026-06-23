@@ -404,6 +404,7 @@ class Conversation(containers.Vertical):
 
         self._directory_changed = False
         self._directory_watcher: DirectoryWatcher | None = None
+        self._suppress_directory_changed = False
 
         self._initial_prompt = initial_prompt
 
@@ -559,7 +560,34 @@ class Conversation(containers.Vertical):
     @on(DirectoryChanged)
     def on_directory_changed(self, event: DirectoryChanged) -> None:
         event.stop()
+        self._directory_changed = True
+        if self._suppress_directory_changed:
+            return
+        self._suppress_directory_changed = True
         self.post_message(messages.ProjectDirectoryUpdated())
+        self.set_timer(0.5, self._release_directory_changed_suppress)
+
+    def _release_directory_changed_suppress(self) -> None:
+        self._suppress_directory_changed = False
+
+    def directory_watcher_swap(self, project_path: Path) -> None:
+        """Stop the current DirectoryWatcher (if any) and start a new one
+        rooted at *project_path*.
+
+        Used by ``MainScreen`` when the user switches projects so we don't
+        keep receiving events for the old tree.
+        """
+        if self._directory_watcher is not None:
+            self._directory_watcher.stop()
+            self._directory_watcher = None
+        if project_path is None:
+            return
+        try:
+            watcher = DirectoryWatcher(project_path, self)
+        except Exception:
+            return
+        watcher.start()
+        self._directory_watcher = watcher
 
     @on(Terminal.Finalized)
     def on_terminal_finalized(self, event: Terminal.Finalized) -> None:
@@ -1929,7 +1957,7 @@ class Conversation(containers.Vertical):
         self.cursor_offset = -1
         self.cursor.visible = False
         self.cursor.follow(None)
-        contents.refresh(layout=True)
+        contents.refresh()
 
         if prune_children:
             await contents.remove_children(prune_children)

@@ -172,6 +172,29 @@ class DB:
         except aiosqlite.Error:
             return False
 
+    async def session_get_by_agent_session_id(self, agent_session_id: str) -> Session | None:
+        """Get a session from its agent_session_id.
+
+        Args:
+            agent_session_id: The agent's session id (UUID).
+
+        Returns:
+            A Session if one is found, or `None`.
+        """
+        try:
+            async with self.open() as db:
+                db.row_factory = aiosqlite.Row
+                cursor = await db.execute(
+                    "SELECT * from sessions WHERE agent_session_id = ?",
+                    (agent_session_id,),
+                )
+                row = await cursor.fetchone()
+        except aiosqlite.Error:
+            return None
+        if row is None:
+            return None
+        return cast(Session, dict(row))
+
     async def session_get_recent(self, max_results: int = 100) -> list[Session] | None:
         """Get the most recent sessions."""
         try:

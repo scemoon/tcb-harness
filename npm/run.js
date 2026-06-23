@@ -34,7 +34,7 @@ function checkCdhInstalled(pythonCmd) {
 
 function run(pythonModule) {
   const PKG_DIR = __dirname;
-  const PYTHON_ENV_DIR = path.join(require('os').homedir(), '.onecode', 'python');
+  const PYTHON_ENV_DIR = path.join(require('os').homedir(), '.cdh', 'python');
 
   const args = process.argv.slice(2);
   if (args.includes('--version') || args.includes('-v')) {
@@ -59,7 +59,7 @@ function run(pythonModule) {
         process.exit(1);
       }
       if (isPostinstall) {
-        console.log('cdh: Installed. Add to PATH: export PATH="$HOME/.onecode/python/bin:$PATH"');
+        console.log('cdh: Installed. Add to PATH: export PATH="$HOME/.cdh/python/bin:$PATH"');
         process.exit(0);
       }
       spawn(venvPython, ['-m', pythonModule, ...process.argv.slice(2)], { stdio: 'inherit' })

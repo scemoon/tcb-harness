@@ -53,3 +53,9 @@ def session_prompt(
 def session_set_mode(sessionId: str, modeId: str) -> protocol.SetSessionModeResponse:
     """https://agentclientprotocol.com/protocol/session-modes#from-the-client"""
     ...
+
+
+@API.method(name="session/save")
+def session_save(sessionId: str) -> dict:
+    """Save the session state."""
+    ...

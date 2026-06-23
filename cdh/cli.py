@@ -23,14 +23,12 @@ _CDH_DIR = Path.home() / ".cdh"
 _COMMON_HELP = """
 \b
 Usage:
-  cdh                         Launch TUI (agent store)
-  cdh tui                     Launch TUI (agent store)
-  cdh tui --agent cdh.cloud-dev-harness   Launch TUI with agent
-  cdh help                    Show this help message
-  cdh config                  Configuration editor (TUI)
-  cdh logs                    View application logs
-  cdh project                 Project management
-  cdh version                 Show version information
+  cdh                              Launch TUI (agent store)
+  cdh tui                          Launch TUI (agent store)
+  cdh onecode <sub>                onecode CLI surface (config / codebase / skill / mcp / help)
+  cdh project                      Project management
+  cdh session list|load            Session management
+  cdh version                      Show version information
 
 \b
 Paths:
@@ -54,8 +52,11 @@ def cli(ctx):
     CDH (Cloud Dev Harness) is an AI agent framework with LLM provider
     integration, session management, and a Textual-based TUI.
 
-    Run without arguments to open the agent store. Use cdh tui --agent
-    <identity> to launch a specific agent directly.
+    Run without arguments to open the agent store, where you can pick
+    a launcher agent.
+
+    All onecode-specific commands live under `cdh onecode <sub>` — e.g.
+    `cdh onecode config`, `cdh onecode codebase`, `cdh onecode skill`.
     """
     if ctx.invoked_subcommand is None:
         ensure_dirs()
@@ -65,55 +66,214 @@ def cli(ctx):
         A2TUIApp().run()
 
 
-# --- config group ---
+# --- onecode sub-namespace ---
+#
+# `cdh onecode <sub>` exposes the onecode CLI surface under the cdh
+# namespace. The onecode group owns the canonical subcommands
+# (config / codebase / skill / mcp / help); running
+# `cdh onecode config` with no subcommand opens the same interactive
+# TUI editor as before, while `cdh onecode config <sub>` dispatches
+# straight to the onecode implementation.
 
 @cli.group(
+    "onecode",
     invoke_without_command=True,
-    short_help="Open configuration editor",
+    short_help="onecode CLI surface (config / codebase / skill / mcp / help)",
 )
 @click.pass_context
-def config(ctx):
-    """Open the interactive TUI configuration editor.
+def onecode_group(ctx):
+    """The onecode command surface.
 
-    Launches a Textual-based UI for editing all CDH settings
-    including providers, models, cloud platforms, agent parameters.
+    onecode is the agent framework that powers the TUI. This group
+    exposes its full CLI: configuration, codebase indexing, skills,
+    MCP servers, and help.
+
+    \b
+    Sub-commands:
+      config       Manage onecode configuration (mode, model, provider, log-level, list)
+      codebase     Build, search, and inspect the onecode codebase index
+      skill        Install, enable, disable, or remove onecode skills
+      mcp          Configure MCP servers that onecode connects to at runtime
+      help         Print the onecode help screen
+      version      Print the onecode version string
+
+    \b
+    Examples:
+      cdh onecode config                  Open the onecode configuration editor
+      cdh onecode config model get        Show the current default model
+      cdh onecode config list             Dump the full YAML configuration
+      cdh onecode config provider set openai
+      cdh onecode codebase index          Build the onecode codebase index
+      cdh onecode codebase search "auth flow"
+      cdh onecode skill list              List installed onecode skills
+      cdh onecode skill add my-skill      Scaffold a new onecode skill
+      cdh onecode mcp list                List onecode MCP servers
+      cdh onecode mcp add my-server https://example.com/mcp
+    """
+    if ctx.invoked_subcommand is None:
+        # No subcommand: show the onecode help screen (matches
+        # `onecode --help` so the user can browse what's available).
+        click.echo(onecode_cli.get_help(click.Context(onecode_cli)))
+
+
+# Mount every onecode top-level command (codebase / skill / mcp /
+# help / version) under `cdh onecode <sub>`.  We deliberately skip
+# `config` because the onecode CLI's bare `onecode config` only prints
+# `--help`; the user-facing behaviour for `cdh onecode config` is to
+# open the TUI editor, so we install our own config sub-group below.
+_ONECODE_SKIP_AS_CDH_ONECODE = {"tui", "config"}
+for _cmd_name in onecode_cli.commands:
+    if _cmd_name in _ONECODE_SKIP_AS_CDH_ONECODE:
+        continue
+    _cmd = onecode_cli.get_command(None, _cmd_name)
+    if _cmd is not None and _cmd_name not in onecode_group.commands:
+        onecode_group.add_command(_cmd)
+
+
+# Override the onecode CLI's CDH-flavoured help text so users see
+# onecode-centric descriptions when they run `cdh onecode --help` or
+# `cdh help onecode`.  The onecode CLI itself still ships its own copy
+# (used by `onecode --help`); we don't mutate it.
+
+_ONECODE_HELP_OVERRIDES: dict[str, tuple[str, str]] = {
+    "config": (
+        "Open the onecode configuration editor",
+        "Manage onecode configuration: agent mode, default model, LLM "
+        "provider, log level, skills, MCP servers. With no subcommand, "
+        "launches the interactive Textual editor.",
+    ),
+    "codebase": (
+        "Manage the onecode codebase index",
+        "Build and query onecode's local codebase index. Used by the "
+        "agent to ground answers in the project's own source files. "
+        "Sub-commands: index, reindex, status, search.",
+    ),
+    "skill": (
+        "Manage onecode skills",
+        "Install, enable, disable, or remove onecode skills. Skills are "
+        "reusable instruction sets the agent loads on demand to extend "
+        "its behaviour. Sub-commands: list, add, remove, enable, disable.",
+    ),
+    "mcp": (
+        "Manage onecode MCP servers",
+        "Configure Model Context Protocol servers that onecode connects "
+        "to at runtime to expose additional tools and resources. "
+        "Sub-commands: list, add, remove, enable, disable.",
+    ),
+    "help": (
+        "Show onecode CLI help",
+        "Print the onecode CLI help screen with every available command.",
+    ),
+    "version": (
+        "Show onecode version",
+        "Print the onecode version string.",
+    ),
+}
+
+for _cmd_name, (_sh, _doc) in _ONECODE_HELP_OVERRIDES.items():
+    _mounted = onecode_group.commands.get(_cmd_name)
+    if _mounted is not None:
+        _mounted.short_help = _sh
+        _mounted.help = _doc
+
+
+# `cdh onecode config` — wrapper around `onecode config` that opens the
+# interactive TUI editor when invoked with no subcommand, and forwards
+# every subcommand (mode / model / provider / skill / mcp / log-level /
+# list) verbatim to onecode.
+
+@onecode_group.group(
+    "config",
+    invoke_without_command=True,
+    short_help="Open the onecode configuration editor (or run `cdh onecode config <sub>`)",
+)
+@click.pass_context
+def onecode_config(ctx):
+    """Open the onecode configuration editor.
+
+    With a subcommand, get or set the corresponding onecode setting
+    directly from the shell. With no subcommand, launch the interactive
+    Textual editor for all onecode settings.
+
+    \b
+    Sub-commands:
+      mode         Get or set onecode's default agent mode (build / plan / solo)
+      model        Get or set onecode's default LLM model
+      provider     Get or set onecode's default LLM provider
+      log-level    Get or set onecode's root logger verbosity
+      skill        Manage onecode skills (alias for `cdh onecode skill`)
+      mcp          Manage onecode MCP servers (alias for `cdh onecode mcp`)
+      list         Dump the full onecode YAML configuration
+
+    \b
+    Examples:
+      cdh onecode config                  Open the interactive editor
+      cdh onecode config model get        Show the current default model
+      cdh onecode config provider set openai
+      cdh onecode config list             Dump the full YAML configuration
     """
     if ctx.invoked_subcommand is None:
         from onecode.config_screen import main as config_main
         config_main()
 
 
-# Reuse subcommands from onecode's config group (mode, model, provider, cloud, log-level, skill, mcp, list)
-for _cfg_cmd in onecode_cli.get_command(None, "config").commands.values():
-    if _cfg_cmd.name not in config.commands and _cfg_cmd.name not in ("tui",):
-        config.add_command(_cfg_cmd)
+_onecode_config_group = onecode_cli.get_command(None, "config")
+if _onecode_config_group is not None:
+    for _cfg_cmd in _onecode_config_group.commands.values():
+        if _cfg_cmd.name not in onecode_config.commands and _cfg_cmd.name != "tui":
+            onecode_config.add_command(_cfg_cmd)
+            # Override the sub-command help to be onecode-centric, not
+            # CDH-centric, since users reach these via
+            # `cdh onecode config <sub>`.
+            _sub_overrides = {
+                "mode": (
+                    "Manage onecode agent mode",
+                    "Get or set onecode's default agent mode "
+                    "(build / plan / solo).",
+                ),
+                "model": (
+                    "Manage onecode's default LLM model",
+                    "Get or set the default LLM model onecode uses when "
+                    "starting a new agent session.",
+                ),
+                "provider": (
+                    "Manage onecode's default LLM provider",
+                    "Get or set the default LLM provider onecode routes "
+                    "chat-completions requests to.",
+                ),
+                "log-level": (
+                    "Manage onecode log level",
+                    "Get or set onecode's root logger verbosity "
+                    "(debug / info / warn / error).",
+                ),
+                "skill": (
+                    "Manage onecode skills (alias for `cdh onecode skill`)",
+                    "Same skill-management surface as `cdh onecode skill`.",
+                ),
+                "mcp": (
+                    "Manage onecode MCP servers (alias for `cdh onecode mcp`)",
+                    "Same MCP server surface as `cdh onecode mcp`.",
+                ),
+                "list": (
+                    "Show onecode's full YAML configuration",
+                    "Print every onecode setting currently in effect, "
+                    "as YAML.",
+                ),
+            }
+            if _cfg_cmd.name in _sub_overrides:
+                _sh, _doc = _sub_overrides[_cfg_cmd.name]
+                _cfg_cmd.short_help = _sh
+                _cfg_cmd.help = _doc
 
 
-# --- logs command ---
-
-@cli.command(short_help="View application logs")
-@click.option("--tail", "-t", default=20, help="Number of recent log lines to show")
-@click.option("--follow", "-f", is_flag=True, help="Follow log output")
-def logs(tail, follow):
-    """View CDH application logs.
-
-    \b
-    Examples:
-      cdh logs              Show last 20 log lines
-      cdh logs --tail 100   Show last 100 lines
-      cdh logs --follow     Follow log output
-    """
-    log_file = _CDH_DIR / "logs" / "cdh.log"
-    if not log_file.exists():
-        click.echo("No log file found.")
-        return
-    if follow:
-        click.echo(f"Following {log_file}...")
-        import subprocess
-        subprocess.run(["tail", "-f", str(log_file)])
-    else:
-        import subprocess
-        subprocess.run(["tail", "-n", str(tail), str(log_file)])
+# --- (removed) backward-compatible aliases ---
+#
+# Earlier versions exposed `cdh config` and `cdh codebase` at the top
+# level. Those aliases were removed — use `cdh onecode config` and
+# `cdh onecode codebase` instead. The behaviour is identical:
+# - `cdh onecode config` (no subcommand) opens the same TUI editor.
+# - `cdh onecode config <sub>` is the same as the old `cdh config <sub>`.
+# - `cdh onecode codebase <sub>` is the same as the old `cdh codebase <sub>`.
 
 
 # --- project command ---
@@ -338,6 +498,10 @@ def project(action, name, path, components, component_id, cross_id):
             click.echo("Project name is required.")
             raise click.Abort()
         ws = Path(path).expanduser().resolve()
+        project_file = projects_dir / f"{name}.yaml"
+        if project_file.exists():
+            click.echo(f"Error: project '{name}' already exists in the project list.")
+            raise click.Abort()
         if components is not None:
             selected_components = _resolve_components_flag(components)
         else:
@@ -346,12 +510,11 @@ def project(action, name, path, components, component_id, cross_id):
             )
         try:
             scaffold_dlc_project(ws, name, components=selected_components)
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
             click.echo(f"Error: {e}")
             raise click.Abort()
         CdhProjectLoader.init_project(ws, name)
         proj_data = {"name": name, "path": str(ws), "description": ""}
-        project_file = projects_dir / f"{name}.yaml"
         project_file.write_text(yaml.dump(proj_data))
         cfg = load_config()
         cfg.current_project = name
@@ -367,6 +530,10 @@ def project(action, name, path, components, component_id, cross_id):
         from onecode.agent.cdh_loader import CdhProjectLoader
         target = Path(name or ".").expanduser().resolve()
         project_name = target.name
+        proj_file = projects_dir / f"{project_name}.yaml"
+        if proj_file.exists():
+            click.echo(f"Error: project '{project_name}' already exists in the project list.")
+            raise click.Abort()
         if components is not None:
             selected_components = _resolve_components_flag(components)
         else:
@@ -375,14 +542,17 @@ def project(action, name, path, components, component_id, cross_id):
             )
         try:
             init_dlc_project(target, project_name)
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
             click.echo(f"Error: {e}")
             raise click.Abort()
         for cid in selected_components:
-            add_component(target, cid)
+            try:
+                add_component(target, cid)
+            except (ValueError, FileNotFoundError) as e:
+                click.echo(f"Error: {e}")
         CdhProjectLoader.init_project(target, project_name)
         proj_data = {"name": project_name, "path": str(target), "description": ""}
-        (projects_dir / f"{project_name}.yaml").write_text(yaml.dump(proj_data))
+        proj_file.write_text(yaml.dump(proj_data))
         suffix = (
             f" (components: {', '.join(selected_components)})"
             if selected_components
@@ -513,13 +683,12 @@ def session(action, session_id):
 
 @cli.command(short_help="Launch the TUI")
 @click.option("--project-dir", "-d", default=".", help="Project directory")
-@click.option("--agent", "agent_identity", default=None, help="Agent identity to auto-launch (e.g. cdh.cloud-dev-harness)")
 @click.pass_context
-def tui(ctx, project_dir, agent_identity):
+def tui(ctx, project_dir):
     """Launch the CDH TUI (Textual User Interface).
 
     By default opens the agent store, showing your configured launcher
-    agents. Use --agent to skip the store and directly launch an agent.
+    agents. Pick an agent from the store to launch it.
     """
     ensure_dirs()
     cfg = load_config()
@@ -528,10 +697,7 @@ def tui(ctx, project_dir, agent_identity):
     ws = Path(project_dir).expanduser().resolve()
 
     from tui.app import A2TUIApp
-    app = A2TUIApp(
-        project_dir=str(ws),
-        launch_agent_identity=agent_identity,
-    )
+    app = A2TUIApp(project_dir=str(ws))
     app.run()
 
 
@@ -544,9 +710,9 @@ def help_cmd(command):
 
     \b
     Examples:
-      cdh help          Show top-level help
-      cdh help config   Show config subcommand help
-      cdh help logs     Show logs command help
+      cdh help                       Show top-level help
+      cdh help onecode               Show `cdh onecode` sub-commands
+      cdh help onecode config        Show config sub-commands
     """
     if command:
         cmd = cli.commands.get(command)
@@ -567,12 +733,10 @@ def version():
     click.echo(f"cdh version {__version__}")
 
 
-# Attach remaining onecode subcommands selectively
-_skip = {"config", "init", "set", "list", "tui", "help", "version", "mcp"}
-for cmd_name in onecode_cli.commands:
-    if cmd_name in _skip:
-        continue
-    cli.add_command(onecode_cli.get_command(None, cmd_name))
+# All onecode subcommands are reachable through `cdh onecode <sub>`
+# (see the onecode_group defined above). The cdh top-level command
+# surface is intentionally limited to: tui, onecode, project, session,
+# help, and version.
 
 
 def main():

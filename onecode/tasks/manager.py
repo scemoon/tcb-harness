@@ -53,7 +53,7 @@ class TaskManager:
         self._tasks: dict[str, TaskRecord] = {}
         self._queue: asyncio.Queue[ExecutionTask] = asyncio.Queue()
         self._running: dict[str, asyncio.Task] = {}
-        self._storage_path = storage_path or Path.home() / ".onecode" / "tasks"
+        self._storage_path = storage_path or Path.home() / ".cdh" / "tasks"
         self._executor: Optional[TaskExecutor] = None
         self._worker_task: Optional[asyncio.Task] = None
 

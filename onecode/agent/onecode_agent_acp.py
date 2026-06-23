@@ -1966,6 +1966,15 @@ class CDHACPAdapter:
             "output_tokens": total_out,
         }
 
+    async def session_save(self, session_id: str, _meta: dict):
+        """Save current session state."""
+        if self.agent:
+            try:
+                self.agent.save_session()
+            except Exception:
+                debug_log("Failed to save session on save", exc_info=True)
+        return {}
+
     async def session_cancel(self, session_id: str, _meta: dict):
         """Cancel current session."""
         if self.agent:

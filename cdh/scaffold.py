@@ -395,11 +395,17 @@ def init_dlc_project(
     .gitignore, and CHANGELOG.md. The user is expected to add components
     and cross-cutting items later via add_component / add_cross_cutting.
 
-    Returns True if scaffolding was performed, False if ai-dlc-skill
-    is not available and the project was left untouched.
+    Returns True if scaffolding was performed.
+
+    Raises RuntimeError if ai-dlc-skill is not available — the directory
+    is left untouched in that case so callers don't end up with a
+    half-initialized project (.cdh/ written but no project.yaml).
     """
     if not _detect_dlc_skill(workspace_root):
-        return False
+        raise RuntimeError(
+            "ai-dlc-skill is not available; install it before "
+            "initializing a cdh project."
+        )
 
     root = workspace_root.resolve()
     _write_project_yaml(

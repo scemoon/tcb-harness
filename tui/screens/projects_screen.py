@@ -2,7 +2,6 @@ from time import monotonic
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.events import ScreenResume
 from textual.screen import ModalScreen
 from textual import getters
 from textual.widget import Widget
@@ -24,6 +23,19 @@ CONFIRM_TIMEOUT = 5.0
 INSTRUCTIONS_NO_PROJECTS = "Your projects will be shown here."
 
 
+def _project_db_path(name: str):
+    """Return the path of the project entry in ``~/.cdh/projects/``
+    for *name* across all supported extensions, or ``None`` if the
+    project is not registered yet.
+    """
+    projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+    for ext in ("yaml", "yml", "json"):
+        pf = projects_dir / f"{name}.{ext}"
+        if pf.exists():
+            return pf
+    return None
+
+
 class ProjectsScreen(ModalScreen[str]):
     CSS_PATH = "projects.tcss"
     BINDINGS = [
@@ -42,7 +54,7 @@ class ProjectsScreen(ModalScreen[str]):
             yield widgets.Label("Projects")
         yield widgets.Static(INSTRUCTIONS_NO_PROJECTS, classes="instructions")
         yield ProjectGridSelect()
-        with containers.Center():
+        with containers.Horizontal(id="actions"):
             yield widgets.Button("+ New Project", id="new-project", variant="primary")
             yield widgets.Button("Init .cdh (i)", id="init-project")
         yield widgets.Footer()
@@ -109,6 +121,12 @@ class ProjectsScreen(ModalScreen[str]):
         except Exception:
             self.notify("Invalid path", severity="error")
             return
+        if _project_db_path(target.name) is not None:
+            self.notify(
+                f"Project '{target.name}' is already in the project list",
+                severity="warning",
+            )
+            return
         self.app.push_screen(
             ComponentPickerScreen(
                 title="New Project — Select Components",
@@ -118,33 +136,50 @@ class ProjectsScreen(ModalScreen[str]):
                 ),
                 allow_empty=False,
             ),
-            lambda picked: self._do_new_project(target, picked),
+            lambda picked: self._on_new_project_components(target, picked),
         )
+
+    def _on_new_project_components(
+        self,
+        target: "Path",
+        picked: list[str] | None,
+    ) -> None:
+        if picked is None:
+            self.notify("New project cancelled", severity="warning")
+            return
+        if not picked:
+            return
+        self._do_new_project(target, picked)
 
     def _do_new_project(
         self,
         target: "Path",
-        components: list[str] | None,
+        components: list[str],
     ) -> None:
         from pathlib import Path
         from onecode.agent.cdh_loader import CdhProjectLoader
 
-        if not components:
-            return
         name = target.name
         from cdh.scaffold import scaffold_dlc_project
 
         try:
             scaffold_dlc_project(target, name, components=components)
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
             self.notify(str(e), severity="error")
             return
-        CdhProjectLoader.init_project(target, name)
-        import yaml
+        if _project_db_path(name) is not None:
+            self.notify(
+                f"Project '{name}' is already in the project list",
+                severity="error",
+            )
+            return
         projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
         projects_dir.mkdir(parents=True, exist_ok=True)
+        proj_file = projects_dir / f"{name}.yaml"
+        CdhProjectLoader.init_project(target, name)
+        import yaml
         proj_data = {"name": name, "path": str(target), "description": ""}
-        (projects_dir / f"{name}.yaml").write_text(yaml.dump(proj_data))
+        proj_file.write_text(yaml.dump(proj_data))
         widget = ProjectSummary(name, str(target), id=name)
         self.project_grid_select.mount(widget)
         self.project_grid_select.highlighted = len(self.project_grid_select.children) - 1
@@ -181,6 +216,12 @@ class ProjectsScreen(ModalScreen[str]):
         if existing is not None and existing.parent == target:
             self.notify(f".cdh already exists at {existing}", severity="warning")
             return
+        if _project_db_path(target.name) is not None:
+            self.notify(
+                f"Project '{target.name}' is already in the project list",
+                severity="warning",
+            )
+            return
         self.app.push_screen(
             ComponentPickerScreen(
                 title="Init .cdh — Select Components",
@@ -191,35 +232,52 @@ class ProjectsScreen(ModalScreen[str]):
                 ),
                 allow_empty=True,
             ),
-            lambda picked: self._do_init_project(target, picked),
+            lambda picked: self._on_init_components(target, picked),
         )
+
+    def _on_init_components(
+        self,
+        target: "Path",
+        picked: list[str] | None,
+    ) -> None:
+        if picked is None:
+            self.notify("Init cancelled", severity="warning")
+            return
+        self._do_init_project(target, picked)
 
     def _do_init_project(
         self,
         target: "Path",
-        components: list[str] | None,
+        components: list[str],
     ) -> None:
         from pathlib import Path
         from onecode.agent.cdh_loader import CdhProjectLoader
         from cdh.scaffold import add_component, init_dlc_project
 
         name = target.name
+        if _project_db_path(name) is not None:
+            self.notify(
+                f"Project '{name}' is already in the project list",
+                severity="error",
+            )
+            return
         try:
             init_dlc_project(target, name)
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
             self.notify(str(e), severity="error")
             return
-        for cid in components or []:
+        for cid in components:
             try:
                 add_component(target, cid)
-            except ValueError as e:
+            except (ValueError, FileNotFoundError) as e:
                 self.notify(str(e), severity="error")
         CdhProjectLoader.init_project(target, name)
         import yaml
         projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
         projects_dir.mkdir(parents=True, exist_ok=True)
+        proj_file = projects_dir / f"{name}.yaml"
         proj_data = {"name": name, "path": str(target), "description": ""}
-        (projects_dir / f"{name}.yaml").write_text(yaml.dump(proj_data))
+        proj_file.write_text(yaml.dump(proj_data))
         widget = ProjectSummary(name, str(target), id=name)
         self.project_grid_select.mount(widget)
         self.project_grid_select.highlighted = len(self.project_grid_select.children) - 1
