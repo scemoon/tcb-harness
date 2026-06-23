@@ -66,7 +66,6 @@ class AgentSession:
         self._data: SessionData = SessionData()
         if session_id:
             self._data.id = session_id
-            self.load()
 
     def _default_storage_path(self) -> Path:
         from onecode.config import CLOUD_DEV_HARNESS_DIR

@@ -118,7 +118,7 @@ class AnthropicProvider(Provider):
         **kwargs,
     ) -> ChatResponse:
         from onecode.models.errors import (
-            ProviderError, TransientProviderError, retry_after_seconds,
+            ProviderError, TransientProviderError, retry_after_seconds, safe_error_msg,
         )
         key = self.resolve_api_key(self.api_key)
         if not key:
@@ -198,6 +198,8 @@ class AnthropicProvider(Provider):
                                         current_tool["input"] = json.loads(current_tool["input_json"])
                                     except (json.JSONDecodeError, TypeError):
                                         current_tool["input"] = {"raw": current_tool["input_json"]}
+                                    if not isinstance(current_tool["input"], dict):
+                                        current_tool["input"] = {"raw": current_tool["input"]}
                                     tool_uses.append({
                                         "id": current_tool["id"],
                                         "name": current_tool["name"],
@@ -212,7 +214,7 @@ class AnthropicProvider(Provider):
         except httpx.ConnectError as e:
             raise TransientProviderError(f"Connection error: {e}") from e
         except Exception as e:
-            raise TransientProviderError(f"Error: {e}") from e
+            raise TransientProviderError(f"Error: {safe_error_msg(e)}") from e
 
         return ChatResponse(
             content="".join(content_parts),

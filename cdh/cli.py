@@ -511,7 +511,7 @@ def project(action, name, path, components, component_id, cross_id):
         try:
             scaffold_dlc_project(ws, name, components=selected_components)
         except (ValueError, RuntimeError) as e:
-            click.echo(f"Error: {e}")
+            click.echo(f"Error: {str(e) or type(e).__name__}")
             raise click.Abort()
         CdhProjectLoader.init_project(ws, name)
         proj_data = {"name": name, "path": str(ws), "description": ""}
@@ -543,13 +543,13 @@ def project(action, name, path, components, component_id, cross_id):
         try:
             init_dlc_project(target, project_name)
         except (ValueError, RuntimeError) as e:
-            click.echo(f"Error: {e}")
+            click.echo(f"Error: {str(e) or type(e).__name__}")
             raise click.Abort()
         for cid in selected_components:
             try:
                 add_component(target, cid)
             except (ValueError, FileNotFoundError) as e:
-                click.echo(f"Error: {e}")
+                click.echo(f"Error: {str(e) or type(e).__name__}")
         CdhProjectLoader.init_project(target, project_name)
         proj_data = {"name": project_name, "path": str(target), "description": ""}
         proj_file.write_text(yaml.dump(proj_data))
@@ -577,7 +577,7 @@ def project(action, name, path, components, component_id, cross_id):
         try:
             added = add_component(ws, component_id)
         except (ValueError, FileNotFoundError) as e:
-            click.echo(f"Error: {e}")
+            click.echo(f"Error: {str(e) or type(e).__name__}")
             raise click.Abort()
         if added:
             click.echo(f"Added component '{component_id}' to '{name}'.")
@@ -601,7 +601,7 @@ def project(action, name, path, components, component_id, cross_id):
         try:
             added = add_cross_cutting(ws, cross_id)
         except (ValueError, FileNotFoundError) as e:
-            click.echo(f"Error: {e}")
+            click.echo(f"Error: {str(e) or type(e).__name__}")
             raise click.Abort()
         if added:
             click.echo(f"Added cross-cutting '{cross_id}' to '{name}'.")

@@ -23,6 +23,16 @@ if TYPE_CHECKING:
     import httpx
 
 
+def safe_error_msg(e: BaseException) -> str:
+    """Return a non-empty error message from an exception.
+
+    Python's ``str(Exception())`` returns ``""``, which leads to
+    confusing ``"Error: "`` messages in the UI.  This helper falls
+    back to the exception type name when the message is empty.
+    """
+    return str(e) or type(e).__name__
+
+
 def retry_after_seconds(resp: "httpx.Response") -> Optional[float]:
     """Parse the ``Retry-After`` header from an HTTP response.
 
@@ -70,7 +80,7 @@ class ProviderError(Exception):
 
     def to_user_message(self) -> str:
         """Build a short, user-friendly message for the TUI."""
-        head = f"Error: {self.args[0]}" if self.args else "Error: provider failure"
+        head = f"Error: {safe_error_msg(self)}" if self.args else "Error: provider failure"
         if self.status_code is not None:
             head += f" (HTTP {self.status_code})"
         if self.retry_after is not None:

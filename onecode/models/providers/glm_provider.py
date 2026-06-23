@@ -5,6 +5,7 @@ from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
+from onecode.models.errors import safe_error_msg
 from onecode.models.provider import ChatResponse, Message, ModelResponse, Provider, ProviderRegistry
 
 
@@ -132,7 +133,7 @@ class GLMProvider(Provider):
                                 if on_tool_call_delta:
                                     on_tool_call_delta(slot.get("id", ""), slot.get("name", ""), args_delta)
         except Exception as e:
-            return ChatResponse(content=f"Error: {e}")
+            return ChatResponse(content=f"Error: {safe_error_msg(e)}")
         tool_uses = []
         for slot in stream_tool_calls.values():
             name = slot.get("name") or ""

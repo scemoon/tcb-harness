@@ -15,6 +15,7 @@ from onecode.agent.permissions_store import PermissionStore
 from onecode.models.provider import ContentBlockType, ProviderRegistry
 
 from onecode.agent.session import AgentSession
+from onecode.models.errors import safe_error_msg
 from onecode.models.messages import StreamEvent, StreamEventType
 
 logger = logging.getLogger("onecode.agent.engine")
@@ -958,7 +959,7 @@ class AgentEngine:
             return {**base, "content": output, "is_error": result.is_error}
         except Exception as e:
             logger.exception(f"Tool execution error: {e}")
-            return {**base, "content": f"Error: {e}", "is_error": True}
+            return {**base, "content": f"Error: {safe_error_msg(e)}", "is_error": True}
 
     def _format_tool_output(self, result: RegistryToolResult) -> str:
         import json
@@ -1203,7 +1204,7 @@ class AgentEngine:
                         turn_usage = model_response.usage
                 except Exception as e:
                     logger.exception(f"Error during chat() fallback turn {turn+1}: {e}")
-                    yield StreamEvent.error(str(e))
+                    yield StreamEvent.error(safe_error_msg(e))
                     break
             except Exception as e:
                 ctx_msgs = len(self.context.messages)
@@ -1213,7 +1214,7 @@ class AgentEngine:
                     f"  provider={provider_name} model={model_name} "
                     f"context_msgs={ctx_msgs} ctx_tokens={ctx_tokens}"
                 )
-                yield StreamEvent.error(f"Provider error (turn {turn+1}): {e}")
+                yield StreamEvent.error(f"Provider error (turn {turn+1}): {safe_error_msg(e)}")
                 break
 
             # Track usage
@@ -1791,7 +1792,7 @@ class AgentEngine:
                 result = asyncio.run(self._spawn_subagent_async(agent_type, prompt))
         except Exception as e:
             logger.exception(f"Subagent error: {e}")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": safe_error_msg(e)}
         return {
             "success": True,
             "agent_type": agent_type,
@@ -1803,7 +1804,7 @@ class AgentEngine:
         result = self.spawn_subagent(agent_type, prompt)
         if result["success"]:
             return result["response"]
-        return f"Error: {result.get('error', 'Unknown error')}"
+        return f"Error: {result.get('error') or 'Unknown error'}"
 
     def attach_session(self, session: AgentSession) -> None:
         self._session = session
@@ -1841,20 +1842,20 @@ class AgentEngine:
 
     def load_session(self, session_id: str) -> bool:
         session = AgentSession(session_id)
-        if session.load():
-            self._session = session
-            self.context.load_from_session(session.messages)
-            if session.tasks or session.todos:
-                self._task_manager = TaskManager.from_dict({
-                    "tasks": session.tasks,
-                    "todos": session.todos,
-                    "plan": [],
-                    "id_counter": len(session.tasks) + len(session.todos),
-                }, on_change=self._on_task_change)
-            # Restore context usage stats
-            self._restore_session_stats(session)
-            return True
-        return False
+        if not session.load():
+            return False
+        self._session = session
+        self.context.load_from_session(session.messages)
+        if session.tasks or session.todos:
+            self._task_manager = TaskManager.from_dict({
+                "tasks": session.tasks,
+                "todos": session.todos,
+                "plan": [],
+                "id_counter": len(session.tasks) + len(session.todos),
+            }, on_change=self._on_task_change)
+        # Restore context usage stats
+        self._restore_session_stats(session)
+        return True
 
     def _restore_session_stats(self, session: AgentSession) -> None:
         """Restore context usage stats from session lifecycle_state."""

@@ -1103,10 +1103,23 @@ class A2TUIApp(App, inherit_bindings=False):
             return
         agent_identity = session["agent_identity"]
         agent_session_id = session.get("agent_session_id")
+
+        project_path = None
+        try:
+            meta = json.loads(session.get("meta_json", "{}"))
+            if cwd := meta.get("cwd"):
+                project_path = Path(cwd)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        if project_path:
+            self.project_dir = project_path
+
         self.launch_agent(
             agent_identity,
             agent_session_id=agent_session_id,
             session_pk=session_pk,
+            project_path=project_path,
         )
 
     @work
@@ -1196,6 +1209,10 @@ class A2TUIApp(App, inherit_bindings=False):
                     self.project_dir = new_project_dir
                     self.screen.post_message(messages.ProjectDirectoryUpdated())
                     self.notify(f"Switched to project: {project_name}")
+                    from tui.agents import read_agents
+                    agents = await read_agents()
+                    if cfg.default_mode in agents:
+                        self.launch_agent(cfg.default_mode, project_path=new_project_dir)
 
     @on(messages.LaunchAgent)
     def on_launch_agent(self, message: messages.LaunchAgent) -> None:

@@ -2031,6 +2031,7 @@ class JSONRPCServer:
             "session/load": self._handle_session_load,
             "session/prompt": self._handle_session_prompt,
             "session/cancel": self._handle_session_cancel,
+            "session/save": self._handle_session_save,
             "session/set_mode": self._handle_session_set_mode,
             "session/ask_user_answer": self._handle_ask_user_answer,
             "terminal/create": self._handle_terminal_create,
@@ -2074,6 +2075,12 @@ class JSONRPCServer:
             params.get("cwd", "."),
             params.get("mcpServers", []),
             params.get("sessionId"),
+        )
+
+    async def _handle_session_save(self, params: dict):
+        return await self.adapter.session_save(
+            params.get("sessionId"),
+            params.get("_meta", {}),
         )
 
     async def _handle_session_prompt(self, params: dict):

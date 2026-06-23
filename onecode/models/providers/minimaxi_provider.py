@@ -10,7 +10,7 @@ from typing import AsyncIterator, Callable, Optional
 import httpx
 
 from onecode.models.errors import (
-    ProviderError, TransientProviderError, retry_after_seconds,
+    ProviderError, TransientProviderError, retry_after_seconds, safe_error_msg,
 )
 from onecode.models.provider import ChatResponse, Message, ModelResponse, Provider, ProviderRegistry
 
@@ -207,7 +207,7 @@ class MiniMaxiProvider(Provider):
             _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e
         except Exception as e:
-            error_msg = f"Error: {e}"
+            error_msg = f"Error: {safe_error_msg(e)}"
             logger.exception(f"[{req_id}] {error_msg}")
             _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e
@@ -308,7 +308,7 @@ class MiniMaxiProvider(Provider):
             _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e
         except Exception as e:
-            error_msg = f"Error: {e}"
+            error_msg = f"Error: {safe_error_msg(e)}"
             logger.exception(f"[{req_id}] {error_msg}")
             _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e
@@ -403,7 +403,7 @@ class MiniMaxiProvider(Provider):
             _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e
         except Exception as e:
-            error_msg = f"Error: {e}"
+            error_msg = f"Error: {safe_error_msg(e)}"
             logger.exception(f"[{req_id}] {error_msg}")
             _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e

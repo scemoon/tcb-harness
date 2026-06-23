@@ -1962,7 +1962,8 @@ class Conversation(containers.Vertical):
         if prune_children:
             await contents.remove_children(prune_children)
 
-        self.call_later(self.window.anchor)
+        if self.window.scroll_y >= self.window.max_scroll_y:
+            self.call_later(self.window.anchor)
 
     async def new_terminal(self) -> Terminal:
         """Create a new interactive Terminal.

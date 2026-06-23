@@ -65,6 +65,8 @@ class DeepSeekProvider(Provider):
                     args = __import__("json").loads(func.get("arguments", "{}"))
                 except Exception:
                     args = {"raw": func.get("arguments", "")}
+                if not isinstance(args, dict):
+                    args = {"raw": args}
                 content_blocks.append({
                     "type": "tool_use",
                     "id": tc.get("id", ""),

@@ -88,6 +88,8 @@ class OpenAIProvider(Provider):
                     args = __import__("json").loads(func.get("arguments", "{}"))
                 except Exception:
                     args = {"raw": func.get("arguments", "")}
+                if not isinstance(args, dict):
+                    args = {"raw": args}
                 content_blocks.append({
                     "type": "tool_use",
                     "id": tc.get("id", ""),
@@ -222,6 +224,8 @@ class OpenAIProvider(Provider):
                 inp = json.loads(nt.get("arguments", "{}"))
             except (json.JSONDecodeError, TypeError):
                 inp = {"raw": nt.get("arguments", "")}
+            if not isinstance(inp, dict):
+                inp = {"raw": inp}
             tool_uses.append({"id": nt["id"], "name": nt["name"], "input": inp})
 
         return ChatResponse(

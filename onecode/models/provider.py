@@ -577,6 +577,8 @@ class Provider(ABC):
                 args = __import__("json").loads(func.get("arguments", "{}"))
             except Exception:
                 args = {"raw": func.get("arguments", "")}
+            if not isinstance(args, dict):
+                args = {"raw": args}
             result.append({
                 "id": tc.get("id", ""),
                 "name": func.get("name", ""),

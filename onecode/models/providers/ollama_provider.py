@@ -5,6 +5,7 @@ from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
+from onecode.models.errors import safe_error_msg
 from onecode.models.provider import ChatResponse, Message, ModelResponse, Provider, ProviderRegistry
 
 
@@ -89,7 +90,7 @@ class OllamaProvider(Provider):
                             if chunk.get("done"):
                                 break
         except Exception as e:
-            return ChatResponse(content=f"Error: {e}")
+            return ChatResponse(content=f"Error: {safe_error_msg(e)}")
         return ChatResponse(content="".join(content_parts))
 
 
