@@ -170,8 +170,10 @@ class GeneralAgent(AgentConfig):
             permission_edit=AgentPermission.ALLOW,
             permission_bash=AgentPermission.ALLOW,
             permission_read=AgentPermission.ALLOW,
+            permission_task=AgentPermission.DENY,
+            permission_question=AgentPermission.DENY,
             permission_todowrite=AgentPermission.DENY,
-            tools=[],
+            disallowed_tools=["Spawn", "Agent", "AskUser"],
         )
 
 
@@ -184,8 +186,11 @@ class ExploreAgent(AgentConfig):
             permission_edit=AgentPermission.DENY,
             permission_bash=AgentPermission.DENY,
             permission_read=AgentPermission.ALLOW,
+            permission_task=AgentPermission.DENY,
+            permission_question=AgentPermission.DENY,
+            permission_todowrite=AgentPermission.DENY,
+            disallowed_tools=["Spawn", "Agent", "AskUser"],
             hidden=True,
-            tools=[],
         )
 
 
@@ -200,8 +205,11 @@ class ScoutAgent(AgentConfig):
             permission_read=AgentPermission.ALLOW,
             permission_webfetch=AgentPermission.ALLOW,
             permission_websearch=AgentPermission.ALLOW,
+            permission_task=AgentPermission.DENY,
+            permission_question=AgentPermission.DENY,
+            permission_todowrite=AgentPermission.DENY,
+            disallowed_tools=["Spawn", "Agent", "AskUser"],
             hidden=True,
-            tools=[],
         )
 
 
@@ -291,6 +299,19 @@ def get_agent_by_name(name: str) -> Optional[AgentConfig]:
     return None
 
 
+SUBAGENT_CONSTRAINTS = """
+### Constraints (subagent)
+You are running as a subagent spawned by a parent agent via the Spawn tool.
+- You CANNOT spawn subagents (Spawn tool is disabled).
+- You CANNOT execute batched tool calls (Agent tool is disabled).
+- You CANNOT manage task plans (TodoCreate/TodoUpdate/TodoStop are disabled).
+- You CANNOT interact with the user (AskUser is disabled).
+- You are a leaf node in the agent hierarchy. Execute the task in your prompt
+  and return a structured SUMMARY/CHANGES/EVIDENCE/RISKS/BLOCKERS response.
+- Do not narrate "I will now..." in visible text; all reasoning in <thinking>.
+"""
+
+
 def get_system_prompt(agent_type: str) -> str:
     agent = create_agent(agent_type)
     lines = [
@@ -302,6 +323,9 @@ def get_system_prompt(agent_type: str) -> str:
         lines.append("- File edits require user approval")
     if agent.should_ask_for_bash():
         lines.append("- Shell commands require user approval")
+
+    if agent.mode == AgentMode.SUBAGENT:
+        lines.append(SUBAGENT_CONSTRAINTS)
 
     return "\n".join(lines)
 
@@ -426,15 +450,13 @@ Rules:
 - **ConfigWrite**: config_write(key, value) - Set allowed configuration values (does NOT expose secrets).
 
 ### Tasks & Planning (CDH)
-- **TaskCreate**: task_create(subject, description, activeForm="", metadata={}) - Create a task. Returns task id.
-- **TaskGet**: task_get(taskId) - Retrieve a task by ID.
-- **TaskList**: task_list() - List all tasks with status, owner, and blockers.
-- **TaskUpdate**: task_update(taskId, subject, description, activeForm, status, owner, addBlocks, addBlockedBy, metadata, output) - Update task fields and dependencies.
-- **TaskOutput**: task_output(task_id) - Get output from a task.
-- **TaskStop**: task_stop(task_id) - Stop a running task.
-- **TodoCreate**: todo_create(text) - Create a todo item. Returns todo id.
-- **TodoList**: todo_list() - List all todos.
-- **TodoComplete**: todo_complete(todo_id) - Mark a todo as complete.
+- **TodoCreate**: todo_create(subject, description, activeForm="", metadata={}) - Create a task. Returns task id.
+- **TodoGet**: todo_get(taskId) - Retrieve a task by ID.
+- **TodoList**: todo_list() - List all tasks with status, owner, and blockers.
+- **TodoUpdate**: todo_update(taskId, subject, description, activeForm, status, owner, addBlocks, addBlockedBy, metadata, output) - Update task fields and dependencies.
+- **TodoOutput**: todo_output(task_id) - Get output from a task.
+- **TodoStop**: todo_stop(task_id) - Stop a running task.
+- **Spawn**: spawn(agent_type, prompt) - Delegate a subtask to a specialized subagent.
 """
 
 def filter_tool_descriptions(
@@ -499,14 +521,14 @@ Before any action, reason step by step inside `<thinking>`:
 2. **Goal**: What needs to be accomplished next?
 3. **Plan**: How should I approach it? What's the smallest next step?
 4. **Tool selection**: Which tool is appropriate?
-   - **For multi-step or independent work → always use `Task`** to spawn a subagent
-   - For simple queries → use read/search tools directly
-   - For execution (Write/Edit/Insert/ApplyPatch/Bash) → prefer delegating via `Task`
+   - **For multi-step or independent work → always use `Spawn`** to spawn a subagent
+    - For simple queries → use read/search tools directly
+    - For execution (Write/Edit/Insert/ApplyPatch/Bash) → prefer delegating via `Spawn`
 
 ### Action Phase (行动阶段)
 Execute the chosen action. **Action types (in priority order)**:
-1. **Delegate via Task**: `Task(agent_type="general"|"explore"|"scout", prompt="...")` — **preferred for any substantial work**. Multi-step logic, file modifications, research, and any task that needs >1-2 tool calls should be delegated.
-2. **Plan**: `task_create()` / `task_update()` / `todo_create()` to organize the work DAG.
+1. **Delegate via Spawn**: `Spawn(agent_type="general"|"explore"|"scout", prompt="...")` — **preferred for any substantial work**. Multi-step logic, file modifications, research, and any task that needs >1-2 tool calls should be delegated.
+2. **Plan**: `todo_create()` / `todo_update()` to organize the work DAG.
 3. **Research**: `Read()` / `Grep()` / `Glob()` / `WebFetch()` / `WebSearch()` for information gathering.
 4. **Direct execute**: Only for trivial single-step operations that cannot justify a subagent.
 
@@ -568,17 +590,16 @@ Analyze the request with step-by-step reasoning before any action.
 
 ### Step 2: Act (Plan) — Create the Task Plan
 
-Once you understand the work, create a complete task plan via `task_create()`.
+Once you understand the work, create a complete task plan via `todo_create()`.
 
 **Task Granularity Rules**
 - One task = one concern (e.g. "Create User model", "Add login API endpoint")
-- Each task: **delegate to a Task subagent**. If a task needs >5 tool calls, split it.
+- Each task: **delegate to a Spawn subagent**. If a task needs >5 tool calls, split it.
 - Every task must have a **clear, verifiable completion criterion**
-- Use `todo_create()` only for truly trivial items (single config change, one quick check)
 
 **Creating Tasks**
 ```
-task_create(subject="<verb + noun>", description="<what + acceptance criteria>",
+todo_create(subject="<verb + noun>", description="<what + acceptance criteria>",
             metadata={"priority": "high|medium|low", "effort": "small|medium|large"})
 ```
 - Set `addBlockedBy` on dependent tasks so the dependency DAG is clear
@@ -595,17 +616,17 @@ Wait for user approval before moving to execution.
 
 ---
 
-### Step 3: Act (Execute) — Delegate to Task Subagents
+### Step 3: Act (Execute) — Delegate to Spawn Subagents
 
-Execute by **delegating to Task subagents** rather than using direct tools.
+Execute by **delegating to Spawn subagents** rather than using direct tools.
 
-- **PREFERRED**: `Task(agent_type="general", prompt="Detailed instructions with context...")`
+- **PREFERRED**: `Spawn(agent_type="general", prompt="Detailed instructions with context...")`
 - Use `general` subagent for implementation work, `explore` for code search, `scout` for research
 - Pass enough context in the prompt: relevant file paths, code snippets, requirements
 - Update task status: `pending` → `in_progress` → `completed`
-- Use `task_update(..., output=...)` to pass results to downstream tasks
+- Use `todo_update(..., output=...)` to pass results to downstream tasks
 - Direct execution tools (Write/Edit/Insert/ApplyPatch/Bash) should be avoided
-  in favor of `Task` delegation. Only use them for truly trivial operations.
+  in favor of `Spawn` delegation. Only use them for truly trivial operations.
 - After each task, report progress via `send_message()` to keep the user in the loop
 
 ---
@@ -625,7 +646,7 @@ next Thought:
 
 - **No top-level planning prose**: All planning goes through task/todo tools so the UI renders it.
 - **CoT in `<thinking>`**: Every turn starts with chain-of-thought reasoning inside `<thinking>`. Never narrate "I will now…" in visible text.
-- **Task-first**: Any operation needing >1 tool call → delegate via `Task()`. Direct tool use is exceptional.
+- **Task-first**: Any operation needing >1 tool call → delegate via `Spawn()`. Direct tool use is exceptional.
 - **Task status discipline**: `pending` → `in_progress` → `completed`. Every task transitions through all three.
 - **No execution without a plan**: Write/Edit/Insert/ApplyPatch/Bash require tasks. Create tasks first.
 - **Human at key decisions**: Present the plan, get approval, then execute. Report progress as you go.

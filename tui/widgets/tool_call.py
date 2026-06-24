@@ -207,17 +207,14 @@ class ToolCall(containers.VerticalGroup):
                 self.expanded = status in ("completed", "failed")
 
     _TOOL_ICONS: dict[str, str] = {
-        "Task": "🧠",
+        "Spawn": "🧠",
         "Agent": "🧠",
-        "TaskCreate": "📋",
-        "TaskGet": "📋",
-        "TaskList": "📋",
-        "TaskUpdate": "📋",
-        "TaskOutput": "📋",
-        "TaskStop": "📋",
         "TodoCreate": "📋",
+        "TodoGet": "📋",
         "TodoList": "📋",
-        "TodoComplete": "📋",
+        "TodoUpdate": "📋",
+        "TodoOutput": "📋",
+        "TodoStop": "📋",
     }
 
     @property

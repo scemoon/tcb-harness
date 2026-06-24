@@ -1,3 +1,4 @@
+import asyncio
 from functools import partial
 from pathlib import Path
 import random
@@ -116,6 +117,7 @@ class MainScreen(Screen, can_focus=False):
         initial_prompt: str | None = None,
     ) -> None:
         super().__init__()
+        self._project_update_lock = asyncio.Lock()
         self.set_reactive(MainScreen.project_path, project_path)
         self._agent = agent
         self._agent_session_id = agent_session_id
@@ -217,76 +219,77 @@ class MainScreen(Screen, can_focus=False):
             self.post_message(messages.SessionNavigate(self.screen.id, +1))
 
     @on(messages.ProjectDirectoryUpdated)
-    async def on_project_directory_update(self) -> None:
-        new_dir = self.app.project_dir
-        sidebar = self.query_one(SideBar)
-        if new_dir is None:
+    async def on_project_directory_update(self, event: messages.ProjectDirectoryUpdated) -> None:
+        async with self._project_update_lock:
+            new_dir = event.project_dir
+            sidebar = self.query_one(SideBar)
+            if new_dir is None:
+                try:
+                    self.project_path = new_dir
+                except Exception:
+                    pass
+                sidebar.remove_panel("project-panel")
+                if not sidebar.has_panel("no-project-panel"):
+                    await sidebar.add_panel(
+                        SideBar.Panel(
+                            "No Project",
+                            Static(
+                                "[bold]No .cdh project[/]\n\nClick to initialize .cdh in this directory",
+                                id="init-cdh-hint",
+                            ),
+                            id="no-project-panel",
+                        ),
+                    )
+                if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
+                    mf.refresh_files()
+                self._swap_directory_watcher(None)
+                return
+            if self.project_path == new_dir and sidebar.has_panel("project-panel"):
+                if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
+                    mf.refresh_files()
+                return
             try:
                 self.project_path = new_dir
             except Exception:
                 pass
-            sidebar.remove_panel("project-panel")
-            if not sidebar.has_panel("no-project-panel"):
-                await sidebar.add_panel(
-                    SideBar.Panel(
-                        "No Project",
-                        Static(
-                            "[bold]No .cdh project[/]\n\nClick to initialize .cdh in this directory",
-                            id="init-cdh-hint",
+            cdh_dir = CdhProjectLoader.find_cdh_dir(self.project_path)
+            if cdh_dir is not None:
+                sidebar.remove_panel("no-project-panel")
+                if not sidebar.has_panel("project-panel"):
+                    collapsible = await sidebar.add_panel(
+                        SideBar.Panel(
+                            "Project",
+                            ProjectDirectoryTree(
+                                self.project_path,
+                                id="project_directory_tree",
+                            ),
+                            flex=True,
+                            id="project-panel",
                         ),
-                        id="no-project-panel",
-                    ),
-                )
-            if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
-                mf.refresh_files()
-            self._swap_directory_watcher(None)
-            return
-        if self.project_path == new_dir and sidebar.has_panel("project-panel"):
-            if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
-                mf.refresh_files()
-            return
-        try:
-            self.project_path = new_dir
-        except Exception:
-            pass
-        cdh_dir = CdhProjectLoader.find_cdh_dir(self.project_path)
-        if cdh_dir is not None:
-            sidebar.remove_panel("no-project-panel")
-            if not sidebar.has_panel("project-panel"):
-                collapsible = await sidebar.add_panel(
-                    SideBar.Panel(
-                        "Project",
-                        ProjectDirectoryTree(
-                            self.project_path,
-                            id="project_directory_tree",
-                        ),
-                        flex=True,
-                        id="project-panel",
-                    ),
-                )
-                tree = collapsible.query_one(ProjectDirectoryTree)
-                tree.data_bind(path=MainScreen.project_path)
-                tree.guide_depth = 3
+                    )
+                    tree = collapsible.query_one(ProjectDirectoryTree)
+                    tree.data_bind(path=MainScreen.project_path)
+                    tree.guide_depth = 3
+                else:
+                    tree = sidebar.query_one(ProjectDirectoryTree)
+                    tree.path = self.project_path
+                    await tree.reload()
             else:
-                tree = sidebar.query_one(ProjectDirectoryTree)
-                tree.path = self.project_path
-                await tree.reload()
-        else:
-            sidebar.remove_panel("project-panel")
-            if not sidebar.has_panel("no-project-panel"):
-                await sidebar.add_panel(
-                    SideBar.Panel(
-                        "No Project",
-                        Static(
-                            "[bold]No .cdh project[/]\n\nClick to initialize .cdh in this directory",
-                            id="init-cdh-hint",
+                sidebar.remove_panel("project-panel")
+                if not sidebar.has_panel("no-project-panel"):
+                    await sidebar.add_panel(
+                        SideBar.Panel(
+                            "No Project",
+                            Static(
+                                "[bold]No .cdh project[/]\n\nClick to initialize .cdh in this directory",
+                                id="init-cdh-hint",
+                            ),
+                            id="no-project-panel",
                         ),
-                        id="no-project-panel",
-                    ),
-                )
-        if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
-            mf.refresh_files()
-        self._swap_directory_watcher(new_dir if cdh_dir is not None else None)
+                    )
+            if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
+                mf.refresh_files()
+            self._swap_directory_watcher(new_dir if cdh_dir is not None else None)
 
     def _swap_directory_watcher(self, project_path: Path | None) -> None:
         try:
@@ -340,7 +343,7 @@ class MainScreen(Screen, can_focus=False):
             return
         CdhProjectLoader.init_project(target, name)
         self.notify(f"Initialized .cdh in {target}")
-        self.post_message(messages.ProjectDirectoryUpdated())
+        self.post_message(messages.ProjectDirectoryUpdated(project_dir=target))
 
     @on(DirectoryTree.FileSelected, "ProjectDirectoryTree")
     def on_project_directory_tree_selected(self, event: Tree.NodeSelected):

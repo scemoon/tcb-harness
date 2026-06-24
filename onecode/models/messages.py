@@ -95,19 +95,16 @@ TOOL_CATEGORY_MAP: dict[str, ToolCategory] = {
     "Bash": ToolCategory.BASH,
     "WebFetch": ToolCategory.WEB_FETCH,
     "WebSearch": ToolCategory.WEB_SEARCH,
-    "Task": ToolCategory.TASK,
+    "Spawn": ToolCategory.TASK,
     "SendMessage": ToolCategory.INTERACTION,
     "Agent": ToolCategory.TASK,
     "ToolSearch": ToolCategory.TASK_MGMT,
-    "TaskCreate": ToolCategory.TASK_MGMT,
-    "TaskGet": ToolCategory.TASK_MGMT,
-    "TaskList": ToolCategory.TASK_MGMT,
-    "TaskUpdate": ToolCategory.TASK_MGMT,
-    "TaskOutput": ToolCategory.TASK_MGMT,
-    "TaskStop": ToolCategory.TASK_MGMT,
     "TodoCreate": ToolCategory.TASK_MGMT,
+    "TodoGet": ToolCategory.TASK_MGMT,
     "TodoList": ToolCategory.TASK_MGMT,
-    "TodoComplete": ToolCategory.TASK_MGMT,
+    "TodoUpdate": ToolCategory.TASK_MGMT,
+    "TodoOutput": ToolCategory.TASK_MGMT,
+    "TodoStop": ToolCategory.TASK_MGMT,
     "AskUser": ToolCategory.INTERACTION,
 }
 
@@ -281,6 +278,7 @@ class StreamEventType(str, Enum):
     PLAN = "plan"
     SUBAGENT_START = "subagent_start"
     SUBAGENT_CHUNK = "subagent_chunk"
+    SUBAGENT_THINKING = "subagent_thinking"
     SUBAGENT_END = "subagent_end"
 
 
@@ -326,6 +324,9 @@ class StreamEvent:
     subagent_type: str = ""
     subagent_text: str = ""
     subagent_prompt: str = ""
+    subagent_thinking_text: str = ""
+    subagent_status: str = ""
+    subagent_error: str = ""
 
     @classmethod
     def text_delta(cls, text: str) -> "StreamEvent":
@@ -428,8 +429,24 @@ class StreamEvent:
         )
 
     @classmethod
-    def subagent_end(cls, call_id: str) -> "StreamEvent":
-        return cls(type=StreamEventType.SUBAGENT_END, subagent_id=call_id)
+    def subagent_thinking(cls, call_id: str, text: str) -> "StreamEvent":
+        return cls(
+            type=StreamEventType.SUBAGENT_THINKING,
+            subagent_id=call_id,
+            subagent_thinking_text=text,
+        )
+
+    @classmethod
+    def subagent_end(
+        cls, call_id: str, agent_type: str = "", status: str = "completed", error: str = ""
+    ) -> "StreamEvent":
+        return cls(
+            type=StreamEventType.SUBAGENT_END,
+            subagent_id=call_id,
+            subagent_type=agent_type,
+            subagent_status=status,
+            subagent_error=error,
+        )
 
     @staticmethod
     def is_text(event: "StreamEvent") -> bool:

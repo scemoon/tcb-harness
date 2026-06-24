@@ -184,8 +184,18 @@ class SubAgentChunk(AgentMessage):
 
 
 @dataclass
+class SubAgentThinking(AgentMessage):
+    """Sub-agent thinking block."""
+
+    subagent_id: str
+    text: str
+
+
+@dataclass
 class SubAgentEnd(AgentMessage):
     """Sub-agent task completed."""
 
     subagent_id: str
     agent_type: str
+    status: str = "completed"
+    error: str = ""

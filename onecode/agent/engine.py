@@ -20,6 +20,9 @@ from onecode.models.messages import StreamEvent, StreamEventType
 
 logger = logging.getLogger("onecode.agent.engine")
 
+# Subagent depth limit — subagents are leaf nodes (max depth = 1).
+_MAX_SUBAGENT_DEPTH = 1
+
 
 @dataclass(frozen=True)
 class ToolEvent:
@@ -512,6 +515,9 @@ class AgentEngine:
         # Cancellation support
         self._cancelled: bool = False
 
+        # Subagent depth limit — subagents are leaf nodes (max depth = 1).
+        self._subagent_depth: int = 0
+
         # Monotonic tool-call id counter — shared across every
         # ``chat_stream`` turn so the same id is never reused even when the
         # model re-emits ``legacy-0`` / ``minimax-0`` in a fresh turn.
@@ -546,7 +552,7 @@ class AgentEngine:
         from onecode.agent.tools.web_tools import WebFetchTool, WebSearchTool
         from onecode.agent.tools.communication_tools import SendMessageTool, AskUserTool, ToolSearchTool
         from onecode.agent.tools.task_tools import (TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool,
-            TaskOutputTool, TaskStopTool, TodoCreateTool, TodoListTool, TodoCompleteTool)
+            TaskOutputTool, TaskStopTool)
         from onecode.agent.tools.agent_tools import AgentTool, TaskTool
         from onecode.agent.tools.skill_tools import SkillTool
         from onecode.agent.tools.mcp_tools import MCPTool as MCPToolTool, MCPResourcesTool
@@ -580,9 +586,6 @@ class AgentEngine:
         registry.register(TaskUpdateTool(self._task_manager))
         registry.register(TaskOutputTool(self._task_manager))
         registry.register(TaskStopTool(self._task_manager))
-        registry.register(TodoCreateTool(self._task_manager))
-        registry.register(TodoListTool(self._task_manager))
-        registry.register(TodoCompleteTool(self._task_manager))
         # Agent tools
         registry.register(AgentTool(registry, permission_checker=self._check_tool_permission))
         registry.register(TaskTool(self._spawn_subagent_async))
@@ -914,7 +917,7 @@ class AgentEngine:
         "Glob": "glob",
         "Grep": "grep",
         "List": "list",
-        "Task": "task",
+        "Spawn": "task",
         "Agent": "task",
         "Skill": "skill",
     }
@@ -1301,13 +1304,13 @@ class AgentEngine:
             for tu in tool_uses:
                 logger.info(f"Executing tool: {tu['name']} (id={tu['id']})")
 
-                # Task tool: forward subagent text deltas to the TUI as
+                # Spawn tool: forward subagent text deltas to the TUI as
                 # subagent_chunk events so the SubAgent widget actually has
-                # content to render.  The Task tool's spec is (agent_type,
+                # content to render.  The Spawn tool's spec is (agent_type,
                 # prompt); we read them from the tool input.
-                if tu["name"] == "Task":
+                if tu["name"] == "Spawn":
                     # Permission check
-                    denied = self._check_tool_permission("Task", tu["input"])
+                    denied = self._check_tool_permission("Spawn", tu["input"])
                     if denied:
                         result = {
                             "tool_use_id": tu["id"],
@@ -1318,24 +1321,44 @@ class AgentEngine:
                     else:
                         subagent_type = tu["input"].get("agent_type", "general")
                         subagent_prompt = tu["input"].get("prompt", "")
+                        is_failed = False
+                        error_msg = ""
                         yield StreamEvent.subagent_start(subagent_type, tu["id"], subagent_prompt)
                         accumulated: list[str] = []
                         async for sub_event, sub_text in self._spawn_subagent_async_streaming(
                             subagent_type, subagent_prompt
                         ):
-                            if sub_text and sub_event.type == StreamEventType.SUBAGENT_END:
-                                accumulated.append(sub_text)
-                            elif sub_text:
-                                accumulated.append(sub_text)
-                                yield StreamEvent.subagent_chunk(tu["id"], sub_text)
-                        yield StreamEvent.subagent_end(tu["id"])
+                            if not sub_text:
+                                continue
+                            if sub_event.type == StreamEventType.SUBAGENT_END:
+                                # Carry status/error from subagent_end event
+                                if hasattr(sub_event, "subagent_status") and sub_event.subagent_status == "failed":
+                                    is_failed = True
+                                    error_msg = sub_event.subagent_error or ""
+                                continue  # 修复 Bug 1: 不 append final combined text（避免文本重复）
+                            if sub_event.type == StreamEventType.SUBAGENT_THINKING:
+                                yield StreamEvent.subagent_thinking(tu["id"], sub_text)
+                                continue
+                            # TEXT_DELTA
+                            accumulated.append(sub_text)
+                            yield StreamEvent.subagent_chunk(tu["id"], sub_text)
+                        yield StreamEvent.subagent_end(
+                            tu["id"],
+                            agent_type=subagent_type,
+                            status="failed" if is_failed else "completed",
+                            error=error_msg,
+                        )
                         raw_output = "".join(accumulated)
                         formatted = self._format_subagent_output(
                             subagent_type, subagent_prompt, raw_output
+                        ) if not is_failed else (
+                            f"SUMMARY:\nSub-agent failed with error: {error_msg}\n\n"
+                            "CHANGES:\nNone.\n\nEVIDENCE:\nNone.\n\nRISKS:\nNone.\n\n"
+                            f"BLOCKERS:\n{error_msg}"
                         )
                         result = {
                             "tool_use_id": tu["id"],
-                            "is_error": False,
+                            "is_error": is_failed,  # 修复 Bug 2: 子智能体失败时 is_error=True
                             "category": "task",
                             "content": formatted,
                             "raw_content": raw_output,
@@ -1701,15 +1724,22 @@ class AgentEngine:
 
         Yields ``(event, text)`` pairs so the caller (typically the Task-tool
         path in :meth:`chat_stream`) can forward each text delta as a
-        ``subagent_chunk`` notification on the ACP wire.  The full agent text
-        is also accumulated and emitted in a single ``(subagent_end, text)``
-        payload at the end so callers that only care about the final output
-        can ignore the intermediate chunks.
+        ``subagent_chunk`` notification on the ACP wire.
 
         Inherits project context and skills from the parent
         engine so the subagent does not start from a blank slate.
         """
+        # Depth check: subagents are leaf nodes (max depth = 1).
+        if self._subagent_depth >= _MAX_SUBAGENT_DEPTH:
+            err = "Subagent cannot spawn nested subagents (max depth=1)"
+            yield (StreamEvent.subagent_end(
+                "", agent_type=agent_type, status="failed", error=err,
+            ), err)
+            return
+
         sub_engine = AgentEngine(self.app, project_dir=self._project_dir, perm_store=self._perm_store)
+
+        sub_engine._subagent_depth = self._subagent_depth + 1
 
         # Inherit parent context: project info, skills
         sub_engine._project_context_loaded = self._project_context_loaded
@@ -1724,7 +1754,6 @@ class AgentEngine:
         # Track child so parent cancellation cascades
         self._child_engines.append(sub_engine)
 
-        # Link the subagent's cancellation flag to the parent
         parts: list[str] = []
         try:
             async for chunk in sub_engine.chat_stream(prompt):
@@ -1732,6 +1761,9 @@ class AgentEngine:
                     if chunk.type == StreamEventType.TEXT_DELTA and chunk.text:
                         parts.append(chunk.text)
                         yield chunk, chunk.text
+                    elif chunk.type == StreamEventType.THINKING and chunk.thinking:
+                        # 修复 Bug 4: 转发思考块
+                        yield chunk, chunk.thinking
                 else:
                     if chunk:
                         parts.append(chunk)
@@ -1742,9 +1774,13 @@ class AgentEngine:
                 "CHANGES:\nNone.\n\nEVIDENCE:\nNone.\n\nRISKS:\nNone.\n\n"
                 f"BLOCKERS:\n{e}"
             )
-            yield StreamEvent.subagent_end(""), err_text
+            yield (StreamEvent.subagent_end(
+                "", agent_type=agent_type, status="failed", error=str(e),
+            ), err_text)
         else:
-            yield StreamEvent.subagent_end(""), "".join(parts)
+            yield (StreamEvent.subagent_end(
+                "", agent_type=agent_type, status="completed",
+            ), "".join(parts))
         finally:
             # Clean up completed subagent to prevent memory leak
             if sub_engine in self._child_engines:

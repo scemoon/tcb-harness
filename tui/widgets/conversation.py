@@ -564,7 +564,7 @@ class Conversation(containers.Vertical):
         if self._suppress_directory_changed:
             return
         self._suppress_directory_changed = True
-        self.post_message(messages.ProjectDirectoryUpdated())
+        self.post_message(messages.ProjectDirectoryUpdated(project_dir=self.app.project_dir))
         self.set_timer(0.5, self._release_directory_changed_suppress)
 
     def _release_directory_changed_suppress(self) -> None:
@@ -600,7 +600,7 @@ class Conversation(containers.Vertical):
         if self._directory_changed or not self.is_watching_directory:
             self.prompt.project_directory_updated()
             self._directory_changed = False
-            self.post_message(messages.ProjectDirectoryUpdated())
+            self.post_message(messages.ProjectDirectoryUpdated(project_dir=self.app.project_dir))
 
     @on(Terminal.LongRunning)
     def on_terminal_long_running(self, event: Terminal.LongRunning) -> None:
@@ -962,7 +962,7 @@ class Conversation(containers.Vertical):
 
         if self._directory_changed or not self.is_watching_directory:
             self._directory_changed = False
-            self.post_message(messages.ProjectDirectoryUpdated())
+            self.post_message(messages.ProjectDirectoryUpdated(project_dir=self.app.project_dir))
             self.prompt.project_directory_updated()
 
         self._turn_count += 1
@@ -1135,7 +1135,7 @@ class Conversation(containers.Vertical):
                 case "subagent_start":
                     current_thought = None
                     self.new_block()
-                    sa = SubAgent(entry["agent_type"], tool_id=entry["id"], prompt=entry.get("prompt", ""))
+                    sa = SubAgent(entry["agent_type"], tool_id=entry["id"], prompt=entry.get("prompt", ""), replay=True)
                     created_subagents[entry["id"]] = sa
                     widgets.append(sa)
 
@@ -1144,10 +1144,18 @@ class Conversation(containers.Vertical):
                     if sa is not None:
                         sa.append_chunk(entry["text"])
 
+                case "subagent_thinking":
+                    sa = created_subagents.get(entry["id"])
+                    if sa is not None:
+                        sa.append_thinking(entry["text"])
+
                 case "subagent_end":
                     sa = created_subagents.get(entry["id"])
                     if sa is not None:
-                        sa.complete()
+                        sa.complete(
+                            entry.get("status", "completed"),
+                            entry.get("error", ""),
+                        )
 
                 case "ask_user":
                     current_thought = None
@@ -1361,13 +1369,17 @@ class Conversation(containers.Vertical):
             if sa is not None:
                 sa.append_chunk(message.text)
 
-    @on(acp_messages.SubAgentEnd)
-    async def on_acp_subagent_end(self, message: acp_messages.SubAgentEnd):
+    @on(acp_messages.SubAgentThinking)
+    async def on_acp_subagent_thinking(self, message: acp_messages.SubAgentThinking):
         from tui.widgets.subagent import SubAgent
 
         message.stop()
         if self._replay:
-            self._replay_buffer.append({"kind": "subagent_end", "id": message.subagent_id})
+            self._replay_buffer.append({
+                "kind": "subagent_thinking",
+                "id": message.subagent_id,
+                "text": message.text,
+            })
             return
         try:
             sa: SubAgent | None = self.contents.get_child_by_id(
@@ -1377,7 +1389,30 @@ class Conversation(containers.Vertical):
             return
         else:
             if sa is not None:
-                sa.complete()
+                sa.append_thinking(message.text)
+
+    @on(acp_messages.SubAgentEnd)
+    async def on_acp_subagent_end(self, message: acp_messages.SubAgentEnd):
+        from tui.widgets.subagent import SubAgent
+
+        message.stop()
+        if self._replay:
+            self._replay_buffer.append({
+                "kind": "subagent_end",
+                "id": message.subagent_id,
+                "status": message.status,
+                "error": message.error,
+            })
+            return
+        try:
+            sa: SubAgent | None = self.contents.get_child_by_id(
+                message.subagent_id, SubAgent
+            )
+        except NoMatches:
+            return
+        else:
+            if sa is not None:
+                sa.complete(message.status, message.error)
 
     @on(acp_messages.AvailableCommandsUpdate)
     async def on_acp_available_commands_update(
@@ -2430,7 +2465,7 @@ class Conversation(containers.Vertical):
             save_config(cfg)
             new_project_dir = Path(project_path) if project_path else Path.cwd()
             self.app.project_dir = new_project_dir
-            self.post_message(messages.ProjectDirectoryUpdated())
+            self.post_message(messages.ProjectDirectoryUpdated(project_dir=new_project_dir))
             self.flash(f"Switched to project: {name}", style="success")
             return True
         elif sub_cmd == "new":
@@ -2456,7 +2491,7 @@ class Conversation(containers.Vertical):
             cfg.current_project_path = str(ws)
             save_config(cfg)
             self.app.project_dir = ws
-            self.post_message(messages.ProjectDirectoryUpdated())
+            self.post_message(messages.ProjectDirectoryUpdated(project_dir=ws))
             self.flash(f"Created and switched to project: {name}", style="success")
             return True
         else:

@@ -1157,7 +1157,7 @@ class A2TUIApp(App, inherit_bindings=False):
                     cfg.current_project_path = None
                     save_config(cfg)
                     self.project_dir = None
-                    self.screen.post_message(messages.ProjectDirectoryUpdated())
+                    self.screen.post_message(messages.ProjectDirectoryUpdated(project_dir=None))
         if result is not None:
             if result == "__new__":
                 default_path = str((self.project_dir or Path.cwd()).resolve())
@@ -1185,7 +1185,7 @@ class A2TUIApp(App, inherit_bindings=False):
                 cfg.current_project_path = str(project_path)
                 save_config(cfg)
                 self.project_dir = project_path
-                self.screen.post_message(messages.ProjectDirectoryUpdated())
+                self.screen.post_message(messages.ProjectDirectoryUpdated(project_dir=self.project_dir))
                 self.notify(f"Created project '{name}' at {project_path}")
                 return
 
@@ -1207,7 +1207,7 @@ class A2TUIApp(App, inherit_bindings=False):
 
                     new_project_dir = Path(project_path) if project_path else Path.cwd()
                     self.project_dir = new_project_dir
-                    self.screen.post_message(messages.ProjectDirectoryUpdated())
+                    self.screen.post_message(messages.ProjectDirectoryUpdated(project_dir=self.project_dir))
                     self.notify(f"Switched to project: {project_name}")
                     from tui.agents import read_agents
                     agents = await read_agents()

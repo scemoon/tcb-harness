@@ -12,7 +12,7 @@ class TaskCreateTool:
 
     def spec(self) -> ToolSpec:
         return ToolSpec(
-            name="TaskCreate",
+            name="TodoCreate",
             description="Create a fine-grained task (1-3 tool calls each). For large work, split into multiple smaller tasks with dependencies. Returns task id.",
             input_schema={
                 "type": "object",
@@ -33,7 +33,7 @@ class TaskCreateTool:
             active_form=tool_input.get("activeForm", ""),
             metadata=tool_input.get("metadata"),
         )
-        return ToolResult(name="TaskCreate", output={"task": {"id": task["id"], "subject": task["subject"]}})
+        return ToolResult(name="TodoCreate", output={"task": {"id": task["id"], "subject": task["subject"]}})
 
 
 
@@ -43,7 +43,7 @@ class TaskGetTool:
 
     def spec(self) -> ToolSpec:
         return ToolSpec(
-            name="TaskGet",
+            name="TodoGet",
             description="Retrieve a task by ID.",
             input_schema={
                 "type": "object",
@@ -58,9 +58,9 @@ class TaskGetTool:
         task_id = tool_input.get("taskId", "")
         task = self._tm.get_task(task_id)
         if task is None:
-            return ToolResult(name="TaskGet", output={"task": None})
+            return ToolResult(name="TodoGet", output={"task": None})
         info = {k: task[k] for k in ("id", "subject", "description", "status", "blocks", "blockedBy")}
-        return ToolResult(name="TaskGet", output={"task": info})
+        return ToolResult(name="TodoGet", output={"task": info})
 
 
 
@@ -70,7 +70,7 @@ class TaskListTool:
 
     def spec(self) -> ToolSpec:
         return ToolSpec(
-            name="TaskList",
+            name="TodoList",
             description="List all tasks with their current status and dependencies.",
             input_schema={"type": "object", "properties": {}, "required": []},
         )
@@ -78,7 +78,7 @@ class TaskListTool:
     def run(self, tool_input: dict[str, Any]) -> ToolResult:
         tasks = self._tm.list_tasks()
         if not tasks:
-            return ToolResult(name="TaskList", output={"tasks": []})
+            return ToolResult(name="TodoList", output={"tasks": []})
         summaries = []
         for t in tasks:
             s = {"id": t["id"], "subject": t["subject"], "status": t["status"]}
@@ -86,7 +86,7 @@ class TaskListTool:
                 s["owner"] = t["owner"]
             s["blockedBy"] = list(t.get("blockedBy") or [])
             summaries.append(s)
-        return ToolResult(name="TaskList", output={"tasks": summaries})
+        return ToolResult(name="TodoList", output={"tasks": summaries})
 
 
 
@@ -96,7 +96,7 @@ class TaskUpdateTool:
 
     def spec(self) -> ToolSpec:
         return ToolSpec(
-            name="TaskUpdate",
+            name="TodoUpdate",
             description="Update a task: subject, description, status, owner, dependencies, output.",
             input_schema={
                 "type": "object",
@@ -125,10 +125,10 @@ class TaskUpdateTool:
             updates["addBlocks"] = updates.pop("blocks")
         result = self._tm.update_task(task_id, **updates)
         if result is None:
-            return ToolResult(name="TaskUpdate", output={"success": False, "taskId": task_id, "error": "Task not found"}, is_error=True)
+            return ToolResult(name="TodoUpdate", output={"success": False, "taskId": task_id, "error": "Task not found"}, is_error=True)
         if result.get("deleted"):
-            return ToolResult(name="TaskUpdate", output={"success": True, "taskId": task_id, "updatedFields": ["deleted"]})
-        return ToolResult(name="TaskUpdate", output={"success": True, "taskId": task_id, "task": {"id": result["id"], "subject": result["subject"], "status": result["status"]}})
+            return ToolResult(name="TodoUpdate", output={"success": True, "taskId": task_id, "updatedFields": ["deleted"]})
+        return ToolResult(name="TodoUpdate", output={"success": True, "taskId": task_id, "task": {"id": result["id"], "subject": result["subject"], "status": result["status"]}})
 
 
 
@@ -138,7 +138,7 @@ class TaskOutputTool:
 
     def spec(self) -> ToolSpec:
         return ToolSpec(
-            name="TaskOutput",
+            name="TodoOutput",
             description="Get output for a task.",
             input_schema={
                 "type": "object",
@@ -152,7 +152,7 @@ class TaskOutputTool:
     def run(self, tool_input: dict[str, Any]) -> ToolResult:
         task_id = tool_input.get("task_id", "")
         result = self._tm.get_task_output(task_id)
-        return ToolResult(name="TaskOutput", output=result)
+        return ToolResult(name="TodoOutput", output=result)
 
 
 
@@ -162,7 +162,7 @@ class TaskStopTool:
 
     def spec(self) -> ToolSpec:
         return ToolSpec(
-            name="TaskStop",
+            name="TodoStop",
             description="Stop/cancel a running task.",
             input_schema={
                 "type": "object",
@@ -177,73 +177,11 @@ class TaskStopTool:
         task_id = tool_input.get("task_id", "")
         result = self._tm.update_task(task_id, status="completed")
         if result is None:
-            return ToolResult(name="TaskStop", output={"success": False, "stopped": False, "error": "Task not found"}, is_error=True)
+            return ToolResult(name="TodoStop", output={"success": False, "stopped": False, "error": "Task not found"}, is_error=True)
         if result.get("deleted"):
-            return ToolResult(name="TaskStop", output={"success": True, "stopped": True, "task_id": task_id})
-        return ToolResult(name="TaskStop", output={"success": True, "stopped": True, "task_id": task_id})
+            return ToolResult(name="TodoStop", output={"success": True, "stopped": True, "task_id": task_id})
+        return ToolResult(name="TodoStop", output={"success": True, "stopped": True, "task_id": task_id})
 
 
 
-class TodoCreateTool:
-    def __init__(self, task_manager):
-        self._tm = task_manager
-
-    def spec(self) -> ToolSpec:
-        return ToolSpec(
-            name="TodoCreate",
-            description="Create a todo item. Returns todo id.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "Todo item text"},
-                },
-                "required": ["text"],
-            },
-        )
-
-    def run(self, tool_input: dict[str, Any]) -> ToolResult:
-        text = tool_input.get("text", "")
-        todo_id = self._tm.add_todo(text)
-        return ToolResult(name="TodoCreate", output={"id": todo_id, "text": text})
-
-
-
-class TodoListTool:
-    def __init__(self, task_manager):
-        self._tm = task_manager
-
-    def spec(self) -> ToolSpec:
-        return ToolSpec(
-            name="TodoList",
-            description="List all todo items.",
-            input_schema={"type": "object", "properties": {}, "required": []},
-        )
-
-    def run(self, tool_input: dict[str, Any]) -> ToolResult:
-        todos = self._tm.list_todos()
-        return ToolResult(name="TodoList", output=todos)
-
-
-
-class TodoCompleteTool:
-    def __init__(self, task_manager):
-        self._tm = task_manager
-
-    def spec(self) -> ToolSpec:
-        return ToolSpec(
-            name="TodoComplete",
-            description="Mark a todo as completed.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "todo_id": {"type": "string", "description": "Todo id to complete"},
-                },
-                "required": ["todo_id"],
-            },
-        )
-
-    def run(self, tool_input: dict[str, Any]) -> ToolResult:
-        todo_id = tool_input.get("todo_id", tool_input.get("id", ""))
-        ok = self._tm.complete_todo(str(todo_id))
-        return ToolResult(name="TodoComplete", output={"success": ok, "todo_id": todo_id}, is_error=not ok)
 

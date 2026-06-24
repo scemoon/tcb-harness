@@ -336,8 +336,8 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
         return []
 
     _HEADER_ONLY_TOOLS = frozenset({
-        "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskOutput", "TaskStop",
-        "TodoCreate", "TodoList", "TodoComplete", "Glob", "Task",
+        "TodoCreate", "TodoGet", "TodoList", "TodoUpdate", "TodoOutput", "TodoStop",
+        "Glob", "Spawn",
     })
     if name in _HEADER_ONLY_TOOLS:
         return []
@@ -461,9 +461,9 @@ def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
     # Read: show actual file content (code fence + language wrapping in _emit_tool_result)
     if tool_name == "Read":
         return parsed.get("content", "")
-    # Task / Todo tools: collapse verbose state echoes to one-liner.
+    # Todo tools: collapse verbose state echoes to one-liner.
     if tool_name in _STATUS_ONLY_TOOLS:
-        return ""
+        return "✓ updated"
     if parsed.get("success") is True:
         if path := parsed.get("path"):
             return f"✓ {path}"
@@ -478,11 +478,12 @@ def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
 
 
 _STATUS_ONLY_TOOLS = frozenset({
-    "TaskCreate",
-    "TaskUpdate",
-    "TaskStop",
     "TodoCreate",
-    "TodoComplete",
+    "TodoGet",
+    "TodoList",
+    "TodoUpdate",
+    "TodoOutput",
+    "TodoStop",
 })
 
 
@@ -875,7 +876,7 @@ class CDHACPAdapter:
                 if isinstance(parsed, dict) and parsed.get("success") is True:
                     current_title = self.tool_calls[block.tool_use_id].get("title", "")
                     if ":" not in current_title:
-                        if tool_name in ("TaskCreate", "TaskUpdate"):
+                        if tool_name in ("TodoCreate", "TodoUpdate"):
                             task_info = parsed.get("task", {})
                             if isinstance(task_info, dict):
                                 if subject := task_info.get("subject", ""):
@@ -929,7 +930,7 @@ class CDHACPAdapter:
     def _replay_tool_or_subagent(self, tool_use_id: str, content: str, is_error: bool) -> None:
         """Replay a tool result — subagent events for Task, tool_call_update otherwise."""
         tc = self.tool_calls.get(tool_use_id)
-        if tc and tc.get("_tool_name") == "Task":
+        if tc and tc.get("_tool_name") == "Spawn":
             args = tc.get("_tool_args", {})
             agent_type = args.get("agent_type", "general")
             prompt = args.get("prompt", "")
@@ -1083,22 +1084,18 @@ class CDHACPAdapter:
                         elif block.name == "Bash":
                             cmd = str(args.get("command", ""))
                             title = f"Bash: {cmd}"
-                        elif block.name == "TaskCreate":
+                        elif block.name == "TodoCreate":
                             subject = str(args.get("subject", ""))
                             if subject:
-                                title = f"TaskCreate: {subject}"
-                        elif block.name == "TaskUpdate":
+                                title = f"TodoCreate: {subject}"
+                        elif block.name == "TodoUpdate":
                             subject = str(args.get("subject", ""))
                             if subject:
-                                title = f"TaskUpdate: {subject}"
-                        elif block.name in ("TaskGet", "TaskStop", "TaskOutput"):
+                                title = f"TodoUpdate: {subject}"
+                        elif block.name in ("TodoGet", "TodoStop", "TodoOutput"):
                             tid = str(args.get("taskId", args.get("task_id", "")))
                             if tid:
                                 title = f"{block.name}: {tid}"
-                        elif block.name == "TodoCreate":
-                            text = str(args.get("text", ""))
-                            if text:
-                                title = f"TodoCreate: {text[:40]}"
                         elif block.name == "Glob":
                             pattern = str(args.get("pattern", ""))
                             if pattern:
@@ -1116,7 +1113,7 @@ class CDHACPAdapter:
                         # Skip sending tool_call for Task tools — SubAgent widget
                         # is rendered via subagent_start/subagent_chunk/subagent_end
                         # when the corresponding tool_result is processed below.
-                        if block.name != "Task":
+                        if block.name != "Spawn":
                             self.send_session_update(self.tool_calls[block.id])
                     elif isinstance(block, ToolResult):
                         self._emit_tool_result(block)
@@ -1488,6 +1485,9 @@ class CDHACPAdapter:
         _ARGS_THROTTLE_CHARS = 50
 
         def _on_tool_call_delta(call_id: str, name: str, args_delta: str) -> None:
+            # Skip Spawn — SubAgent widget handles display via subagent_* events
+            if name == "Spawn":
+                return
             if args_delta:
                 _incremental_args[call_id] = _incremental_args.get(call_id, "") + args_delta
                 display_args = _incremental_args[call_id]
@@ -1532,9 +1532,9 @@ class CDHACPAdapter:
                         "content": existing.get("content", []),
                         "_tool_name": event.tool_name,
                     }
-                    # Skip sending tool_call for Task tools — SubAgent widget
+                        # Skip sending tool_call for Spawn tools — SubAgent widget
                     # handles the display via subagent_start events.
-                    if event.tool_name != "Task":
+                    if event.tool_name != "Spawn":
                         self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
                     if event.tool_id in self.tool_calls:
@@ -1545,22 +1545,18 @@ class CDHACPAdapter:
                             elif event.tool_name == "Bash":
                                 cmd = str(event.tool_args.get("command", ""))
                                 title = f"Bash: {cmd}"
-                            elif event.tool_name == "TaskCreate":
+                            elif event.tool_name == "TodoCreate":
                                 subject = str(event.tool_args.get("subject", ""))
                                 if subject:
-                                    title = f"TaskCreate: {subject}"
-                            elif event.tool_name == "TaskUpdate":
+                                    title = f"TodoCreate: {subject}"
+                            elif event.tool_name == "TodoUpdate":
                                 subject = str(event.tool_args.get("subject", ""))
                                 if subject:
-                                    title = f"TaskUpdate: {subject}"
-                            elif event.tool_name in ("TaskGet", "TaskStop", "TaskOutput"):
+                                    title = f"TodoUpdate: {subject}"
+                            elif event.tool_name in ("TodoGet", "TodoStop", "TodoOutput"):
                                 tid = str(event.tool_args.get("taskId", event.tool_args.get("task_id", "")))
                                 if tid:
                                     title = f"{event.tool_name}: {tid}"
-                            elif event.tool_name == "TodoCreate":
-                                text = str(event.tool_args.get("text", ""))
-                                if text:
-                                    title = f"TodoCreate: {text[:40]}"
                             elif event.tool_name == "Glob":
                                 pattern = str(event.tool_args.get("pattern", ""))
                                 if pattern:
@@ -1589,16 +1585,16 @@ class CDHACPAdapter:
                             "_tool_name": event.tool_name,
                             "_tool_args": event.tool_args,
                         })
-                        # Skip sending tool_call_update for Task — SubAgent widget
+                        # Skip sending tool_call_update for Spawn — SubAgent widget
                         # handles the display via subagent_start/chunk/end events.
-                        if event.tool_name != "Task":
+                        if event.tool_name != "Spawn":
                             self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.TOOL_RESULT:
-                    # Task tool results: subagent_start/chunk/end events were
+                    # Spawn tool results: subagent_start/chunk/end events were
                     # already sent during subagent execution — just skip the
                     # tool_call_update (no duplicate SubAgent widget needed).
                     tname = self.tool_calls.get(event.tool_id, {}).get("_tool_name", "")
-                    if tname == "Task":
+                    if tname == "Spawn":
                         try:
                             self.agent.save_session()
                         except Exception:
@@ -1620,7 +1616,7 @@ class CDHACPAdapter:
                                 current_title = self.tool_calls[event.tool_id].get("title", "")
                                 if ":" not in current_title:
                                     tname = self.tool_calls[event.tool_id].get("_tool_name", "")
-                                    if tname in ("TaskCreate", "TaskUpdate"):
+                                    if tname in ("TodoCreate", "TodoUpdate"):
                                         task_info = parsed.get("task", {})
                                         if isinstance(task_info, dict):
                                             if subject := task_info.get("subject", ""):
@@ -1717,11 +1713,19 @@ class CDHACPAdapter:
                         "subagentId": event.subagent_id,
                         "text": event.subagent_text,
                     })
+                elif event.type == StreamEventType.SUBAGENT_THINKING:
+                    self.send_session_update({
+                        "sessionUpdate": "subagent_thinking",
+                        "subagentId": event.subagent_id,
+                        "text": event.subagent_thinking_text,
+                    })
                 elif event.type == StreamEventType.SUBAGENT_END:
                     self.send_session_update({
                         "sessionUpdate": "subagent_end",
                         "subagentId": event.subagent_id,
                         "agentType": event.subagent_type,
+                        "status": event.subagent_status,
+                        "error": event.subagent_error,
                     })
                 elif event.type == StreamEventType.PLAN:
                     self.send_session_update({

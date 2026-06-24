@@ -45,6 +45,11 @@ This shows the files in your project directory.
         path = Path(path).resolve() if isinstance(path, str) else path.resolve()
         super().__init__(path, name=name, id=id, classes=classes, disabled=disabled)
 
+    async def _update_path_filter(self) -> None:
+        path = Path(self.path) if isinstance(self.path, str) else self.path
+        path = await asyncio.to_thread(path.resolve)
+        self.path_filter = await asyncio.to_thread(PathFilter.from_git_root, path)
+
     async def watch_path(self) -> None:
         """Watch for changes to the `path` of the directory tree.
 
@@ -53,15 +58,14 @@ This shows the files in your project directory.
         """
         has_cursor = self.cursor_node is not None
         self.reset_node(self.root, str(self.path), DirEntry(self.PATH(self.path)))
+        await self._update_path_filter()
         await self.reload()
         if has_cursor:
             self.cursor_line = 0
         self.scroll_to(0, 0, animate=False)
 
     async def on_mount(self) -> None:
-        path = Path(self.path) if isinstance(self.path, str) else self.path
-        path = await asyncio.to_thread(path.resolve)
-        self.path_filter = await asyncio.to_thread(PathFilter.from_git_root, path)
+        await self._update_path_filter()
 
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
         """Filter the paths before adding them to the tree.

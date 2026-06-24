@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-
+from pathlib import Path
 from typing import Literal
 
 from textual.content import Content
@@ -72,8 +72,11 @@ class Flash(Message):
     duration: float | None = None
 
 
+@dataclass
 class ProjectDirectoryUpdated(Message):
     """The project directory may may changed."""
+
+    project_dir: Path | None = None
 
 
 @dataclass

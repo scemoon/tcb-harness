@@ -296,15 +296,15 @@ agent:
 | `apply_patch` | Apply patch files (Add/Update/Move/Delete) |
 | `bash` | Shell execution with sandbox isolation |
 | `webfetch`, `websearch` | Web access |
-| `task`, `agent` | Subagent spawning |
+| `spawn`, `agent` | Subagent spawning |
 | `skill` | Load skills by name |
 | `lsp` | Language server intelligence (gotoDefinition, findReferences, hover, etc.) |
 | `mcp_tool`, `mcp_resources` | MCP server tools |
 | `cron_create/list/remove` | Cron scheduling |
 | `worktree` | Git worktree management |
 | `config_read`, `config_write` | Configuration |
-| `task_create/get/list/update/output/stop` | Task management |
-| `todo_create/list/complete` | Todo management |
+| `todo_create/get/list/update/output/stop` | Todo management |
+| `spawn` | Subagent delegation |
 | `send_message`, `ask_user` | Communication |
 
 ### LSP Actions

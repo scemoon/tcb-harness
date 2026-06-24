@@ -292,11 +292,23 @@ class Agent(AgentBase):
                 self.post_message(messages.SubAgentChunk(subagent_id, text))
 
             case {
+                "sessionUpdate": "subagent_thinking",
+                "subagentId": subagent_id,
+                "text": text,
+            }:
+                self.post_message(messages.SubAgentThinking(subagent_id, text))
+
+            case {
                 "sessionUpdate": "subagent_end",
                 "subagentId": subagent_id,
                 "agentType": agent_type,
+                **rest,
             }:
-                self.post_message(messages.SubAgentEnd(subagent_id, agent_type))
+                self.post_message(messages.SubAgentEnd(
+                    subagent_id, agent_type,
+                    status=rest.get("status", "completed"),
+                    error=rest.get("error", ""),
+                ))
 
         if status_line is not None:
             self.post_message(messages.UpdateStatusLine(status_line))

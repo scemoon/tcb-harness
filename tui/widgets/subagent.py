@@ -6,11 +6,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical
 from textual.reactive import var
-from textual.widgets import Markdown, Static
-from textual.widgets.markdown import MarkdownStream
-
-from tui.pill import pill
-from tui.protocol import ExpandProtocol
+from textual.widgets import Static
 
 
 class SubAgentHeader(Static):
@@ -23,44 +19,23 @@ class SubAgentHeader(Static):
     """
 
 
-class SubAgentContent(Markdown):
-    DEFAULT_CSS = """
-    SubAgentContent {
-        margin: 0 1 0 2;
-    }
-    """
-
-
 class SubAgent(Vertical, can_focus=True):
-    """Sub-agent output — collapsible block with thinking-style header.
+    """Sub-agent compact view — header (@type [status]) + latest line.
 
-    During streaming: header shows "🧠 {agent_type}: {prompt_preview}", content visible.
-    After completion: header shows "- {agent_type}" with content still visible.
-    Ctrl+X or click on completed header to toggle expand/collapse.
-
-    Content is rendered as Markdown.
+    During streaming: header shows "@type [running]", latest line updates.
+    After completion: header shows "@type [completed]"/"[failed]".
+    Ctrl+X to open full-screen SubAgentScreen with full structured output.
     """
 
     HELP = """
 ## Sub-agent
 
-- **ctrl+x** Toggle expand/collapse
-- **click on header** Toggle expand/collapse
-- **cursor keys** Scroll text
+- **ctrl+x** Open full-screen output
+- **up/down** Scroll (if content overflows)
 """
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("ctrl+x", "toggle", "Toggle", show=False, priority=True),
-        Binding("up", "scroll_up", "Scroll Up", show=False),
-        Binding("down", "scroll_down", "Scroll Down", show=False),
-        Binding("left", "scroll_left", "Scroll Left", show=False),
-        Binding("right", "scroll_right", "Scroll Right", show=False),
-        Binding("home", "scroll_home", "Scroll Home", show=False),
-        Binding("end", "scroll_end", "Scroll End", show=False),
-        Binding("pageup", "page_up", "Page Up", show=False),
-        Binding("pagedown", "page_down", "Page Down", show=False),
-        Binding("ctrl+pageup", "page_left", "Page Left", show=False),
-        Binding("ctrl+pagedown", "page_right", "Page Right", show=False),
+        Binding("ctrl+x", "toggle", "Full screen", show=False, priority=True),
     ]
 
     ALLOW_MAXIMIZE = True
@@ -69,6 +44,7 @@ class SubAgent(Vertical, can_focus=True):
     SubAgent {
         height: auto;
         width: 1fr;
+        min-height: 2;
         SubAgentHeader {
             color: $text-secondary;
         }
@@ -79,160 +55,106 @@ class SubAgent(Vertical, can_focus=True):
         &.-status-completed SubAgentHeader {
             color: $text-success;
         }
+        &.-status-failed SubAgentHeader {
+            color: $text-error;
+        }
     }
     """
 
-    agent_type: var[str] = var("")
     status: var[str] = var("running")
+    latest_line: var[str] = var("")
 
     def __init__(
         self,
         agent_type: str,
         tool_id: str | None = None,
         prompt: str = "",
+        *,
+        replay: bool = False,
     ) -> None:
         super().__init__(id=tool_id)
         self.agent_type = agent_type
         self.prompt = prompt
-        self.status = "running"
         self._chunks: list[str] = []
-        self._stream: MarkdownStream | None = None
-        self._completed = False
-        self._collapsed = False
+        self._thinking_chunks: list[str] = []
+        self._completed = replay
+        self._status = "completed" if replay else "running"
+        self._error = ""
         self._mounted = False
 
     def compose(self) -> ComposeResult:
-        self.set_class(True, f"-status-{self.status}")
-        label = pill(self.agent_type, "$warning-muted", "$text-warning")
-        yield SubAgentHeader(
-            f"🧠 {self._prompt_preview()} {label}",
-            markup=False,
-            id="subagent-header",
-        )
-        yield SubAgentContent("")
+        self.set_class(True, f"-status-{self._status}")
+        yield SubAgentHeader(self._header_text(), id="subagent-header")
+        latest_label = self.latest_line or ""
+        yield Static(latest_label, id="subagent-latest")
 
     def on_mount(self) -> None:
         self._mounted = True
         self.styles.height = "auto"
-        self.styles.min_height = 3
-        content = self.query_one(SubAgentContent)
-        content.styles.height = "auto"
-        if self._chunks:
-            self._stream = Markdown.get_stream(content)
-            for chunk in self._chunks:
-                self._stream.write(chunk)
-            content.scroll_end()
+        self.styles.min_height = 2
 
-    def _prompt_preview(self) -> str:
-        if not self.prompt:
-            return self.agent_type
-        preview = self.prompt.split("\n")[0].strip()
-        if len(preview) > 60:
-            preview = preview[:57] + "..."
-        return f"{self.agent_type}: {preview}"
+    def _header_text(self) -> str:
+        label = self.agent_type
+        status_tag = self._status_label()
+        return f"@ {label} [{status_tag}]"
+
+    def _status_label(self) -> str:
+        if self._status == "running":
+            return "running"
+        elif self._status == "failed":
+            return f"failed{': ' + self._error[:40] if self._error else ''}"
+        return "complete"
+
+    def _update_latest_line(self) -> str:
+        full = "".join(self._chunks)
+        lines = full.split("\n")
+        for line in reversed(lines):
+            if line.strip():
+                return line.strip()
+        return ""
 
     def append_chunk(self, text: str) -> None:
         self._chunks.append(text)
+        self.latest_line = self._update_latest_line()
         if not self._mounted:
             return
         try:
-            content = self.query_one(SubAgentContent)
-            if self._stream is None:
-                self._stream = Markdown.get_stream(content)
-            self._stream.write(text)
-            content.scroll_end()
+            self.query_one("#subagent-latest", Static).update(self.latest_line)
         except Exception:
             pass
 
-    def complete(self) -> None:
+    def append_thinking(self, text: str) -> None:
+        self._thinking_chunks.append(text)
+
+    def complete(self, status: str = "completed", error: str = "") -> None:
         if self._completed:
             return
         self._completed = True
-        self.status = "completed"
+        self._status = status
+        self._error = error
+        if status == "failed":
+            self.latest_line = f"Failed: {error[:80]}" if error else "Failed"
+        else:
+            self.latest_line = self._update_latest_line()
         if not self._mounted:
             return
-        self.set_class(True, "-status-completed")
+        self.set_class(True, f"-status-{status}")
         self.set_class(False, "-status-running")
-        self._update_header()
         try:
-            self.query_one(SubAgentContent).display = True
-            self.query_one(SubAgentContent).styles.height = "auto"
+            header = self.query_one("#subagent-header", SubAgentHeader)
+            header.update(self._header_text())
+            self.query_one("#subagent-latest", Static).update(self.latest_line)
         except Exception:
             pass
 
     def action_toggle(self) -> None:
-        self._collapsed = not self._collapsed
-        self._update_header()
-        try:
-            self.query_one(SubAgentContent).display = not self._collapsed
-        except Exception:
-            pass
-
-    def on_click(self, event) -> None:
-        """Toggle when the header is clicked (only after completion)."""
-        if not self._completed:
-            return
-        if getattr(event.widget, "id", None) == "subagent-header":
-            self.action_toggle()
-            event.stop()
-
-    def _update_header(self) -> None:
-        try:
-            header = self.query_one(SubAgentHeader)
-            label = pill(self.agent_type, "$warning-muted", "$text-warning")
-            if not self._completed:
-                header.update(f"🧠 {self._prompt_preview()} {label}")
-            elif self._collapsed:
-                header.update(f"+ {self.agent_type} {label}")
-            else:
-                header.update(f"- {self.agent_type} {label}")
-        except Exception:
-            pass
-
-    # ── ExpandProtocol ──
-
-    def can_expand(self) -> bool:
-        return True
-
-    def expand_block(self) -> None:
-        if self._collapsed:
-            self.action_toggle()
-
-    def collapse_block(self) -> None:
-        if not self._collapsed:
-            self.action_toggle()
-
-    def is_block_expanded(self) -> bool:
-        return not self._collapsed
-
-    # ── Forward scroll actions to inner Markdown ──
-
-    def action_scroll_up(self) -> None:
-        self.query_one(Markdown).scroll_up()
-
-    def action_scroll_down(self) -> None:
-        self.query_one(Markdown).scroll_down()
-
-    def action_scroll_left(self) -> None:
-        self.query_one(Markdown).scroll_left()
-
-    def action_scroll_right(self) -> None:
-        self.query_one(Markdown).scroll_right()
-
-    def action_scroll_home(self) -> None:
-        self.query_one(Markdown).scroll_home()
-
-    def action_scroll_end(self) -> None:
-        self.query_one(Markdown).scroll_end()
-
-    def action_page_up(self) -> None:
-        self.query_one(Markdown).scroll_page_up()
-
-    def action_page_down(self) -> None:
-        self.query_one(Markdown).scroll_page_down()
-
-    def action_page_left(self) -> None:
-        self.query_one(Markdown).scroll_page_left()
-
-    def action_page_right(self) -> None:
-        self.query_one(Markdown).scroll_page_right()
+        """Ctrl+X: open full-screen view (works even while running)."""
+        from tui.widgets.subagent_screen import SubAgentScreen
+        self.app.push_screen(SubAgentScreen(
+            agent_type=self.agent_type,
+            subagent_id=self.id or "",
+            chunks=list(self._chunks),
+            thinking_chunks=list(self._thinking_chunks),
+            status=self._status,
+            error=self._error,
+        ))

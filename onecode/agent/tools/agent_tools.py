@@ -87,7 +87,7 @@ class TaskTool:
 
     def spec(self) -> ToolSpec:
         return ToolSpec(
-            name="Task",
+            name="Spawn",
             description="Delegate a subtask to a specialized subagent. Use for large, independent, or specialized work that benefits from a focused sub-agent.",
             input_schema={
                 "type": "object",
@@ -108,7 +108,7 @@ class TaskTool:
         prompt = tool_input.get("prompt", "")
         if agent_type not in self.VALID_AGENT_TYPES:
             return ToolResult(
-                name="Task",
+                name="Spawn",
                 output={
                     "error": (
                         f"Unknown agent_type '{agent_type}'. "
@@ -129,6 +129,6 @@ class TaskTool:
             else:
                 result = asyncio.run(self._spawn(agent_type, prompt))
         except Exception as e:
-            return ToolResult(name="Task", output={"error": str(e)}, is_error=True)
-        return ToolResult(name="Task", output=str(result))
+            return ToolResult(name="Spawn", output={"error": str(e)}, is_error=True)
+        return ToolResult(name="Spawn", output=str(result))
 
