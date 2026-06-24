@@ -1318,7 +1318,7 @@ class AgentEngine:
                     else:
                         subagent_type = tu["input"].get("agent_type", "general")
                         subagent_prompt = tu["input"].get("prompt", "")
-                        yield StreamEvent.subagent_start(subagent_type, tu["id"])
+                        yield StreamEvent.subagent_start(subagent_type, tu["id"], subagent_prompt)
                         accumulated: list[str] = []
                         async for sub_event, sub_text in self._spawn_subagent_async_streaming(
                             subagent_type, subagent_prompt
@@ -1329,14 +1329,16 @@ class AgentEngine:
                                 accumulated.append(sub_text)
                                 yield StreamEvent.subagent_chunk(tu["id"], sub_text)
                         yield StreamEvent.subagent_end(tu["id"])
+                        raw_output = "".join(accumulated)
                         formatted = self._format_subagent_output(
-                            subagent_type, subagent_prompt, "".join(accumulated)
+                            subagent_type, subagent_prompt, raw_output
                         )
                         result = {
                             "tool_use_id": tu["id"],
                             "is_error": False,
                             "category": "task",
                             "content": formatted,
+                            "raw_content": raw_output,
                         }
                 elif (self._plan_gate_mode != "off"
                       and not self._task_manager.list_tasks()
@@ -1384,12 +1386,15 @@ class AgentEngine:
                 result_str = str(result.get("content", ""))
                 is_error = result.get("is_error", False)
                 category = result.get("category", "unknown")
+                # For Task tools, use raw subagent output for TUI display
+                # (no SUMMARY/CHANGES/… structured wrapper)
+                tui_content = str(result.get("raw_content", result_str))
 
                 # Handle SendMessage — user-visible only, skip from LLM context
                 if tu["name"] == "SendMessage":
                     try:
                         parsed = json.loads(result_str) if result_str else {}
-                        msg = parsed.get("message", "")
+                        msg = parsed.get("message", "") if isinstance(parsed, dict) else ""
                         if msg:
                             self._last_user_msg = msg
                             yield StreamEvent.text_delta(f"\n💬 {msg}\n")
@@ -1406,9 +1411,9 @@ class AgentEngine:
                 # Handle AskUser — trigger user interaction dialog, don't add to LLM context yet
                 if tu["name"] == "AskUser":
                     parsed = json.loads(result_str) if result_str else {}
-                    question = parsed.get("question", "")
-                    options = parsed.get("options", [])
-                    questions = parsed.get("questions", [])
+                    question = parsed.get("question", "") if isinstance(parsed, dict) else ""
+                    options = parsed.get("options", []) if isinstance(parsed, dict) else []
+                    questions = parsed.get("questions", []) if isinstance(parsed, dict) else []
 
                     # Check for auto-default on single question + single option
                     if not questions and len(options) == 1 and options[0].get("default"):
@@ -1467,7 +1472,7 @@ class AgentEngine:
                 requires_approval = False
                 try:
                     parsed = json.loads(result_str) if result_str else {}
-                    requires_approval = parsed.get("requires_approval", False)
+                    requires_approval = isinstance(parsed, dict) and parsed.get("requires_approval", False)
                 except (json.JSONDecodeError, ValueError):
                     pass
 
@@ -1504,7 +1509,7 @@ class AgentEngine:
                     ))
                     yield StreamEvent.tool_result(
                         call_id=tu["id"],
-                        content=result_str,
+                        content=tui_content,
                         is_error=is_error,
                         category=result_cat,
                     )

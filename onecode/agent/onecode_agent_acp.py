@@ -42,6 +42,27 @@ def debug_log(*args, **kwargs):
     else:
         print("[onecode]", *args, file=sys.stderr, flush=True)
 
+
+_CRASH_LOG_DIR = Path.home() / ".cdh" / "logs"
+
+
+def _dump_crash(context: str) -> None:
+    """Write traceback to ``~/.cdh/logs/cdh_crash.log`` so it survives subprocess exit."""
+    import os
+    import traceback
+    now = __import__("datetime").datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    _CRASH_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    path = _CRASH_LOG_DIR / "cdh_crash.log"
+    try:
+        lines = [f"=== crash at {now} context={context} ===\n"]
+        for tb_line in traceback.format_exc().splitlines(True):
+            lines.append(tb_line)
+        with open(os.fspath(path), "a", encoding="utf-8") as f:
+            f.writelines(lines)
+    except Exception:
+        pass
+
+
 from onecode.agent.cdh_loader import CdhProjectLoader
 from onecode.agent.engine import AgentEngine
 from onecode.agent.permissions_store import PermissionStore
@@ -316,7 +337,7 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
 
     _HEADER_ONLY_TOOLS = frozenset({
         "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskOutput", "TaskStop",
-        "TodoCreate", "TodoList", "TodoComplete", "Glob",
+        "TodoCreate", "TodoList", "TodoComplete", "Glob", "Task",
     })
     if name in _HEADER_ONLY_TOOLS:
         return []
@@ -781,8 +802,12 @@ class CDHACPAdapter:
 
     def send_notification(self, method: str, params: dict):
         """Send a JSONRPC notification to A2TUI."""
-        notification = {"jsonrpc": "2.0", "method": method, "params": params}
-        print(json.dumps(notification), flush=True)
+        try:
+            notification = {"jsonrpc": "2.0", "method": method, "params": params}
+            print(json.dumps(notification), flush=True)
+        except (TypeError, ValueError, OSError) as e:
+            _dump_crash("send_notification")
+            debug_log("send_notification failed: %s", e)
 
     def send_request(self, method: str, params: dict) -> asyncio.Future[dict]:
         """Send a JSONRPC request to A2TUI and return a Future for the response."""
@@ -791,7 +816,13 @@ class CDHACPAdapter:
         future: asyncio.Future[dict] = asyncio.Future()
         self._pending_requests[req_id] = future
         request = {"jsonrpc": "2.0", "method": method, "params": params, "id": req_id}
-        print(json.dumps(request), flush=True)
+        try:
+            print(json.dumps(request), flush=True)
+        except (TypeError, ValueError, OSError) as e:
+            _dump_crash("send_request")
+            debug_log("send_request failed: %s", e)
+            if not future.done():
+                future.set_exception(e)
         return future
 
     def resolve_pending_request(self, req_id: str, result: dict) -> bool:
@@ -894,6 +925,38 @@ class CDHACPAdapter:
                 **update,
             }
         self.send_session_update(self.tool_calls[block.tool_use_id])
+
+    def _replay_tool_or_subagent(self, tool_use_id: str, content: str, is_error: bool) -> None:
+        """Replay a tool result — subagent events for Task, tool_call_update otherwise."""
+        tc = self.tool_calls.get(tool_use_id)
+        if tc and tc.get("_tool_name") == "Task":
+            args = tc.get("_tool_args", {})
+            agent_type = args.get("agent_type", "general")
+            prompt = args.get("prompt", "")
+            self.send_session_update({
+                "sessionUpdate": "subagent_start",
+                "subagentId": tool_use_id,
+                "agentType": agent_type,
+                "prompt": prompt,
+            })
+            if content:
+                self.send_session_update({
+                    "sessionUpdate": "subagent_chunk",
+                    "subagentId": tool_use_id,
+                    "text": content,
+                })
+            self.send_session_update({
+                "sessionUpdate": "subagent_end",
+                "subagentId": tool_use_id,
+                "agentType": agent_type,
+            })
+        else:
+            tr = ToolResult(
+                tool_use_id=tool_use_id,
+                content=content,
+                is_error=is_error,
+            )
+            self._emit_tool_result(tr)
 
     async def initialize(self, protocol_version: int, client_capabilities: dict, client_info: dict):
         """Handle ACP initialize."""
@@ -1050,7 +1113,11 @@ class CDHACPAdapter:
                             "_tool_name": block.name,
                             "_tool_args": block.arguments or {},
                         }
-                        self.send_session_update(self.tool_calls[block.id])
+                        # Skip sending tool_call for Task tools — SubAgent widget
+                        # is rendered via subagent_start/subagent_chunk/subagent_end
+                        # when the corresponding tool_result is processed below.
+                        if block.name != "Task":
+                            self.send_session_update(self.tool_calls[block.id])
                     elif isinstance(block, ToolResult):
                         self._emit_tool_result(block)
                     elif isinstance(block, SubAgentBlock):
@@ -1062,6 +1129,7 @@ class CDHACPAdapter:
                             "sessionUpdate": "subagent_start",
                             "subagentId": block.id,
                             "agentType": block.agent_type,
+                            "prompt": block.prompt,
                         })
                         if block.result:
                             self.send_session_update({
@@ -1078,19 +1146,17 @@ class CDHACPAdapter:
                 if isinstance(content, list):
                     for item in content:
                         if isinstance(item, dict) and item.get("type") == "tool_result":
-                            tr = ToolResult(
-                                tool_use_id=item.get("tool_use_id", ""),
-                                content=item.get("content", ""),
-                                is_error=item.get("is_error", False),
+                            self._replay_tool_or_subagent(
+                                item.get("tool_use_id", ""),
+                                item.get("content", ""),
+                                item.get("is_error", False),
                             )
-                            self._emit_tool_result(tr)
                 elif isinstance(content, dict) and content.get("type") == "tool_result":
-                    tr = ToolResult(
-                        tool_use_id=content.get("tool_use_id", ""),
-                        content=content.get("content", ""),
-                        is_error=content.get("is_error", False),
+                    self._replay_tool_or_subagent(
+                        content.get("tool_use_id", ""),
+                        content.get("content", ""),
+                        content.get("is_error", False),
                     )
-                    self._emit_tool_result(tr)
 
         return {
             "modes": {
@@ -1466,7 +1532,10 @@ class CDHACPAdapter:
                         "content": existing.get("content", []),
                         "_tool_name": event.tool_name,
                     }
-                    self.send_session_update(self.tool_calls[event.tool_id])
+                    # Skip sending tool_call for Task tools — SubAgent widget
+                    # handles the display via subagent_start events.
+                    if event.tool_name != "Task":
+                        self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
                     if event.tool_id in self.tool_calls:
                         title = event.tool_name
@@ -1520,10 +1589,22 @@ class CDHACPAdapter:
                             "_tool_name": event.tool_name,
                             "_tool_args": event.tool_args,
                         })
-                        self.send_session_update(self.tool_calls[event.tool_id])
+                        # Skip sending tool_call_update for Task — SubAgent widget
+                        # handles the display via subagent_start/chunk/end events.
+                        if event.tool_name != "Task":
+                            self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.TOOL_RESULT:
-                    status = "failed" if event.result_is_error else "completed"
+                    # Task tool results: subagent_start/chunk/end events were
+                    # already sent during subagent execution — just skip the
+                    # tool_call_update (no duplicate SubAgent widget needed).
                     tname = self.tool_calls.get(event.tool_id, {}).get("_tool_name", "")
+                    if tname == "Task":
+                        try:
+                            self.agent.save_session()
+                        except Exception:
+                            debug_log("Failed to save session after subagent", exc_info=True)
+                        continue
+                    status = "failed" if event.result_is_error else "completed"
                     display_text = _format_tui_display_text(
                         event.result_content or "", tname,
                     )
@@ -1578,9 +1659,8 @@ class CDHACPAdapter:
                         "type": "content",
                         "content": {"type": "text", "text": display_text},
                     }] if display_text else []
-                    if event.tool_id in self.tool_calls:
-                        existing_content = self.tool_calls[event.tool_id].get("content", [])
-                    else:
+                    existing_content = self.tool_calls.get(event.tool_id, {}).get("content", [])
+                    if not isinstance(existing_content, list):
                         existing_content = []
                     debug_log(
                         "TOOL_RESULT id=%s status=%s result_len=%d display_len=%d existing_blocks=%d new_blocks=%d",
@@ -1629,6 +1709,7 @@ class CDHACPAdapter:
                         "sessionUpdate": "subagent_start",
                         "subagentId": event.subagent_id,
                         "agentType": event.subagent_type,
+                        "prompt": event.subagent_prompt,
                     })
                 elif event.type == StreamEventType.SUBAGENT_CHUNK:
                     self.send_session_update({
@@ -1846,6 +1927,7 @@ class CDHACPAdapter:
         except Exception:
             import traceback
             tb = traceback.format_exc()
+            _dump_crash("chat_stream")
             debug_log("Unhandled exception in chat_stream:\n%s", tb, exc_info=True)
             print(f"[cdh-agent-acp] ERROR in chat_stream:\n{tb}", file=sys.stderr, flush=True)
             self._text_chunker.flush()
@@ -1888,21 +1970,8 @@ class CDHACPAdapter:
             "size": size,
         })
 
-        # Send final action summary if tool calls were made this turn
-        if self.tool_calls:
-            summaries: list[str] = []
-            for tid, tc in self.tool_calls.items():
-                action = tc.get("title", "")
-                status = tc.get("status", "")
-                if action:
-                    emoji = "✅" if status == "completed" else "❌" if status == "failed" else "⏳"
-                    summaries.append(f"{emoji} {action}")
-            if summaries:
-                summary_text = "\n".join(summaries)
-                self.send_session_update({
-                    "sessionUpdate": "agent_message_chunk",
-                    "content": {"type": "text", "text": f"```output\n{summary_text}\n```"},
-                })
+        # Tool call summary suppressed — internal step tracking
+        # is not shown to avoid cluttering conversation output.
 
         stop_reason = "cancelled" if self.agent._cancelled else "end_turn"
         usage = self._build_session_usage()
@@ -2155,6 +2224,7 @@ async def _main():
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
+            _dump_crash("_run_prompt")
             print(f"[cdh-agent-acp] ERROR in _run_prompt:\n{tb}", file=sys.stderr, flush=True)
             debug_log("_run_prompt failed: %s\n%s", e, tb, exc_info=True)
             return {"jsonrpc": "2.0", "error": {"code": -32603, "message": str(e)}, "id": req.get("id")}
@@ -2197,10 +2267,15 @@ async def _main():
                     try:
                         resp = t.result()
                     except Exception as exc:
+                        _dump_crash("_on_prompt_done")
                         debug_log(f"Prompt task raised unhandled exception: {exc}", exc_info=True)
                         resp = {"jsonrpc": "2.0", "error": {"code": -32603, "message": str(exc)}, "id": req.get("id")}
                     if resp.get("id") is not None:
-                        print(json.dumps(resp), flush=True)
+                        try:
+                            print(json.dumps(resp), flush=True)
+                        except (TypeError, ValueError, OSError) as e:
+                            _dump_crash("_on_prompt_done_send")
+                            debug_log("_on_prompt_done send failed: %s", e)
                 prompt_task.add_done_callback(_on_prompt_done)
             elif method == "session/cancel":
                 if prompt_task and not prompt_task.done():
@@ -2209,7 +2284,11 @@ async def _main():
             else:
                 response = await server.handle_request(req)
                 if response.get("id") is not None:
-                    print(json.dumps(response), flush=True)
+                    try:
+                        print(json.dumps(response), flush=True)
+                    except (TypeError, ValueError, OSError) as e:
+                        _dump_crash("main_loop_send")
+                        debug_log("main loop send failed: %s", e)
 
 
 def main():

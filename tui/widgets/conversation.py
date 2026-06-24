@@ -1135,7 +1135,7 @@ class Conversation(containers.Vertical):
                 case "subagent_start":
                     current_thought = None
                     self.new_block()
-                    sa = SubAgent(entry["agent_type"], tool_id=entry["id"])
+                    sa = SubAgent(entry["agent_type"], tool_id=entry["id"], prompt=entry.get("prompt", ""))
                     created_subagents[entry["id"]] = sa
                     widgets.append(sa)
 
@@ -1338,9 +1338,9 @@ class Conversation(containers.Vertical):
 
         message.stop()
         if self._replay:
-            self._replay_buffer.append({"kind": "subagent_start", "agent_type": message.agent_type, "id": message.subagent_id})
+            self._replay_buffer.append({"kind": "subagent_start", "agent_type": message.agent_type, "id": message.subagent_id, "prompt": message.prompt})
             return
-        sa = SubAgent(message.agent_type, tool_id=message.subagent_id)
+        sa = SubAgent(message.agent_type, tool_id=message.subagent_id, prompt=message.prompt)
         await self.post(sa, new_block=True)
 
     @on(acp_messages.SubAgentChunk)

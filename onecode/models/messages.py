@@ -325,6 +325,7 @@ class StreamEvent:
     subagent_id: str = ""
     subagent_type: str = ""
     subagent_text: str = ""
+    subagent_prompt: str = ""
 
     @classmethod
     def text_delta(cls, text: str) -> "StreamEvent":
@@ -410,11 +411,12 @@ class StreamEvent:
         return cls(type=StreamEventType.PLAN, plan_entries=entries)
 
     @classmethod
-    def subagent_start(cls, agent_type: str, call_id: str) -> "StreamEvent":
+    def subagent_start(cls, agent_type: str, call_id: str, prompt: str = "") -> "StreamEvent":
         return cls(
             type=StreamEventType.SUBAGENT_START,
             subagent_id=call_id,
             subagent_type=agent_type,
+            subagent_prompt=prompt,
         )
 
     @classmethod

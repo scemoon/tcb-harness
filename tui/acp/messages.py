@@ -172,6 +172,7 @@ class SubAgentStart(AgentMessage):
 
     subagent_id: str
     agent_type: str
+    prompt: str = ""
 
 
 @dataclass

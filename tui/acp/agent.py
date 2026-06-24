@@ -277,8 +277,12 @@ class Agent(AgentBase):
                 "sessionUpdate": "subagent_start",
                 "subagentId": subagent_id,
                 "agentType": agent_type,
+                **rest,
             }:
-                self.post_message(messages.SubAgentStart(subagent_id, agent_type))
+                self.post_message(messages.SubAgentStart(
+                    subagent_id, agent_type,
+                    prompt=rest.get("prompt", ""),
+                ))
 
             case {
                 "sessionUpdate": "subagent_chunk",
