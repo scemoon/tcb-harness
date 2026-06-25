@@ -9,8 +9,6 @@ from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widgets import Static
 from textual import containers
-from rich.text import Text
-from rich.style import Style
 
 
 CONTENT_WIDTH = 35
@@ -37,40 +35,24 @@ IGNORED_DIRS = frozenset(
     }
 )
 
-STATUS_ICONS = {
-    "?": "?",
-    "M": "M",
-    "A": "A",
-    "D": "D",
-    "R": "R",
-    "C": "C",
-}
-
-STATUS_COLORS = {
-    "?": "green",
-    "M": "yellow",
-    "A": "green",
-    "D": "red",
-    "R": "#888888",
-    "C": "green",
-}
+STATUS_ICONS = {"?": "?", "M": "M", "A": "A", "D": "D", "R": "R", "C": "C"}
+STATUS_COLORS = {"?": "green", "M": "yellow", "A": "green", "D": "red", "R": "#888888", "C": "green"}
+DIFF_COLORS: dict[str, str] = {"add": "green", "del": "red", "mix": "yellow", "dim": "#555555"}
 
 
-def _status_style(raw: str) -> tuple[str, Style]:
+def _status_info(raw: str) -> tuple[str, str]:
     ch = raw.strip()[:1] or "M"
-    icon = STATUS_ICONS.get(ch, "M")
-    color = STATUS_COLORS.get(ch, "yellow")
-    return icon, Style(color=color)
+    return STATUS_ICONS.get(ch, "M"), STATUS_COLORS.get(ch, "yellow")
 
 
-def _diff_color(added: int, deleted: int) -> Style:
-    if added > 0 and deleted > 0:
-        return Style(color="yellow")
-    if added > 0:
-        return Style(color="green")
-    if deleted > 0:
-        return Style(color="red")
-    return Style(color="#555555")
+def _tag_color(added: int, deleted: int) -> str:
+    if added and deleted:
+        return DIFF_COLORS["mix"]
+    if added:
+        return DIFF_COLORS["add"]
+    if deleted:
+        return DIFF_COLORS["del"]
+    return DIFF_COLORS["dim"]
 
 
 class ModifiedFiles(containers.Vertical):
@@ -206,44 +188,38 @@ class ModifiedFiles(containers.Vertical):
             self._show_status("no-changes", NO_CHANGES_TEXT)
             return
         self._show_status("file-modified", "")
-        text = Text()
-        for i, raw_line in enumerate(lines):
-            if i > 0:
-                text.append("\n")
+
+        out: list[str] = []
+        for raw_line in lines:
             filepath = raw_line[3:]
-            icon, style = _status_style(raw_line[:2])
+            icon, sc = _status_info(raw_line[:2])
 
             added, deleted = diffmap.get(filepath, (0, 0))
             if "?" in raw_line[:2]:
-                diff_tag = "new"
+                tag = "new"
+                tc = DIFF_COLORS["dim"]
             elif "D" in raw_line[:2]:
-                diff_tag = "del"
+                tag = "del"
+                tc = DIFF_COLORS["del"]
+            elif added or deleted:
+                tag = f"+{added}/-{deleted}"
+                tc = _tag_color(added, deleted)
             else:
-                diff_tag = f"+{added}/-{deleted}" if added or deleted else ""
+                tag = ""
+                tc = ""
 
-            avail = CONTENT_WIDTH
-            tag_w = len(diff_tag) + 1 if diff_tag else 0
-            max_path = avail - 3 - tag_w
-            if max_path < 4:
-                max_path = 4
-            if len(filepath) > max_path:
-                filepath = filepath[:max_path - 1] + "…"
-
-            line_text = Text()
-            line_text.append(f"{icon} ", style=style)
-            line_text.append(filepath, style=style)
-
-            if diff_tag:
-                remain = avail - line_text.cell_len
-                p = remain - len(diff_tag) - 1
-                if p > 0:
-                    line_text.append(" " * p)
-                line_text.append(f" {diff_tag}", style=_diff_color(added, deleted))
-
-            text.append_text(line_text)
+            tag_s = f" [{tc}]{tag}[/]" if tag else ""
+            tag_len = len(tag) + 1 if tag else 0
+            max_fn = CONTENT_WIDTH - 2 - tag_len
+            if max_fn < 3:
+                max_fn = 3
+            disp = filepath[:max_fn - 1] + "…" if len(filepath) > max_fn else filepath
+            pad = CONTENT_WIDTH - 2 - len(disp) - tag_len
+            pad_s = " " * pad if pad > 0 else ""
+            out.append(f"[{sc}]{icon} {disp}[/]{pad_s}{tag_s}")
 
         files_widget = self.query_one("#mf-files", Static)
-        files_widget.update(text)
+        files_widget.update("\n".join(out))
 
     def _show_status(self, kind: str, text: str) -> None:
         self._status_kind = kind
