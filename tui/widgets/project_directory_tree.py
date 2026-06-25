@@ -42,10 +42,14 @@ This shows the files in your project directory.
         disabled: bool = False,
     ) -> None:
         self.path_filter: PathFilter | None = None
+        self._reload_lock = asyncio.Lock()
         path = Path(path).resolve() if isinstance(path, str) else path.resolve()
         super().__init__(path, name=name, id=id, classes=classes, disabled=disabled)
 
     async def _update_path_filter(self) -> None:
+        if self.path is None:
+            self.path_filter = None
+            return
         path = Path(self.path) if isinstance(self.path, str) else self.path
         path = await asyncio.to_thread(path.resolve)
         self.path_filter = await asyncio.to_thread(PathFilter.from_git_root, path)
@@ -56,13 +60,16 @@ This shows the files in your project directory.
         If the path is changed the directory tree will be repopulated using
         the new value as the root.
         """
-        has_cursor = self.cursor_node is not None
-        self.reset_node(self.root, str(self.path), DirEntry(self.PATH(self.path)))
-        await self._update_path_filter()
-        await self.reload()
-        if has_cursor:
-            self.cursor_line = 0
-        self.scroll_to(0, 0, animate=False)
+        if self.path is None:
+            return
+        async with self._reload_lock:
+            has_cursor = self.cursor_node is not None
+            self.reset_node(self.root, str(self.path), DirEntry(self.PATH(self.path)))
+            await self._update_path_filter()
+            await self.reload()
+            if has_cursor:
+                self.cursor_line = 0
+            self.scroll_to(0, 0, animate=False)
 
     async def on_mount(self) -> None:
         await self._update_path_filter()
@@ -90,5 +97,6 @@ This shows the files in your project directory.
 
     @work
     async def action_refresh(self) -> None:
-        await self.reload()
+        async with self._reload_lock:
+            await self.reload()
         self.notify("Project directory has been refreshed", title="Directory Tree")

@@ -267,6 +267,16 @@ This is a view of your conversation with the agent.
         pass
 
 
+def _plan_entries_from_dicts(raw_entries):
+    """Deprecated thin wrapper around the shared ``entries_from_dicts`` helper.
+
+    Kept for backwards compatibility with any external callers; new code
+    should import ``entries_from_dicts`` directly from ``tui.widgets.plan``.
+    """
+    from tui.widgets.plan import entries_from_dicts
+    return entries_from_dicts(raw_entries)
+
+
 class Conversation(containers.Vertical):
     """Holds the agent conversation (input, output, and various controls / information)."""
 
@@ -378,6 +388,7 @@ class Conversation(containers.Vertical):
         self._agent_thought: AgentThought | None = None
         self._replay: bool = False
         self._replay_buffer: list[dict] = []
+        self._active_subagents: dict = {}
         self._last_escape_time: float = monotonic()
         self._agent_data = agent
         self._agent_session_id = agent_session_id
@@ -1130,12 +1141,12 @@ class Conversation(containers.Vertical):
                 case "plan":
                     current_thought = None
                     self.new_block()
-                    widgets.append(Plan(entry["entries"]))
+                    widgets.append(Plan(_plan_entries_from_dicts(entry["entries"])))
 
                 case "subagent_start":
                     current_thought = None
                     self.new_block()
-                    sa = SubAgent(entry["agent_type"], tool_id=entry["id"], prompt=entry.get("prompt", ""), replay=True)
+                    sa = SubAgent(entry["agent_type"], tool_id=entry["id"], prompt=entry.get("prompt", ""))
                     created_subagents[entry["id"]] = sa
                     widgets.append(sa)
 
@@ -1228,14 +1239,7 @@ class Conversation(containers.Vertical):
             return
         from tui.widgets.plan import Plan
 
-        entries = [
-            Plan.Entry(
-                Content(entry["content"]),
-                entry.get("priority", "medium"),
-                entry.get("status", "pending"),
-            )
-            for entry in message.entries
-        ]
+        entries = _plan_entries_from_dicts(message.entries)
 
         # Look up any existing Plan widget anywhere in the conversation
         # tree — checking only ``children[-1]`` would create duplicates if
@@ -1349,30 +1353,32 @@ class Conversation(containers.Vertical):
             self._replay_buffer.append({"kind": "subagent_start", "agent_type": message.agent_type, "id": message.subagent_id, "prompt": message.prompt})
             return
         sa = SubAgent(message.agent_type, tool_id=message.subagent_id, prompt=message.prompt)
+        self._active_subagents[message.subagent_id] = sa
         await self.post(sa, new_block=True)
+
+    def _get_subagent(self, subagent_id: str):
+        from tui.widgets.subagent import SubAgent
+
+        sa = self._active_subagents.get(subagent_id)
+        if sa is not None:
+            return sa
+        try:
+            return self.contents.get_child_by_id(subagent_id, SubAgent)
+        except NoMatches:
+            return None
 
     @on(acp_messages.SubAgentChunk)
     async def on_acp_subagent_chunk(self, message: acp_messages.SubAgentChunk):
-        from tui.widgets.subagent import SubAgent
-
         message.stop()
         if self._replay:
             self._replay_buffer.append({"kind": "subagent_chunk", "id": message.subagent_id, "text": message.text})
             return
-        try:
-            sa: SubAgent | None = self.contents.get_child_by_id(
-                message.subagent_id, SubAgent
-            )
-        except NoMatches:
-            return
-        else:
-            if sa is not None:
-                sa.append_chunk(message.text)
+        sa = self._get_subagent(message.subagent_id)
+        if sa is not None:
+            sa.append_chunk(message.text)
 
     @on(acp_messages.SubAgentThinking)
     async def on_acp_subagent_thinking(self, message: acp_messages.SubAgentThinking):
-        from tui.widgets.subagent import SubAgent
-
         message.stop()
         if self._replay:
             self._replay_buffer.append({
@@ -1381,20 +1387,12 @@ class Conversation(containers.Vertical):
                 "text": message.text,
             })
             return
-        try:
-            sa: SubAgent | None = self.contents.get_child_by_id(
-                message.subagent_id, SubAgent
-            )
-        except NoMatches:
-            return
-        else:
-            if sa is not None:
-                sa.append_thinking(message.text)
+        sa = self._get_subagent(message.subagent_id)
+        if sa is not None:
+            sa.append_thinking(message.text)
 
     @on(acp_messages.SubAgentEnd)
     async def on_acp_subagent_end(self, message: acp_messages.SubAgentEnd):
-        from tui.widgets.subagent import SubAgent
-
         message.stop()
         if self._replay:
             self._replay_buffer.append({
@@ -1404,15 +1402,10 @@ class Conversation(containers.Vertical):
                 "error": message.error,
             })
             return
-        try:
-            sa: SubAgent | None = self.contents.get_child_by_id(
-                message.subagent_id, SubAgent
-            )
-        except NoMatches:
-            return
-        else:
-            if sa is not None:
-                sa.complete(message.status, message.error)
+        sa = self._get_subagent(message.subagent_id)
+        if sa is not None:
+            sa.complete(message.status, message.error)
+            self._active_subagents.pop(message.subagent_id, None)
 
     @on(acp_messages.AvailableCommandsUpdate)
     async def on_acp_available_commands_update(

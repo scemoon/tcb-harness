@@ -15,6 +15,7 @@ from onecode.agent.permissions_store import PermissionStore
 from onecode.models.provider import ContentBlockType, ProviderRegistry
 
 from onecode.agent.session import AgentSession
+from onecode.memory import AgentMemory, MemoryLayer
 from onecode.models.errors import safe_error_msg
 from onecode.models.messages import StreamEvent, StreamEventType
 
@@ -243,20 +244,24 @@ def _extract_legacy_tool_uses(
     return tool_uses, cleaned, counter
 
 
-_TASK_STATUSES = {"pending", "in_progress", "completed"}
+_TODO_STATUSES = {"pending", "in_progress", "completed"}
 
 
-class TaskManager:
-    """V2 task manager with dependency tracking (Clawd-Code style).
+class TodoManager:
+    """Unified todo manager (formerly TodoManager).
 
-    Tasks have: id, subject, description, status, owner, blocks, blockedBy, metadata, output.
-    Supports dependency tracking for multi-agent coordination.
+    Each todo has: id, subject, description, activeForm, status, owner, blocks,
+    blockedBy, metadata, output. Supports dependency tracking and progress
+    display in the TUI Plan sidebar.
+
+    Persistence format (``to_dict``/``from_dict``) accepts both the new
+    single-list layout and the legacy ``{"tasks": [...], "todos": [...]}``
+    layout for backwards compatibility with existing session files.
     """
 
     def __init__(self, on_change: Callable[[], None] | None = None):
-        self._tasks: dict[str, dict] = {}  # id -> task dict
-        self._todos: list[dict] = []
-        self._plan: list[str] = []
+        self._todos: dict[str, dict] = {}
+        self._order: list[str] = []
         self._id_counter = 0
         self._on_change = on_change
 
@@ -268,19 +273,19 @@ class TaskManager:
         self._id_counter += 1
         return f"t{self._id_counter}"
 
-    # ── V2 Task Management ──
+    # ── Todo CRUD ──
 
-    def create_task(
+    def create_todo(
         self,
         subject: str,
         description: str = "",
         active_form: str = "",
         metadata: dict | None = None,
     ) -> dict:
-        """Create a task with dependency tracking support."""
-        task_id = self._next_id()
-        task = {
-            "id": task_id,
+        """Create a todo with dependency tracking support."""
+        todo_id = self._next_id()
+        todo = {
+            "id": todo_id,
             "_order": self._id_counter,
             "subject": subject,
             "description": description,
@@ -292,161 +297,141 @@ class TaskManager:
             "metadata": dict(metadata or {}),
             "output": "",
         }
-        self._tasks[task_id] = task
+        self._todos[todo_id] = todo
+        self._order.append(todo_id)
         self._mark_dirty()
-        return task
+        return todo
 
-    def get_task(self, task_id: str) -> dict | None:
-        return self._tasks.get(task_id)
+    def get_todo(self, todo_id: str) -> dict | None:
+        return self._todos.get(todo_id)
 
-    def list_tasks(self) -> list[dict]:
-        """List all tasks in creation order."""
-        return list(self._tasks.values())
+    def list_todos(self) -> list[dict]:
+        """List all todos in creation order."""
+        return [self._todos[tid] for tid in self._order if tid in self._todos]
 
-    def update_task(self, task_id: str, **fields) -> dict | None:
-        """Update task fields. Supports: subject, description, activeForm, status,
-        owner, metadata, addBlocks, addBlockedBy. Returns updated task or None."""
-        task = self._tasks.get(task_id)
-        if task is None:
+    def update_todo(self, todo_id: str, **fields) -> dict | None:
+        """Update todo fields. Supports: subject, description, activeForm, status,
+        owner, metadata, addBlocks, addBlockedBy. Returns updated todo or None."""
+        todo = self._todos.get(todo_id)
+        if todo is None:
             return None
 
         updated = []
 
-        # String fields
         for field in ("subject", "description", "activeForm", "owner"):
             if field in fields:
                 v = fields[field]
-                if isinstance(v, str) and v != task.get(field):
-                    task[field] = v
+                if isinstance(v, str) and v != todo.get(field):
+                    todo[field] = v
                     updated.append(field)
 
-        # Status field
         if "status" in fields:
             status = fields["status"]
             if status == "deleted":
-                self._tasks.pop(task_id, None)
+                self._todos.pop(todo_id, None)
+                if todo_id in self._order:
+                    self._order.remove(todo_id)
                 self._mark_dirty()
-                return {"id": task_id, "deleted": True}
-            if status in _TASK_STATUSES and status != task.get("status"):
-                task["status"] = status
+                return {"id": todo_id, "deleted": True}
+            if status in _TODO_STATUSES and status != todo.get("status"):
+                todo["status"] = status
                 updated.append("status")
 
-        # Dependency fields
         for rel_field, input_key in (("blocks", "addBlocks"), ("blockedBy", "addBlockedBy")):
             if input_key in fields:
                 ids = fields[input_key]
                 if isinstance(ids, list):
-                    cur = list(task.get(rel_field) or [])
+                    cur = list(todo.get(rel_field) or [])
                     for x in ids:
                         if isinstance(x, str) and x not in cur:
                             cur.append(x)
-                    if cur != task.get(rel_field):
-                        task[rel_field] = cur
+                    if cur != todo.get(rel_field):
+                        todo[rel_field] = cur
                         updated.append(rel_field)
 
-        # Metadata
         if "metadata" in fields:
             md = fields["metadata"]
             if isinstance(md, dict):
-                existing = dict(task.get("metadata") or {})
+                existing = dict(todo.get("metadata") or {})
                 for k, v in md.items():
                     if v is None:
                         existing.pop(k, None)
                     else:
                         existing[k] = v
-                task["metadata"] = existing
+                todo["metadata"] = existing
                 updated.append("metadata")
 
-        # Output
         if "output" in fields:
             v = fields["output"]
             if isinstance(v, str):
-                task["output"] = v
+                todo["output"] = v
                 updated.append("output")
 
         self._mark_dirty()
-        return task
+        return todo
 
-    def get_task_output(self, task_id: str) -> dict:
-        """Get output for a task."""
-        task = self._tasks.get(task_id)
-        if task is None:
+    def get_todo_output(self, todo_id: str) -> dict:
+        """Get output for a todo."""
+        todo = self._todos.get(todo_id)
+        if todo is None:
             return {"retrieval_status": "not_found", "task": None}
-        output = str(task.get("output") or "")
+        output = str(todo.get("output") or "")
         return {
             "retrieval_status": "success" if output else "not_ready",
             "task": {
-                "task_id": task_id,
-                "task_type": "task_list",
-                "status": task.get("status"),
-                "description": task.get("description"),
+                "task_id": todo_id,
+                "task_type": "todo_list",
+                "status": todo.get("status"),
+                "description": todo.get("description"),
                 "output": output,
             },
         }
 
-    def clear_tasks(self) -> None:
-        self._tasks.clear()
-        self._mark_dirty()
-
-    # ── Todo Management (unchanged API) ──
-
-    def add_todo(self, text: str) -> str:
-        tid = self._next_id()
-        self._todos.append({"text": text, "done": False, "id": tid})
-        self._mark_dirty()
-        return tid
-
-    def complete_todo(self, todo_id: str) -> bool:
-        for t in self._todos:
-            if t["id"] == todo_id:
-                t["done"] = True
-                self._mark_dirty()
-                return True
-        return False
-
-    def remove_todo(self, todo_id: str) -> bool:
-        before = len(self._todos)
-        self._todos = [t for t in self._todos if t["id"] != todo_id]
-        result = len(self._todos) < before
-        self._mark_dirty()
-        return result
-
-    def list_todos(self) -> list[dict]:
-        return self._todos
-
     def clear_todos(self) -> None:
-        self._todos = []
+        self._todos.clear()
+        self._order.clear()
         self._mark_dirty()
-
-    def set_plan(self, plan: list[str]) -> None:
-        self._plan = plan
-        self._mark_dirty()
-
-    def get_plan(self) -> list[str]:
-        return self._plan
 
     # ── Serialization ──
 
     def to_dict(self) -> dict:
-        """Serialize all tasks and todos for persistence."""
+        """Serialize todos for persistence."""
         return {
-            "tasks": [dict(t) for t in self._tasks.values()],
-            "todos": [dict(t) for t in self._todos],
-            "plan": list(self._plan),
+            "todos": [dict(self._todos[tid]) for tid in self._order if tid in self._todos],
             "id_counter": self._id_counter,
         }
 
     @classmethod
-    def from_dict(cls, data: dict, on_change: Callable[[], None] | None = None) -> TaskManager:
-        """Restore task manager from saved dict."""
+    def from_dict(cls, data: dict, on_change: Callable[[], None] | None = None) -> "TodoManager":
+        """Restore todo manager from saved dict.
+
+        Accepts the unified ``{"todos": [...]}`` layout (preferred) and the
+        legacy ``{"tasks": [...], "todos": [...]}`` layout where ``todos``
+        entries may use the old ``{text, done}`` shape — these are converted
+        on the fly to the new ``{subject, status}`` shape.
+        """
         tm = cls(on_change=on_change)
         tm._id_counter = data.get("id_counter", 0)
-        tm._plan = list(data.get("plan", []))
-        for t in data.get("tasks", []):
-            tid = t.get("id", tm._next_id())
-            tm._tasks[tid] = dict(t)
-        for t in data.get("todos", []):
-            tm._todos.append(dict(t))
+
+        raw_todos: list[dict] = []
+        if "todos" in data:
+            raw_todos.extend(data.get("todos") or [])
+        if "tasks" in data:
+            raw_todos.extend(data.get("tasks") or [])
+
+        for t in raw_todos:
+            todo = dict(t)
+            if "subject" not in todo and "text" in todo:
+                todo["subject"] = todo.pop("text")
+            if "status" not in todo and "done" in todo:
+                todo["status"] = "completed" if todo.pop("done") else "pending"
+            todo.setdefault("status", "pending")
+            tid = todo.get("id") or tm._next_id()
+            todo["id"] = tid
+            todo.setdefault("_order", tm._id_counter)
+            tm._todos[tid] = todo
+            if tid not in tm._order:
+                tm._order.append(tid)
         return tm
 
 
@@ -477,9 +462,15 @@ class AgentEngine:
         self.total_tokens = 0
         self._skills_loaded = False
         self._session: Optional[AgentSession] = None
+        self._memory = AgentMemory()
         self._hooks = HookManager()
-        self._task_manager = TaskManager(on_change=self._on_task_change)
+        self._todo_manager = TodoManager(on_change=self._on_todo_change)
         self._plan_dirty: bool = False
+        # Cache of the last plan snapshot that was emitted to the TUI.  Used
+        # by ``_emit_plan_update`` to dedupe redundant emits when the todos
+        # have not actually changed between turns.  The first emit of a
+        # session/cycle always wins (cache starts empty).
+        self._last_emitted_plan: tuple = ()
         self._project_config: dict = {}
         self._project_context_loaded = False
         self._pending_approval: dict | None = None  # {tool_call, result_key}
@@ -542,7 +533,7 @@ class AgentEngine:
 
         # ReAct state tracking
         self._react_phase: str = "thought"  # "thought" | "action" | "observation"
-        self._direct_execution_count: int = 0  # Track direct tool use for Task-first routing
+        self._direct_execution_count: int = 0  # Track direct tool use for routing-decision reminder
 
     def _build_tool_registry(self) -> ToolRegistry:
         from onecode.agent.tools.registry import ToolRegistry
@@ -551,8 +542,8 @@ class AgentEngine:
         from onecode.agent.tools.bash_tool import BashTool
         from onecode.agent.tools.web_tools import WebFetchTool, WebSearchTool
         from onecode.agent.tools.communication_tools import SendMessageTool, AskUserTool, ToolSearchTool
-        from onecode.agent.tools.task_tools import (TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool,
-            TaskOutputTool, TaskStopTool)
+        from onecode.agent.tools.todo_tools import (TodoCreateTool, TodoGetTool, TodoListTool, TodoUpdateTool,
+            TodoOutputTool, TodoStopTool)
         from onecode.agent.tools.agent_tools import AgentTool, TaskTool
         from onecode.agent.tools.skill_tools import SkillTool
         from onecode.agent.tools.mcp_tools import MCPTool as MCPToolTool, MCPResourcesTool
@@ -580,12 +571,12 @@ class AgentEngine:
         registry.register(AskUserTool())
         registry.register(ToolSearchTool(registry))
         # Task management
-        registry.register(TaskCreateTool(self._task_manager))
-        registry.register(TaskGetTool(self._task_manager))
-        registry.register(TaskListTool(self._task_manager))
-        registry.register(TaskUpdateTool(self._task_manager))
-        registry.register(TaskOutputTool(self._task_manager))
-        registry.register(TaskStopTool(self._task_manager))
+        registry.register(TodoCreateTool(self._todo_manager))
+        registry.register(TodoGetTool(self._todo_manager))
+        registry.register(TodoListTool(self._todo_manager))
+        registry.register(TodoUpdateTool(self._todo_manager))
+        registry.register(TodoOutputTool(self._todo_manager))
+        registry.register(TodoStopTool(self._todo_manager))
         # Agent tools
         registry.register(AgentTool(registry, permission_checker=self._check_tool_permission))
         registry.register(TaskTool(self._spawn_subagent_async))
@@ -665,35 +656,104 @@ class AgentEngine:
                 return
 
     def _emit_plan_update(self) -> list[StreamEvent]:
-        """Emit a plan update event from current tasks and todos."""
-        entries = []
-        for task in self._task_manager.list_tasks():
-            entries.append({
-                "content": task.get("subject", task.get("description", "")),
-                "status": task.get("status", "pending"),
-                "priority": task.get("metadata", {}).get("priority", "medium"),
-            })
-        for todo in self._task_manager.list_todos():
-            entries.append({
-                "content": todo.get("text", ""),
-                "status": "completed" if todo.get("done") else "pending",
-                "priority": "low",
-            })
-        return [StreamEvent.plan(entries)]
+        """Emit a plan update event from current todos, deduped against last emit.
 
-    def _on_task_change(self) -> None:
-        """Callback invoked by TaskManager whenever tasks/todos mutate.
+        Returns an empty list when the plan snapshot is byte-identical to the
+        last emission, so callers can no-op without paying the JSON-RPC + TUI
+        widget-recompose cost.  The cache is a tuple of ``(content, status,
+        priority)`` triples — order-sensitive, so reordering the todo list
+        also triggers a re-emit.
+        """
+        entries = [
+            (
+                t.get("subject") or t.get("description", ""),
+                t.get("status", "pending"),
+                t.get("metadata", {}).get("priority", "medium"),
+            )
+            for t in self._todo_manager.list_todos()
+        ]
+        if entries == self._last_emitted_plan:
+            return []
+        self._last_emitted_plan = entries
+        # Convert the cached tuples back to wire-format dicts for the stream
+        # event.  The TUI side expects dicts; the dedupe cache stays tuples
+        # to avoid the per-emit dict-construction cost on the hot path.
+        wire_entries = [
+            {"content": c, "status": s, "priority": p}
+            for (c, s, p) in entries
+        ]
+        return [StreamEvent.plan(wire_entries)]
+
+    def _refresh_pending_todos_nudge(self) -> None:
+        """Inject a reminder that nudges the agent to advance unfinished todos.
+
+        Called at the start of each ReAct turn. If there are pending or
+        in-progress todos, a ``<!-- PENDING_TODOS -->`` section is added to
+        the system context so the LLM sees it during its next Thought phase
+        and prefers to:
+          1. continue the in-progress todo, or
+          2. start the next pending todo (respecting ``addBlockedBy`` DAG), or
+          3. call ``AskUser`` if the todo is blocked on user input.
+
+        When no todos are open, any stale nudge is removed so the context
+        stays clean.
+        """
+        marker = "<!-- PENDING_TODOS -->"
+        todos = self._todo_manager.list_todos()
+        open_todos = [t for t in todos if t.get("status") in ("pending", "in_progress")]
+        if not open_todos:
+            self.context.remove_system_by_marker(marker)
+            return
+
+        in_progress = [t for t in open_todos if t.get("status") == "in_progress"]
+        pending = [t for t in open_todos if t.get("status") == "pending"]
+
+        def _label(t: dict) -> str:
+            sid = t.get("id", "?")
+            sub = t.get("subject") or t.get("description", "")
+            owner = t.get("owner")
+            owner_part = f" (owner={owner})" if owner else ""
+            return f"- `{sid}`{owner_part}: {sub}"
+
+        lines: list[str] = []
+        lines.append(
+            "There are unfinished todos from earlier in this session. Prioritize "
+            "them before starting new work: finish in-progress items, then move "
+            "to the next pending todo in DAG order (respect `addBlockedBy`). "
+            "If a todo is blocked on user input or external information, call "
+            "`AskUser` to clarify instead of starting a new branch."
+        )
+        if in_progress:
+            lines.append("")
+            lines.append("**In progress:**")
+            lines.extend(_label(t) for t in in_progress)
+        if pending:
+            lines.append("")
+            lines.append("**Pending:**")
+            lines.extend(_label(t) for t in pending)
+        lines.append("")
+        lines.append(
+            "Next action: either `TodoUpdate(status=\"in_progress\")` to pick one "
+            "up, advance it with the appropriate tool, and `TodoUpdate(status=\"completed\")` "
+            "when done — or `AskUser` to unblock."
+        )
+        body = f"{marker}\n" + "\n".join(lines)
+        if not self.context.replace_system_section(marker, body):
+            self.context.add_system(body)
+
+    def _on_todo_change(self) -> None:
+        """Callback invoked by TodoManager whenever todos mutate.
 
         Sets a dirty flag so the next opportunity in ``chat_stream`` will
         emit a fresh plan event.  Decoupling the callback from the emit
         keeps the public API synchronous and avoids re-entrancy when
-        subagents mutate the same TaskManager concurrently.
+        subagents mutate the same TodoManager concurrently.
 
-        Also persists tasks to ``.cdh/tasks.json`` immediately so they
+        Also persists todos to ``.cdh/todos.json`` immediately so they
         survive a crash or Ctrl+C before the next ACP turn boundary.
         """
         self._plan_dirty = True
-        self.save_tasks_to_project()
+        self.save_todos_to_project()
 
     @property
     def _workspace(self) -> Path:
@@ -735,10 +795,12 @@ class AgentEngine:
             "\n## Response style\n"
             "- **Every turn must start with Chain of Thought reasoning** "
             "inside `<thinking>`. Analyze the current state, determine the "
-            "next step, and decide whether to delegate via `Task`.\n"
-            "- **Prefer `Task` delegation**: For any multi-step operation, "
-            "file modification, or research, use `Task(agent_type, prompt)` "
-            "rather than calling execution tools directly.\n"
+            "next step, and decide whether to delegate via `Spawn` or track via `TodoCreate`.\n"
+            "- **Route by complexity**:\n"
+            "  - Simple / single-step work → use the direct tool and optionally "
+            "`TodoCreate` to surface progress in the sidebar.\n"
+            "  - Complex / multi-step work → use `Spawn(agent_type, prompt)` to "
+            "delegate to a focused subagent rather than calling execution tools directly.\n"
             "- If you need to reason between tool calls, wrap your "
             "reasoning in `<thinking>...</thinking>`.  The TUI will "
             "render the wrapped block as a collapsible thought and "
@@ -1020,6 +1082,20 @@ class AgentEngine:
             except Exception as e:
                 logger.warning("Codebase retrieval failed: %s", e)
 
+        # ── Long-term memory recall ──
+        if isinstance(user_input, str) and self._session:
+            try:
+                results = self._memory.search_memories(user_input, top_k=5)
+                if results:
+                    lines = ["## Relevant past memories"]
+                    for r in results:
+                        lines.append(r.content[:300])
+                    ctx_text = "<!-- MEMORY -->\n" + "\n".join(lines)
+                    if not self.context.replace_system_section("MEMORY", ctx_text):
+                        self.context.add_system(ctx_text)
+            except Exception as e:
+                logger.warning("Memory recall failed: %s", e)
+
         self.context.add_user(user_input)
 
         # Plan gate: activate based on agent mode, not content heuristics.
@@ -1036,11 +1112,10 @@ class AgentEngine:
         model_name = self.app.current_model
         logger.info(f"Using provider='{provider_name}', model='{model_name}'")
         logger.info(
-            "chat_stream engine state: project=%s agent=%s tasks=%d todos=%d context_msgs=%d ctx_tokens=%d",
+            "chat_stream engine state: project=%s agent=%s todos=%d context_msgs=%d ctx_tokens=%d",
             project_name or "(none)",
             self.current_agent.name if self.current_agent else "None",
-            len(self._task_manager.list_tasks()),
-            len(self._task_manager.list_todos()),
+            len(self._todo_manager.list_todos()),
             len(self.context.messages),
             self.context._token_count,
         )
@@ -1082,10 +1157,12 @@ class AgentEngine:
             "Begin this turn by reasoning step by step in `<thinking>`:\n"
             "1. **Current state**: Analyze the user request and what needs to be done.\n"
             "2. **Goal**: What should I accomplish this turn?\n"
-            "3. **Approach**: Should I delegate via `Task`, plan via `task_create`, "
-            "or use a direct tool?\n"
-            "4. **Task-first**: For any multi-step work or file modifications, "
-            "prefer `Task(agent_type, prompt)` over direct execution tools.\n"
+            "3. **Routing**: For the next action, choose by complexity:\n"
+            "   - Simple (1 tool call, 1 file) → direct tool + optional `TodoCreate` for tracking\n"
+            "   - Complex (multi-file, multi-step, research-heavy) → `Spawn(agent_type, prompt)`\n"
+            "   - Pure research → `Read/Grep/Glob/WebFetch` directly, or `explore/scout` subagent\n"
+            "4. **Plan when needed**: For multi-step work, create a todo plan first via "
+            "`TodoCreate`, then mark each todo as `in_progress` / `completed` as you go.\n"
         )
         if not self.context.replace_system_section("REACT_PHASE", cot_phase_init):
             self.context.add_system(cot_phase_init)
@@ -1097,7 +1174,11 @@ class AgentEngine:
 
             # ── Thought Phase: update CoT reasoning guidance for this turn ──
             # Cleanup stale reminders that may have accumulated
-            self.context.remove_system_by_marker("<!-- TASK_FIRST_REMINDER -->")
+            self.context.remove_system_by_marker("<!-- ROUTING_REMINDER -->")
+            # Inject (or refresh) a nudge that prioritizes any unfinished todos
+            # from this session. The marker is replaced in-place so the context
+            # stays bounded — the agent always sees the current open list.
+            self._refresh_pending_todos_nudge()
             if turn > 0:
                 cot_phase = (
                     f"<!-- REACT_PHASE -->\n"
@@ -1105,10 +1186,11 @@ class AgentEngine:
                     "Begin this turn by reasoning step by step in `<thinking>`:\n"
                     "1. **Current state**: What just happened? What results do I have?\n"
                     "2. **Goal**: What should I accomplish this turn?\n"
-                    "3. **Approach**: Should I delegate via `Task`, plan via `task_create`, "
-                    "or use a direct tool?\n"
-                    "4. **Task-first**: For any multi-step work or file modifications, "
-                    "prefer `Task(agent_type, prompt)` over direct execution tools.\n"
+                    "3. **Routing**: For the next action, choose by complexity:\n"
+                    "   - Simple (1 tool call, 1 file) → direct tool + optional `TodoCreate` for tracking\n"
+                    "   - Complex (multi-file, multi-step, research-heavy) → `Spawn(agent_type, prompt)`\n"
+                    "4. **Plan when needed**: For multi-step work, advance todos via `TodoUpdate` "
+                    "and delegate substantial items via `Spawn`.\n"
                 )
                 self.context.replace_system_section("REACT_PHASE", cot_phase)
 
@@ -1287,6 +1369,19 @@ class AgentEngine:
                             yield StreamEvent.text_delta(clean_text[i:i + 12])
                     elif self._last_user_msg:
                         yield StreamEvent.text_delta(self._last_user_msg)
+
+                # ── Store conversation in long-term memory ──
+                if self._session:
+                    try:
+                        conv_id = self._session.id
+                        input_str = user_input if isinstance(user_input, str) else str(user_input)
+                        self._memory.remember(
+                            MemoryLayer.L0_CONVERSATION,
+                            f"user: {input_str}\nassistant: {clean_text}",
+                            {"conversation_id": conv_id},
+                        )
+                    except Exception as e:
+                        logger.warning("Memory store failed: %s", e)
                 break
 
             # Emit ToolEvents (Clawd-Code pattern) and StreamEvents for TUI
@@ -1364,47 +1459,62 @@ class AgentEngine:
                             "raw_content": raw_output,
                         }
                 elif (self._plan_gate_mode != "off"
-                      and not self._task_manager.list_tasks()
+                      and not self._todo_manager.list_todos()
                       and tu["name"] in _EXECUTION_TOOLS
                       and self._plan_gate_first_turn()):
                     if self._plan_gate_mode == "hard":
                         result = {
                             "tool_use_id": tu["id"],
                             "is_error": True,
-                            "category": "task",
+                            "category": "todo",
                             "content": json.dumps({
                                 "success": False,
                                 "error": (
                                     "Plan required. You are in plan mode (ReAct: Thought → Action → Observation). "
-                                    "You MUST create a task plan using task_create() before using execution tools. "
-                                    "First Think (analyze/explore), then Act by creating ALL tasks upfront "
-                                    "with dependencies, present the plan for user review, "
+                                    "Before using execution tools, create a todo plan via `TodoCreate()`. "
+                                    "Choose the right granularity:\n"
+                                    "- Each todo = one focused unit of work (file, function, or concern).\n"
+                                    "- Set `addBlockedBy` on dependent todos to express the DAG.\n"
+                                    "- For complex multi-step work, mark the todo with "
+                                    "`metadata={\"delegate_to\": \"general\"}` to indicate it should be "
+                                    "executed by a `Spawn` subagent rather than direct tool calls.\n"
+                                    "Create ALL todos upfront, present the plan for user review, "
                                     "and only then proceed to execute."
                                 ),
                             }),
                         }
                     else:
-                        # Soft gate: execute but inject a reminder for next turn
+                        # Soft gate: execute but inject a routing reminder for next turn
                         self.context.add_system(
                             "<!-- PLAN_REMINDER -->\n"
-                            "Note: You used a direct execution tool without delegating via Task. "
-                            "For any non-trivial operation, prefer `Task(agent_type, prompt)` "
-                            "to delegate the work to a focused subagent instead. Task subagents "
-                            "encapsulate multi-step logic, keep the main context clean, and "
-                            "return structured SUMMARY/CHANGES/EVIDENCE/RISKS/BLOCKERS output."
+                            "## Routing Decision\n"
+                            "Before your next action, choose the right tool based on complexity:\n\n"
+                            "**Simple / single-step work** → use `TodoCreate` to track a lightweight "
+                            "checklist item in the sidebar. Examples: 1 file edit, 1 Read, 1 Bash. "
+                            "The Todo widget shows progress to the user.\n\n"
+                            "**Complex / multi-step work** → use `Spawn(agent_type, prompt)` to "
+                            "delegate to a focused subagent. Examples: cross-file refactor, multi-"
+                            "file feature, research requiring 3+ tool calls, work needing isolated "
+                            "context. The subagent encapsulates work and returns structured output.\n\n"
+                            "**Default**: When unsure → `Spawn`. Todo is for visible progress on "
+                            "simple items; Spawn is for substantial work.\n"
                         )
                         result = await self._execute_tool(tu)
                 else:
                     result = await self._execute_tool(tu)
-                    # Task-first routing: track direct execution tool use
+                    # Routing: track direct execution tool use → nudge routing decision
                     if tu["name"] in _EXECUTION_TOOLS:
                         self._direct_execution_count += 1
                         if self._direct_execution_count >= 2:
                             self.context.add_system(
-                                "<!-- TASK_FIRST_REMINDER -->\n"
-                                "Reminder: You're using direct execution tools repeatedly. "
-                                "For multi-step work, delegate via `Task(agent_type, prompt)` instead. "
-                                "This keeps the main context focused and work properly encapsulated."
+                                "<!-- ROUTING_REMINDER -->\n"
+                                "You've used direct execution tools repeatedly. Pause and decide:\n"
+                                "- If this is a single-step trivial change → continue, but "
+                                "consider `TodoCreate` to surface progress in the sidebar.\n"
+                                "- If this work involves >1 tool call, multiple files, or "
+                                "research → STOP direct execution and delegate via "
+                                "`Spawn(agent_type=\"general\", prompt=\"...\")` instead. The "
+                                "subagent isolates context and returns a structured summary."
                             )
                 result_str = str(result.get("content", ""))
                 is_error = result.get("is_error", False)
@@ -1546,7 +1656,7 @@ class AgentEngine:
                             name=tu["id"],
                         )
                     # Emit plan update when tasks/todos changed.  Any
-                    # mutating path through TaskManager flips
+                    # mutating path through TodoManager flips
                     # ``_plan_dirty`` via the ``on_change`` callback, so we
                     # do not need to enumerate tool names here.
                     if self._plan_dirty:
@@ -1637,8 +1747,12 @@ class AgentEngine:
         self._react_phase = "thought"
         self._direct_execution_count = 0
         self._plan_gate_fired = False
+        # Invalidate the plan-emit dedupe cache so the next chat_stream
+        # always produces a fresh snapshot for the TUI.
+        self._last_emitted_plan = ()
         self.context.remove_system_by_marker("<!-- REACT_PHASE -->")
-        self.context.remove_system_by_marker("<!-- TASK_FIRST_REMINDER -->")
+        self.context.remove_system_by_marker("<!-- ROUTING_REMINDER -->")
+        self.context.remove_system_by_marker("<!-- PENDING_TODOS -->")
 
     def reset(self):
         self.context.reset()
@@ -1851,13 +1965,11 @@ class AgentEngine:
         self._session = session
         if session.messages:
             self.context.load_from_session(session.messages)
-        if session.tasks or session.todos:
-            self._task_manager = TaskManager.from_dict({
-                "tasks": session.tasks,
+        if session.todos:
+            self._todo_manager = TodoManager.from_dict({
                 "todos": session.todos,
-                "plan": [],
-                "id_counter": len(session.tasks) + len(session.todos),
-            }, on_change=self._on_task_change)
+                "id_counter": len(session.todos),
+            }, on_change=self._on_todo_change)
         # Restore context usage stats
         self._restore_session_stats(session)
 
@@ -1865,8 +1977,7 @@ class AgentEngine:
         if self._session:
             try:
                 self._session.messages = self.context.to_session_format()
-                tm_data = self._task_manager.to_dict()
-                self._session.tasks = tm_data.get("tasks", [])
+                tm_data = self._todo_manager.to_dict()
                 self._session.todos = tm_data.get("todos", [])
                 # Persist context usage stats so they survive session reload
                 self._session.update_state("stats", {
@@ -1887,16 +1998,50 @@ class AgentEngine:
             return False
         self._session = session
         self.context.load_from_session(session.messages)
-        if session.tasks or session.todos:
-            self._task_manager = TaskManager.from_dict({
-                "tasks": session.tasks,
+        if session.todos:
+            self._todo_manager = TodoManager.from_dict({
                 "todos": session.todos,
-                "plan": [],
-                "id_counter": len(session.tasks) + len(session.todos),
-            }, on_change=self._on_task_change)
+                "id_counter": len(session.todos),
+            }, on_change=self._on_todo_change)
+            self._inject_loaded_tasks_into_context()
         # Restore context usage stats
         self._restore_session_stats(session)
         return True
+
+    def _inject_loaded_tasks_into_context(self) -> None:
+        """Surface loaded todos to the LLM so it can continue them.
+
+        Todos loaded from a previous session are not automatically visible
+        in the LLM context — without this nudge the agent would re-create
+        them on every fresh turn instead of resuming pending work.
+        """
+        all_todos = self._todo_manager.list_todos()
+        pending = [t for t in all_todos if t.get("status") in ("pending", "in_progress")]
+        if not pending:
+            return
+
+        lines = ["# Resumed todos from previous session", ""]
+        lines.append("## Todos")
+        for t in pending:
+            status = t.get("status", "pending")
+            marker = {"in_progress": "[~]", "pending": "[ ]"}.get(status, "[?]")
+            subject = t.get("subject") or t.get("description", "")
+            desc = t.get("description") or ""
+            if desc and desc != subject:
+                lines.append(f"- {marker} (id={t.get('id')}) {subject} — {desc}")
+            else:
+                lines.append(f"- {marker} (id={t.get('id')}) {subject}")
+        lines.append("")
+
+        lines.append(
+            "Continue working on any in_progress or pending todos above. "
+            "Use TodoList/TodoGet to inspect details and TodoUpdate to "
+            "advance status. Do NOT recreate todos that already exist."
+        )
+        marker = "<!-- loaded_todos_resume -->"
+        body = f"{marker}\n" + "\n".join(lines)
+        if not self.context.replace_system_section(marker, body):
+            self.context.add_system(body)
 
     def _restore_session_stats(self, session: AgentSession) -> None:
         """Restore context usage stats from session lifecycle_state."""
@@ -1909,32 +2054,32 @@ class AgentEngine:
         if restored_turns and isinstance(restored_turns, list):
             self._turn_usages = list(restored_turns)
 
-    def save_tasks_to_project(self) -> None:
-        """Save tasks/todos to .cdh/tasks.json in the project directory."""
+    def save_todos_to_project(self) -> None:
+        """Save todos to .cdh/todos.json in the project directory."""
         from onecode.agent.cdh_loader import CdhProjectLoader
         cdh_dir = CdhProjectLoader.find_cdh_dir(self._project_dir)
         if cdh_dir is None:
             return
         try:
-            tm_data = self._task_manager.to_dict()
-            CdhProjectLoader.save_tasks(cdh_dir, tm_data)
+            tm_data = self._todo_manager.to_dict()
+            CdhProjectLoader.save_todos(cdh_dir, tm_data)
         except Exception as e:
-            logger.warning("Failed to save tasks to .cdh: %s", e)
+            logger.warning("Failed to save todos to .cdh: %s", e)
 
-    def load_tasks_from_project(self) -> None:
-        """Restore tasks/todos from .cdh/tasks.json."""
+    def load_todos_from_project(self) -> None:
+        """Restore todos from .cdh/todos.json (with legacy tasks.json fallback)."""
         from onecode.agent.cdh_loader import CdhProjectLoader
         cdh_dir = CdhProjectLoader.find_cdh_dir(self._project_dir)
         if cdh_dir is None:
             return
         try:
-            data = CdhProjectLoader.load_tasks(cdh_dir)
+            data = CdhProjectLoader.load_todos(cdh_dir)
             if data and (data.get("tasks") or data.get("todos")):
-                self._task_manager = TaskManager.from_dict(
-                    data, on_change=self._on_task_change
+                self._todo_manager = TodoManager.from_dict(
+                    data, on_change=self._on_todo_change
                 )
         except Exception as e:
-            logger.warning("Failed to load tasks from .cdh: %s", e)
+            logger.warning("Failed to load todos from .cdh: %s", e)
 
     def get_session(self) -> Optional[AgentSession]:
         return self._session

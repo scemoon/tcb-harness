@@ -43,7 +43,7 @@ class CdhProjectLoader:
     CDH_DIRNAME = ".cdh"
     STATE_FILENAME = "state.json"
     LAST_SESSION_FILENAME = "last_session.json"
-    TASKS_FILENAME = "tasks.json"
+    TODOS_FILENAME = "todos.json"
     PERMISSIONS_FILENAME = "permissions.json"
 
     # ── discovery ──────────────────────────────────────────────
@@ -133,21 +133,24 @@ class CdhProjectLoader:
                 pass
         return {}
 
-    # ── task persistence ───────────────────────────────────────
+    # ── todo persistence ───────────────────────────────────────
 
     @staticmethod
-    def save_tasks(cdh_dir: Path, tasks_data: dict) -> None:
-        """Save tasks/todos to ``.cdh/tasks.json``."""
-        path = cdh_dir / CdhProjectLoader.TASKS_FILENAME
+    def save_todos(cdh_dir: Path, todos_data: dict) -> None:
+        """Save todos to ``.cdh/todos.json``."""
+        path = cdh_dir / CdhProjectLoader.TODOS_FILENAME
         path.write_text(
-            json.dumps(tasks_data, ensure_ascii=False, indent=2),
+            json.dumps(todos_data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
     @staticmethod
-    def load_tasks(cdh_dir: Path) -> dict:
-        """Load tasks/todos from ``.cdh/tasks.json``."""
-        path = cdh_dir / CdhProjectLoader.TASKS_FILENAME
+    def load_todos(cdh_dir: Path) -> dict:
+        """Load todos from ``.cdh/todos.json``.
+
+        Returns an empty dict if the file is missing or unreadable.
+        """
+        path = cdh_dir / CdhProjectLoader.TODOS_FILENAME
         if path.exists():
             try:
                 return json.loads(path.read_text(encoding="utf-8"))

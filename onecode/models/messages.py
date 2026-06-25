@@ -78,7 +78,7 @@ class ToolCategory(str, Enum):
     WEB_FETCH = "web_fetch"
     WEB_SEARCH = "web_search"
     TASK = "task"              # sub-agent
-    TASK_MGMT = "task_mgmt"    # task/todo CRUD
+    TODO_MGMT = "todo_mgmt"    # todo CRUD
     INTERACTION = "interaction"  # user approval / AskUser
     UNKNOWN = "unknown"
 
@@ -98,13 +98,13 @@ TOOL_CATEGORY_MAP: dict[str, ToolCategory] = {
     "Spawn": ToolCategory.TASK,
     "SendMessage": ToolCategory.INTERACTION,
     "Agent": ToolCategory.TASK,
-    "ToolSearch": ToolCategory.TASK_MGMT,
-    "TodoCreate": ToolCategory.TASK_MGMT,
-    "TodoGet": ToolCategory.TASK_MGMT,
-    "TodoList": ToolCategory.TASK_MGMT,
-    "TodoUpdate": ToolCategory.TASK_MGMT,
-    "TodoOutput": ToolCategory.TASK_MGMT,
-    "TodoStop": ToolCategory.TASK_MGMT,
+    "ToolSearch": ToolCategory.TODO_MGMT,
+    "TodoCreate": ToolCategory.TODO_MGMT,
+    "TodoGet": ToolCategory.TODO_MGMT,
+    "TodoList": ToolCategory.TODO_MGMT,
+    "TodoUpdate": ToolCategory.TODO_MGMT,
+    "TodoOutput": ToolCategory.TODO_MGMT,
+    "TodoStop": ToolCategory.TODO_MGMT,
     "AskUser": ToolCategory.INTERACTION,
 }
 
@@ -405,7 +405,7 @@ class StreamEvent:
 
         Args:
             entries: List of plan entries, each with:
-                - content: str - The task description
+                - content: str - The todo description
                 - status: str - "pending" | "in_progress" | "completed"
                 - priority: str - "high" | "medium" | "low"
         """

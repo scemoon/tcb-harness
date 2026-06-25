@@ -114,7 +114,12 @@ class BuildAgent(AgentConfig):
     def __init__(self):
         super().__init__(
             name="build",
-            description="Full development agent with all tools enabled. Edits and shell commands require user approval. Uses CoT reasoning + ReAct loop with Task-first delegation.",
+            description=(
+                "Full development agent with all tools enabled. Edits and shell "
+                "commands require user approval. Uses CoT reasoning + ReAct loop "
+                "with routing by complexity: simple work → TodoCreate, complex "
+                "work → Spawn subagent."
+            ),
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.ASK,
             permission_bash=AgentPermission.ASK,
@@ -131,7 +136,13 @@ class PlanAgent(AgentConfig):
     def __init__(self):
         super().__init__(
             name="plan",
-            description="Plan mode: CoT + ReAct (思考→行动→观察) agent with hard plan gate and Task-first delegation. Creates task plans first, presents for user review, then delegates execution via Task subagents with Human-in-the-loop.",
+            description=(
+                "Plan mode: CoT + ReAct (思考→行动→观察) agent with hard plan "
+                "gate. Creates a todo plan first via TodoCreate, presents for "
+                "user review, then routes execution by complexity: simple todos "
+                "run directly, complex todos are delegated to Spawn subagents. "
+                "Human-in-the-loop."
+            ),
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.ASK,
             permission_bash=AgentPermission.ASK,
@@ -148,7 +159,12 @@ class SoloAgent(AgentConfig):
     def __init__(self):
         super().__init__(
             name="solo",
-            description="Independent agent that plans first, then acts with full tool access. Uses CoT reasoning + ReAct loop with Task-first delegation. Shell commands require user approval.",
+            description=(
+                "Independent agent that plans first, then acts with full tool "
+                "access. Uses CoT reasoning + ReAct loop with routing by "
+                "complexity: simple work → TodoCreate, complex work → Spawn "
+                "subagent. Shell commands require user approval."
+            ),
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.ALLOW,
             permission_bash=AgentPermission.ASK,
@@ -165,7 +181,11 @@ class GeneralAgent(AgentConfig):
     def __init__(self):
         super().__init__(
             name="general",
-            description="General-purpose subagent for complex multi-step tasks. Executes focused work delegated by parent agent via Task tool. Uses CoT + ReAct internally.",
+            description=(
+                "General-purpose subagent for complex multi-step tasks. Executes "
+                "focused work delegated by parent agent via Spawn tool. Uses "
+                "CoT + ReAct internally."
+            ),
             mode=AgentMode.SUBAGENT,
             permission_edit=AgentPermission.ALLOW,
             permission_bash=AgentPermission.ALLOW,
@@ -520,29 +540,31 @@ Before any action, reason step by step inside `<thinking>`:
 1. **Current state**: What do I know? What has been done? What are the results?
 2. **Goal**: What needs to be accomplished next?
 3. **Plan**: How should I approach it? What's the smallest next step?
-4. **Tool selection**: Which tool is appropriate?
-   - **For multi-step or independent work → always use `Spawn`** to spawn a subagent
-    - For simple queries → use read/search tools directly
-    - For execution (Write/Edit/Insert/ApplyPatch/Bash) → prefer delegating via `Spawn`
+4. **Routing — choose by complexity**:
+   - **Simple / single-step** → use a direct read/search/exec tool, optionally
+     track with `TodoCreate` so the sidebar shows progress.
+   - **Complex / multi-step** → use `Spawn(agent_type, prompt)` to delegate to
+     a focused subagent.
+   - **Multi-file refactor / new feature** → ALWAYS use `Spawn`.
 
 ### Action Phase (行动阶段)
 Execute the chosen action. **Action types (in priority order)**:
-1. **Delegate via Spawn**: `Spawn(agent_type="general"|"explore"|"scout", prompt="...")` — **preferred for any substantial work**. Multi-step logic, file modifications, research, and any task that needs >1-2 tool calls should be delegated.
-2. **Plan**: `todo_create()` / `todo_update()` to organize the work DAG.
-3. **Research**: `Read()` / `Grep()` / `Glob()` / `WebFetch()` / `WebSearch()` for information gathering.
-4. **Direct execute**: Only for trivial single-step operations that cannot justify a subagent.
+1. **Delegate via Spawn** (complex work): `Spawn(agent_type="general"|"explore"|"scout", prompt="...")`.
+2. **Track via Todo** (simple work): `TodoCreate(subject, description, activeForm, metadata)` and `TodoUpdate(...)`. The sidebar shows progress to the user.
+3. **Research directly**: `Read()` / `Grep()` / `Glob()` / `WebFetch()` / `WebSearch()` for single-step information needs.
+4. **Direct execute**: Only for trivial single-step operations that cannot justify a subagent or a todo.
 
 ### Observation Phase (观察阶段)
 The tool result IS your observation. Process it:
-- **Success**: Note key outputs, update task status, move to next step
+- **Success**: Note key outputs, update todo status via `TodoUpdate(status="completed")`, move to next step
 - **Error**: Diagnose root cause, decide: retry with fix | modify plan | ask user
 - **Partial**: Extract what worked, adjust approach for remaining work
 
 ### Core Rules
 - **ALL reasoning goes in `<thinking>`**: Never narrate "I will now..." in visible text
-- **Prefer Task over direct execution**: File edits, multi-step logic, research → always use `Task()`
-- **One responsibility per Task**: Each subagent should have a clear, focused goal
-- **Pass context**: Include relevant context (file paths, findings) in Task prompts
+- **Route by complexity**: Simple → Todo, complex → Spawn. Never blindly use Spawn for trivial work.
+- **One responsibility per Spawn / Todo**: Each unit should have a clear, focused goal
+- **Pass context**: Include relevant context (file paths, findings) in Spawn prompts and Todo descriptions
 - **CoT every cycle**: Every turn starts with `<thinking>` reasoning before any action
 """
 
@@ -550,26 +572,25 @@ PLAN_INSTRUCTIONS = """
 ## ReAct Workflow (Thought → Action → Observation)
 
 The agent is a **ReAct** implementation: each cycle is **Thought → Action → Observation**.
-**Action always delegates to `Task` subagents for any substantial work.**
 **Human-in-the-loop** means you involve the user at key decision points.
 
 ```
 Loop:
   Thought     → Reason step by step (CoT) inside <thinking>
-                Always ask: "Should I delegate this to a Task subagent?"
-  Action      → Prefer Task(agent_type, prompt) for multi-step work
-                Only use direct tools for trivial single-step operations
+                Always ask: "Is this simple (Todo) or complex (Spawn)?"
+  Action      → Simple → TodoCreate + direct tool
+                Complex → Spawn(agent_type, prompt)
   Observation → Incorporate results into the next Thought
 ```
 
-Plan/Build/Solo are different configurations of this same ReAct engine. The
-difference is how strictly planning is enforced before execution:
-- **plan** mode: hard gate — execution tools blocked until a task plan exists
-- **build**/**solo** mode: soft gate — execution allowed but planning encouraged
+Plan/Build/Solo are different configurations of this same ReAct engine:
+- **plan** mode: hard gate — execution tools blocked until a todo plan exists.
+- **build**/**solo** mode: soft gate — execution allowed but planning encouraged.
 
-**Task-first principle**: Any action that requires >1 tool call or involves
-file modification MUST be delegated to a `Task` subagent. Direct execution
-(Write/Edit/Insert/ApplyPatch/Bash) is only for trivial single-step operations.
+**Routing principle**:
+- **Simple todo** = 1 tool call, 1 file, ≤2 lines of code change, single Read/Glob. Use `TodoCreate` + direct tool.
+- **Complex work** = >1 tool call, multi-file, research, refactor, new feature. Use `Spawn(agent_type, prompt)`.
+- When in doubt, choose `Spawn`. Subagents encapsulate work cleanly; todos are for visible progress on the main agent's own work.
 
 ---
 
@@ -578,56 +599,58 @@ file modification MUST be delegated to a `Task` subagent. Direct execution
 Analyze the request with step-by-step reasoning before any action.
 
 - Wrap ALL reasoning in `<thinking>...</thinking>` — visible text is for the user only
-- Think step by step: What's the goal? What's the current state? What's the best approach?
-- **Always consider**: "Can this be delegated to a Task subagent?"
+- Think step by step: What's the goal? What's the current state? Is this simple or complex?
+- **Decide routing**:
+  - For simple work → proceed to `TodoCreate` then act directly.
+  - For complex work → proceed to spawn subagents.
 - Read relevant files, grep for patterns, glob for structure
 - Use `webfetch`/`websearch` for external APIs or docs
-- Delegate deep research to `explore`/`scout` subagents via `task()`
-- Ask the user via `ask_user()` if requirements are ambiguous
-- Do NOT create tasks yet — first understand what is needed
+- Delegate deep research to `explore`/`scout` subagents via `Spawn`
+- Ask the user via `AskUser` if requirements are ambiguous
+- Do NOT create todos yet — first understand what is needed
 
 ---
 
-### Step 2: Act (Plan) — Create the Task Plan
+### Step 2: Act (Plan) — Create the Todo Plan
 
-Once you understand the work, create a complete task plan via `todo_create()`.
+Once you understand the work, create a complete todo plan via `TodoCreate()`.
 
-**Task Granularity Rules**
-- One task = one concern (e.g. "Create User model", "Add login API endpoint")
-- Each task: **delegate to a Spawn subagent**. If a task needs >5 tool calls, split it.
-- Every task must have a **clear, verifiable completion criterion**
+**Routing Granularity Rules**
+- One todo = one focused unit of work (file, function, or concern).
+- Each todo: decide at creation time whether it should be done by the main agent or delegated to a Spawn subagent.
+  - Mark delegatable todos with `metadata={"delegate_to": "general"}` so the main agent knows to use `Spawn` for that item.
+  - Simple todos (1 tool call) stay with the main agent.
+- If a todo needs >5 tool calls, split it into smaller todos.
 
-**Creating Tasks**
+**Creating Todos**
 ```
-todo_create(subject="<verb + noun>", description="<what + acceptance criteria>",
-            metadata={"priority": "high|medium|low", "effort": "small|medium|large"})
+TodoCreate(subject="<verb + noun>", description="<what + acceptance criteria>",
+           metadata={"priority": "high|medium|low",
+                     "effort": "small|medium|large",
+                     "delegate_to": "general|explore|scout|main"})
 ```
-- Set `addBlockedBy` on dependent tasks so the dependency DAG is clear
-- **Create ALL tasks upfront** before presenting the plan to the user
+- Set `addBlockedBy` on dependent todos so the dependency DAG is clear
+- **Create ALL todos upfront** before presenting the plan to the user
 
 **Present Plan for Review (Human-in-the-loop)**
-After creating all tasks, use `send_message()` to summarize the plan, then
-`ask_user()` to get approval before executing:
-```
-send_message("Plan: 1. Setup DB model  2. Add API endpoint  3. Write tests")
-ask_user("Shall I proceed with executing this plan?")
-```
+After creating all todos, use `AskUser` to summarize the plan and get approval
+before executing.
 Wait for user approval before moving to execution.
 
 ---
 
-### Step 3: Act (Execute) — Delegate to Spawn Subagents
+### Step 3: Act (Execute) — Route by Complexity
 
-Execute by **delegating to Spawn subagents** rather than using direct tools.
+Execute each todo using the right tool for the work:
 
-- **PREFERRED**: `Spawn(agent_type="general", prompt="Detailed instructions with context...")`
-- Use `general` subagent for implementation work, `explore` for code search, `scout` for research
-- Pass enough context in the prompt: relevant file paths, code snippets, requirements
-- Update task status: `pending` → `in_progress` → `completed`
-- Use `todo_update(..., output=...)` to pass results to downstream tasks
-- Direct execution tools (Write/Edit/Insert/ApplyPatch/Bash) should be avoided
-  in favor of `Spawn` delegation. Only use them for truly trivial operations.
-- After each task, report progress via `send_message()` to keep the user in the loop
+- **Simple todos** (single tool call): execute directly with `Read`/`Edit`/`Bash`, then `TodoUpdate(status="completed")`.
+- **Complex todos** (multi-step, multi-file, research):
+  `Spawn(agent_type="general", prompt="Detailed instructions with context...")`.
+  Wait for the subagent's SUMMARY/CHANGES/EVIDENCE/RISKS/BLOCKERS output, then
+  `TodoUpdate(status="completed")`.
+- Use `general` subagent for implementation, `explore` for code search, `scout` for research
+- Pass enough context in the Spawn prompt: relevant file paths, code snippets, requirements
+- After each todo, advance its status: `pending` → `in_progress` → `completed`
 
 ---
 
@@ -635,20 +658,20 @@ Execute by **delegating to Spawn subagents** rather than using direct tools.
 
 After every Action, the tool result is your **Observation**. Use it to inform the
 next Thought:
-- Task subagent completed → review SUMMARY/CHANGES/EVIDENCE/RISKS/BLOCKERS sections
-- Task creation succeeded → proceed to present plan or delegate execution
+- Spawn subagent completed → review SUMMARY/CHANGES/EVIDENCE/RISKS/BLOCKERS sections
+- TodoCreate succeeded → proceed to present plan or execute the next todo
 - Error occurred → diagnose and decide: retry, modify plan, or ask the user
-- User denied an action → adapt the task plan accordingly
+- User denied an action → adapt the todo plan accordingly
 
 ---
 
 ### Rules
 
-- **No top-level planning prose**: All planning goes through task/todo tools so the UI renders it.
+- **No top-level planning prose**: All planning goes through `TodoCreate`/`TodoUpdate` so the sidebar renders it.
 - **CoT in `<thinking>`**: Every turn starts with chain-of-thought reasoning inside `<thinking>`. Never narrate "I will now…" in visible text.
-- **Task-first**: Any operation needing >1 tool call → delegate via `Spawn()`. Direct tool use is exceptional.
-- **Task status discipline**: `pending` → `in_progress` → `completed`. Every task transitions through all three.
-- **No execution without a plan**: Write/Edit/Insert/ApplyPatch/Bash require tasks. Create tasks first.
+- **Route by complexity**: Simple → Todo + direct tool. Complex → Spawn.
+- **Todo status discipline**: `pending` → `in_progress` → `completed`. Every todo transitions through all three.
+- **No execution without a plan**: Write/Edit/Insert/ApplyPatch/Bash require todos. Create todos first.
 - **Human at key decisions**: Present the plan, get approval, then execute. Report progress as you go.
 """
 

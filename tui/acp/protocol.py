@@ -321,6 +321,33 @@ class UsageUpdate(SchemaDict, total=False, extra_items=object):
     cost: Cost
 
 
+class SubAgentStart(SchemaDict, total=False, extra_items=Any):
+    sessionUpdate: Required[Literal["subagent_start"]]
+    subagentId: Required[str]
+    agentType: Required[str]
+    prompt: str
+
+
+class SubAgentChunk(SchemaDict, total=False, extra_items=Any):
+    sessionUpdate: Required[Literal["subagent_chunk"]]
+    subagentId: Required[str]
+    text: Required[str]
+
+
+class SubAgentThinking(SchemaDict, total=False, extra_items=Any):
+    sessionUpdate: Required[Literal["subagent_thinking"]]
+    subagentId: Required[str]
+    text: Required[str]
+
+
+class SubAgentEnd(SchemaDict, total=False, extra_items=Any):
+    sessionUpdate: Required[Literal["subagent_end"]]
+    subagentId: Required[str]
+    agentType: Required[str]
+    status: str
+    error: str
+
+
 type SessionUpdate = (
     UserMessageChunk
     | AgentMessageChunk
@@ -331,6 +358,10 @@ type SessionUpdate = (
     | AvailableCommandsUpdate
     | CurrentModeUpdate
     | UsageUpdate
+    | SubAgentStart
+    | SubAgentChunk
+    | SubAgentThinking
+    | SubAgentEnd
 )
 
 

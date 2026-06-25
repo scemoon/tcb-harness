@@ -103,7 +103,7 @@ _CATEGORY_TO_ACP_KIND: dict[str, str] = {
     ToolCategory.WEB_FETCH: "fetch",
     ToolCategory.WEB_SEARCH: "search",
     ToolCategory.TASK: "other",
-    ToolCategory.TASK_MGMT: "other",
+    ToolCategory.TODO_MGMT: "other",
     ToolCategory.INTERACTION: "other",
     ToolCategory.UNKNOWN: "other",
 }
@@ -442,11 +442,11 @@ def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
     other success results fall through to a compact view of the rest
     of the dict.
 
-    Task / Todo tools (TaskCreate, TaskUpdate, TaskList, …) are special-
+    Todo tools (TodoCreate, TodoUpdate, TodoList, …) are special-
     cased: their verbose ``{"task": {...}}`` / ``{"tasks": [...]}`` results
     are collapsed to a single concise marker (``✓ updated``) since the
     LLM's tool-call args already show what the agent did, and re-printing
-    the full task object after every call clutters the conversation view.
+    the full todo object after every call clutters the conversation view.
     """
     if not result_text:
         return ""
@@ -859,6 +859,10 @@ class CDHACPAdapter:
 
     def _emit_tool_result(self, block: ToolResult) -> None:
         """Send a tool_result as a tool_call_update, accumulating with existing content."""
+        # Spawn results are rendered as SubAgent widgets via
+        # _replay_tool_or_subagent → subagent_start/chunk/end events.
+        if self.tool_calls.get(block.tool_use_id, {}).get("_tool_name") == "Spawn":
+            return
         # Look up tool name from the tracked tool_calls entry
         tool_name = self.tool_calls.get(block.tool_use_id, {}).get("title", "")
         # Title may be like "Bash: ls -la" — keep just the leading tool name
@@ -959,6 +963,26 @@ class CDHACPAdapter:
             )
             self._emit_tool_result(tr)
 
+    def _emit_plan_update_to_tui(self) -> None:
+        """Send a `plan` session update built from current todo state.
+
+        Used right after ``session_load`` so the TUI Plan widget shows the
+        resumed todos immediately, without waiting for the user to
+        type a new prompt.  Delegates dedupe to the engine's
+        ``_emit_plan_update`` so the session-resume snapshot and the
+        per-turn snapshot share a single cache.
+        """
+        tm = getattr(self.agent, "_todo_manager", None)
+        if tm is None:
+            return
+        if not tm.list_todos():
+            return
+        for event in self.agent._emit_plan_update():
+            self.send_session_update({
+                "sessionUpdate": "plan",
+                "entries": event.plan_entries,
+            })
+
     async def initialize(self, protocol_version: int, client_capabilities: dict, client_info: dict):
         """Handle ACP initialize."""
         return {
@@ -1008,7 +1032,7 @@ class CDHACPAdapter:
         self.session_id = session.id
 
         # Restore tasks from project .cdh/ if available
-        self.agent.load_tasks_from_project()
+        self.agent.load_todos_from_project()
 
         self._send_available_commands()
 
@@ -1033,7 +1057,11 @@ class CDHACPAdapter:
         self._send_available_commands()
 
         # Also restore tasks from project .cdh/ as fallback / supplement
-        self.agent.load_tasks_from_project()
+        self.agent.load_todos_from_project()
+
+        # Surface loaded tasks to the TUI Plan widget so the user sees
+        # pending work without having to send a new message first.
+        self._emit_plan_update_to_tui()
 
         if not loaded:
             return {"modes": _DEFAULT_MODES}
@@ -1945,7 +1973,7 @@ class CDHACPAdapter:
             except Exception:
                 pass
             try:
-                self.agent.save_tasks_to_project()
+                self.agent.save_todos_to_project()
             except Exception:
                 pass
             return {"stopReason": "error", "message": "Internal agent error"}
@@ -1960,7 +1988,7 @@ class CDHACPAdapter:
 
         # Persist tasks to project .cdh/ so they survive Ctrl+C
         try:
-            self.agent.save_tasks_to_project()
+            self.agent.save_todos_to_project()
         except Exception:
             debug_log("Failed to save tasks to .cdh at turn end", exc_info=True)
 
@@ -2058,7 +2086,7 @@ class CDHACPAdapter:
                 debug_log("Failed to save session on cancel", exc_info=True)
             # Persist tasks to .cdh so they survive Ctrl+C and re-entry
             try:
-                self.agent.save_tasks_to_project()
+                self.agent.save_todos_to_project()
             except Exception:
                 debug_log("Failed to save tasks to .cdh on cancel", exc_info=True)
         return {}

@@ -186,6 +186,28 @@ class Plan(containers.Grid):
         return Content()
 
 
+def entries_from_dicts(raw_entries):
+    """Convert raw plan entries (dicts) into ``Plan.Entry`` dataclass instances.
+
+    Shared by ``MainScreen`` (sidebar) and ``Conversation`` (inline) so both
+    Plan widgets render the same data the same way. Filters entries with
+    empty content so the Plan widget never renders a blank row.
+    """
+    result = []
+    for entry in raw_entries:
+        content = (entry.get("content") or "").strip()
+        if not content:
+            continue
+        result.append(
+            Plan.Entry(
+                Content(content),
+                entry.get("priority", "medium"),
+                entry.get("status", "pending"),
+            )
+        )
+    return result
+
+
 if __name__ == "__main__":
     from textual.app import App
 
