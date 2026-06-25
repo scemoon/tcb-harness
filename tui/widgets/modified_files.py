@@ -9,6 +9,8 @@ from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widgets import Static
 from textual import containers
+from rich.text import Text
+from rich.style import Style
 
 
 GIT_STATUS_TIMEOUT = 5.0
@@ -34,46 +36,28 @@ IGNORED_DIRS = frozenset(
 )
 
 
+def _style_for_status(status: str) -> Style:
+    if "?" in status:
+        return Style(color="green")
+    if "D" in status:
+        return Style(color="red")
+    if "A" in status or "C" in status:
+        return Style(color="green")
+    if "R" in status:
+        return Style(color="#888888")
+    return Style(color="yellow")
+
+
 class ModifiedFiles(containers.Vertical):
     DEFAULT_CSS = """
     ModifiedFiles {
         height: auto;
-        max-height: 15;
         overflow-y: auto;
+        padding: 0 0 0 0;
 
-        Static {
+        #mf-files {
+            height: auto;
             padding: 0 1;
-        }
-
-        .file-added {
-            color: $text-success;
-        }
-
-        .file-modified {
-            color: $text-warning;
-        }
-
-        .file-deleted {
-            color: $text-error;
-        }
-
-        .file-renamed {
-            color: $text-secondary;
-        }
-
-        .no-changes {
-            color: $text-secondary;
-            text-style: italic;
-        }
-
-        .not-a-repo {
-            color: $text-secondary;
-            text-style: italic;
-        }
-
-        .-loading {
-            color: $text-secondary;
-            text-style: italic;
         }
     }
     """
@@ -92,7 +76,6 @@ class ModifiedFiles(containers.Vertical):
         self._debounce_timer: Timer | None = None
         self._status_kind: str = "no-changes"
         self._status_text: str = NO_CHANGES_TEXT
-        self._file_widgets: list[Static] = []
         self._initial_path: Path | None = path
 
     def on_mount(self) -> None:
@@ -102,17 +85,14 @@ class ModifiedFiles(containers.Vertical):
             self.path = initial
 
     def watch_path(self, path: Path | None) -> None:
-        """Schedule a (debounced, async) git status when path changes."""
         self._cancel_debounce()
         if path is None:
             self._show_status("no-changes", NO_CHANGES_TEXT)
-            self._clear_file_widgets()
             return
         self._show_status("-loading", LOADING_TEXT)
         self._schedule_run(path)
 
     def refresh_files(self) -> None:
-        """Re-run git status manually (e.g. after file system changes)."""
         if self.path is not None:
             self._cancel_debounce()
             self._show_status("-loading", LOADING_TEXT)
@@ -136,8 +116,6 @@ class ModifiedFiles(containers.Vertical):
 
     @work(exclusive=True, group="modified-files-git-status", thread=True)
     def _run_git_status(self, path: Path) -> None:
-        """Worker entry: do the slow ``git status`` off the UI thread,
-        then marshal results back via ``app.call_from_thread``."""
         app = self.app
         outcome = self._do_git_status(path)
         if outcome is None:
@@ -145,17 +123,12 @@ class ModifiedFiles(containers.Vertical):
         kind, text, lines = outcome
         if lines is None:
             app.call_from_thread(self._show_status, kind, text)
-            app.call_from_thread(self._clear_file_widgets)
         else:
             app.call_from_thread(self._render_lines, lines)
 
     def _do_git_status(
         self, path: Path
     ) -> tuple[str, str, list[str] | None] | None:
-        """Pure helper for ``git status``. Returns
-        ``(kind, text, lines_or_None)`` for the UI to render, or ``None``
-        if the call should silently no-op (e.g. ignored path).
-        """
         if any(part in IGNORED_DIRS for part in path.parts):
             return ("not-a-repo", NOT_A_REPO_TEXT, None)
         try:
@@ -184,55 +157,24 @@ class ModifiedFiles(containers.Vertical):
         self.files = list(lines)
         if not lines:
             self._show_status("no-changes", NO_CHANGES_TEXT)
-            self._clear_file_widgets()
             return
         self._show_status("file-modified", "")
-        self._clear_file_widgets()
-        try:
-            header = self.query_one("#mf-status", Static)
-        except Exception:
-            return
-        for line in lines:
-            status = line[:2]
+        text = Text()
+        for i, line in enumerate(lines):
+            if i > 0:
+                text.append("\n")
             filepath = line[3:]
-            cls = self._class_for_status(status)
-            widget = Static(f" {filepath}", classes=cls)
-            self._file_widgets.append(widget)
-            self.mount(widget, after=header)
+            style = _style_for_status(line[:2])
+            text.append(f" {filepath}", style=style)
+        files_widget = self.query_one("#mf-files", Static)
+        files_widget.update(text)
 
     def _show_status(self, kind: str, text: str) -> None:
         self._status_kind = kind
         self._status_text = text
-        try:
-            header = self.query_one("#mf-status", Static)
-        except Exception:
-            return
-        header.set_classes(kind)
-        header.update(text)
-        if kind != "file-modified":
-            self._clear_file_widgets()
-
-    def _clear_file_widgets(self) -> None:
-        for w in self._file_widgets:
-            try:
-                w.remove()
-            except Exception:
-                pass
-        self._file_widgets = []
+        status = self.query_one("#mf-status", Static)
+        status.update(text)
 
     def compose(self) -> ComposeResult:
-        yield Static(self._status_text, classes=self._status_kind, id="mf-status")
-
-    @staticmethod
-    def _class_for_status(status: str) -> str:
-        if "?" in status:
-            return "file-added"
-        if "D" in status:
-            return "file-deleted"
-        if "A" in status or "C" in status:
-            return "file-added"
-        if "R" in status:
-            return "file-renamed"
-        if "M" in status:
-            return "file-modified"
-        return "file-modified"
+        yield Static(self._status_text, id="mf-status")
+        yield Static("", id="mf-files")
