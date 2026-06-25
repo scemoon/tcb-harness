@@ -1,0 +1,22 @@
+# CDH (Cloud Dev Harness) - Agent for A2TUI
+# https://github.com/cloud-dev-harness/cdh
+
+identity = "onecode.dev"
+name = "OneCode CLI"
+short_name = "onecode"
+url = "https://github.com/cloud-dev-harness/cdh"
+protocol = "acp"
+author_name = "OneCode AI"
+author_url = "https://github.com/cloud-dev-harness"
+publisher_name = "onecode"
+publisher_url = "https://github.com/cloud-dev-harness"
+type = "coding"
+description = "Dev Harness Agent - development Agent framework with LLM provider integration"
+tags = []
+recommended = true
+help = "OneCode Agent -  development Agent framework with LLM provider integration.\n\nSupported providers: MiniMax, Anthropic, OpenAI, DeepSeek, GLM, Ollama"
+commands_module = "onecode.commands"
+commands_prefix = "onecode:"
+run_command."*" = "python3 -m onecode.agent.onecode_agent_acp"
+
+[actions]

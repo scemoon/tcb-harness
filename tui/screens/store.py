@@ -421,7 +421,7 @@ class StoreScreen(Screen):
     async def on_mount(self) -> None:
         self.app.settings_changed_signal.subscribe(self, self.setting_updated)
         if not self.app.settings.get("launcher.agents", str).strip():
-            self.app.settings.set("launcher.agents", "opencode.ai")
+            self.app.settings.set("launcher.agents", "onecode.dev")
             await self.app.save_settings()
         try:
             self._agents = await read_agents()
