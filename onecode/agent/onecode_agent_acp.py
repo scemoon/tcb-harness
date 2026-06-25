@@ -997,8 +997,8 @@ class CDHACPAdapter:
             },
             "authMethods": [],
             "serverInfo": {
-                "name": "cdh-agent",
-                "title": "CDH Agent",
+                "name": "onecode-agent",
+                "title": "OneCode Agent",
                 "version": "1.0.0",
             },
         }
