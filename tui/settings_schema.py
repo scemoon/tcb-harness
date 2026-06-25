@@ -363,7 +363,7 @@ SCHEMA: list[SchemaDict] = [
                 "key": "agents",
                 "title": "Agents to show in the launcher",
                 "type": "text",
-                "default": "cdh.cloud-dev-harness",
+                "default": "opencode.ai",
             }
         ],
     },
