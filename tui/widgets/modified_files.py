@@ -35,6 +35,8 @@ IGNORED_DIRS = frozenset(
     }
 )
 
+LINE_WIDTH = 38
+
 
 def _style_for_status(status: str) -> Style:
     if "?" in status:
@@ -48,6 +50,16 @@ def _style_for_status(status: str) -> Style:
     return Style(color="yellow")
 
 
+def _diff_color(added: int, deleted: int) -> Style:
+    if added > 0 and deleted > 0:
+        return Style(color="yellow")
+    if added > 0:
+        return Style(color="green")
+    if deleted > 0:
+        return Style(color="red")
+    return Style(color="#555555")
+
+
 class ModifiedFiles(containers.Vertical):
     DEFAULT_CSS = """
     ModifiedFiles {
@@ -57,7 +69,7 @@ class ModifiedFiles(containers.Vertical):
 
         #mf-files {
             height: auto;
-            padding: 0 1;
+            padding: 0 0 0 1;
         }
     }
     """
@@ -132,10 +144,9 @@ class ModifiedFiles(containers.Vertical):
         if any(part in IGNORED_DIRS for part in path.parts):
             return ("not-a-repo", NOT_A_REPO_TEXT, None)
         try:
-            result = subprocess.run(
+            status = subprocess.run(
                 ["git", "-C", str(path), "status", "--porcelain"],
-                capture_output=True,
-                text=True,
+                capture_output=True, text=True,
                 timeout=GIT_STATUS_TIMEOUT,
             )
         except subprocess.TimeoutExpired:
@@ -144,28 +155,81 @@ class ModifiedFiles(containers.Vertical):
             return ("not-a-repo", NOT_A_REPO_TEXT, None)
         except Exception:
             return ("no-changes", NO_CHANGES_TEXT, None)
-        if result.returncode != 0:
+        if status.returncode != 0:
             return ("not-a-repo", NOT_A_REPO_TEXT, None)
-        lines = [
-            line for line in result.stdout.splitlines() if line.strip()
-        ]
-        if not lines:
-            return ("no-changes", NO_CHANGES_TEXT, [])
-        return ("file-modified", "", lines)
 
-    def _render_lines(self, lines: list[str]) -> None:
+        lines = [l for l in status.stdout.splitlines() if l.strip()]
+        if not lines:
+            return ("no-changes", NO_CHANGES_TEXT, ([], {}))
+
+        diffmap: dict[str, tuple[int, int]] = {}
+        for diff_cmd in (
+            ["git", "-C", str(path), "diff", "--numstat"],
+            ["git", "-C", str(path), "diff", "--cached", "--numstat"],
+        ):
+            try:
+                r = subprocess.run(
+                    diff_cmd, capture_output=True, text=True,
+                    timeout=GIT_STATUS_TIMEOUT,
+                )
+            except Exception:
+                continue
+            for dl in r.stdout.splitlines():
+                parts = dl.split("\t", 2)
+                if len(parts) == 3:
+                    added, deleted = parts[0], parts[1]
+                    if added != "-":
+                        a, d = int(added), int(deleted)
+                        fp = parts[2]
+                        prev_a, prev_d = diffmap.get(fp, (0, 0))
+                        diffmap[fp] = (prev_a + a, prev_d + d)
+
+        return ("file-modified", "", (lines, diffmap))
+
+    def _render_lines(self, data: tuple[list[str], dict[str, tuple[int, int]]]) -> None:
+        lines, diffmap = data
         self.files = list(lines)
         if not lines:
             self._show_status("no-changes", NO_CHANGES_TEXT)
             return
         self._show_status("file-modified", "")
         text = Text()
-        for i, line in enumerate(lines):
+        for i, (raw_line) in enumerate(lines):
             if i > 0:
                 text.append("\n")
-            filepath = line[3:]
-            style = _style_for_status(line[:2])
-            text.append(f" {filepath}", style=style)
+            filepath = raw_line[3:]
+            status = raw_line[:2]
+            style = _style_for_status(status)
+
+            added, deleted = diffmap.get(filepath, (0, 0))
+            if "?" in status:
+                diff_str = "  NEW"
+            elif "D" in status:
+                diff_str = "  DEL"
+            elif added == 0 and deleted == 0:
+                diff_str = ""
+            else:
+                diff_str = f"+{added}/-{deleted}"
+
+            max_path = LINE_WIDTH - 3 - len(diff_str)
+            if len(filepath) > max_path:
+                filepath = filepath[:max_path - 1] + "…"
+
+            prefix = Text(f"{status} ", style=style)
+            path_part = Text(filepath, style=style)
+            line_text = Text(style=style)
+            line_text.append_text(prefix)
+            line_text.append_text(path_part)
+
+            if diff_str:
+                padding = LINE_WIDTH - len(status) - 1 - len(filepath)
+                if padding > 0:
+                    line_text.append(" " * padding, style=Style(color="#555555"))
+                diff_style = _diff_color(added, deleted)
+                line_text.append(diff_str, style=diff_style)
+
+            text.append_text(line_text)
+
         files_widget = self.query_one("#mf-files", Static)
         files_widget.update(text)
 
