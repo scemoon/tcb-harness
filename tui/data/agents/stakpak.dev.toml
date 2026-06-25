@@ -1,5 +1,6 @@
 # Schema defined in agent_schema.py
 # https://github.com/stakpak/agent
+active = false
 
 identity = "stakpak.dev"
 name = "Stakpak Agent"

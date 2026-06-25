@@ -1,5 +1,6 @@
 # Schema defined in agent_schema.py
 # https://github.com/vinhnx/vtcode
+active = false
 
 identity = "vtcode.dev"
 name = "VT Code"

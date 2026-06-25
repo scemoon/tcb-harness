@@ -1,6 +1,6 @@
 # Schema defined in agent_schema.py
 
-active = true
+active = false
 identity = "inference.huggingface.co"
 name = "Hugging Face Inference Providers"
 short_name = "hf"

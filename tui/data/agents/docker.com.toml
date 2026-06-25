@@ -1,5 +1,6 @@
 # Schema defined in agent_schema.py
 # https://github.com/docker/cagent
+active = false
 
 identity = "docker.com"
 name = "Docker cagent"

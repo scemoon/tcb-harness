@@ -1,5 +1,6 @@
 # Schema defined in agent_schema.py
 # https://www.claude.com/product/claude-code
+active = false
 
 identity = "vibe.mistral.ai"
 name = "Mistral Vibe"

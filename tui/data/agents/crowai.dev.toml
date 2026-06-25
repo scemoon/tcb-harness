@@ -1,5 +1,6 @@
 # Schema defined in agent_schema.py
 # https://github.com/crow-cli/crow-cli
+active = false
 
 identity = "crowai.dev"
 name = "crow-cli"

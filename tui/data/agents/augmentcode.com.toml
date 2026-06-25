@@ -1,5 +1,6 @@
 # Schema defined in agent_schema.py
 # https://github.com/augmentcode/auggie
+active = false
 
 identity = "augmentcode.com"
 name = "Auggie (Augment Code)"

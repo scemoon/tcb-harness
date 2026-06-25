@@ -1,3 +1,4 @@
+active = false
 identity = "deepagents.langchain.com"
 name = "Deep Agents"
 short_name = "deepagents"

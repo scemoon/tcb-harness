@@ -1,5 +1,6 @@
 # Schema defined in agent_schema.py
 # https://github.com/block/goose
+active = false
 
 identity = "goose.ai"
 name = "Goose"

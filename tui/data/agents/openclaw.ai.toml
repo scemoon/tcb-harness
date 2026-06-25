@@ -2,7 +2,7 @@
 # https://docs.openclaw.ai/cli/acp
 
 # Could not get Openclaw ACP to work
-active = true
+active = false
 
 identity = "openclaw.ai"
 name = "OpenClaw"

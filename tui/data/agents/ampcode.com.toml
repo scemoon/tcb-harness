@@ -1,5 +1,6 @@
 # Schema defined in agent_schema.py
 # https://github.com/tao12345666333/amp-acp
+active = false
 
 identity = "ampcode.com"
 name = "Amp (AmpCode)"
