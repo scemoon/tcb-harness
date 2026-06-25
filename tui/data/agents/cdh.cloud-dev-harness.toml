@@ -1,5 +1,6 @@
 # CDH (Cloud Dev Harness) - Agent for A2TUI
 # https://github.com/cloud-dev-harness/cdh
+active = false
 
 identity = "cdh.cloud-dev-harness"
 name = "CDH Agent"
