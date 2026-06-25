@@ -13,6 +13,8 @@ from rich.text import Text
 from rich.style import Style
 
 
+CONTENT_WIDTH = 35
+
 GIT_STATUS_TIMEOUT = 5.0
 GIT_STATUS_DEBOUNCE = 0.2
 
@@ -35,19 +37,30 @@ IGNORED_DIRS = frozenset(
     }
 )
 
-LINE_WIDTH = 38
+STATUS_ICONS = {
+    "?": "?",
+    "M": "M",
+    "A": "A",
+    "D": "D",
+    "R": "R",
+    "C": "C",
+}
+
+STATUS_COLORS = {
+    "?": "green",
+    "M": "yellow",
+    "A": "green",
+    "D": "red",
+    "R": "#888888",
+    "C": "green",
+}
 
 
-def _style_for_status(status: str) -> Style:
-    if "?" in status:
-        return Style(color="green")
-    if "D" in status:
-        return Style(color="red")
-    if "A" in status or "C" in status:
-        return Style(color="green")
-    if "R" in status:
-        return Style(color="#888888")
-    return Style(color="yellow")
+def _status_style(raw: str) -> tuple[str, Style]:
+    ch = raw.strip()[:1] or "M"
+    icon = STATUS_ICONS.get(ch, "M")
+    color = STATUS_COLORS.get(ch, "yellow")
+    return icon, Style(color=color)
 
 
 def _diff_color(added: int, deleted: int) -> Style:
@@ -194,39 +207,38 @@ class ModifiedFiles(containers.Vertical):
             return
         self._show_status("file-modified", "")
         text = Text()
-        for i, (raw_line) in enumerate(lines):
+        for i, raw_line in enumerate(lines):
             if i > 0:
                 text.append("\n")
             filepath = raw_line[3:]
-            status = raw_line[:2]
-            style = _style_for_status(status)
+            icon, style = _status_style(raw_line[:2])
 
             added, deleted = diffmap.get(filepath, (0, 0))
-            if "?" in status:
-                diff_str = "  NEW"
-            elif "D" in status:
-                diff_str = "  DEL"
-            elif added == 0 and deleted == 0:
-                diff_str = ""
+            if "?" in raw_line[:2]:
+                diff_tag = "new"
+            elif "D" in raw_line[:2]:
+                diff_tag = "del"
             else:
-                diff_str = f"+{added}/-{deleted}"
+                diff_tag = f"+{added}/-{deleted}" if added or deleted else ""
 
-            max_path = LINE_WIDTH - 3 - len(diff_str)
+            avail = CONTENT_WIDTH
+            tag_w = len(diff_tag) + 1 if diff_tag else 0
+            max_path = avail - 3 - tag_w
+            if max_path < 4:
+                max_path = 4
             if len(filepath) > max_path:
                 filepath = filepath[:max_path - 1] + "…"
 
-            prefix = Text(f"{status} ", style=style)
-            path_part = Text(filepath, style=style)
-            line_text = Text(style=style)
-            line_text.append_text(prefix)
-            line_text.append_text(path_part)
+            line_text = Text()
+            line_text.append(f"{icon} ", style=style)
+            line_text.append(filepath, style=style)
 
-            if diff_str:
-                padding = LINE_WIDTH - len(status) - 1 - len(filepath)
-                if padding > 0:
-                    line_text.append(" " * padding, style=Style(color="#555555"))
-                diff_style = _diff_color(added, deleted)
-                line_text.append(diff_str, style=diff_style)
+            if diff_tag:
+                remain = avail - line_text.cell_len
+                p = remain - len(diff_tag) - 1
+                if p > 0:
+                    line_text.append(" " * p)
+                line_text.append(f" {diff_tag}", style=_diff_color(added, deleted))
 
             text.append_text(line_text)
 
