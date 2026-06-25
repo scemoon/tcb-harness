@@ -28,14 +28,15 @@ async def read_agents() -> dict[str, Agent]:
             List of agent dicts.
         """
         agents: list[Agent] = []
-        try:
-            for file in files("tui.data").joinpath("agents").iterdir():
+        for file in files("tui.data").joinpath("agents").iterdir():
+            if file.name.startswith("."):
+                continue
+            try:
                 agent: Agent = tomllib.load(file.open("rb"))
-                if agent.get("active", True):
-                    agents.append(agent)
-
-        except Exception as error:
-            raise AgentReadError(f"Failed to read agents; {error}")
+            except Exception:
+                continue
+            if agent.get("active", True):
+                agents.append(agent)
 
         return agents
 
