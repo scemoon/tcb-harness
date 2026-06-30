@@ -9,3 +9,4 @@ uv.lock
 .idea
 .cdh/
 npm/npm_pkg/*
+dist/

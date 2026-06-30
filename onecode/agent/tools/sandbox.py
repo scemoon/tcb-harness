@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import enum
 import os
 import resource
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 
 class SandboxMode(enum.Enum):
@@ -109,6 +110,24 @@ class Sandbox:
             return self._exec_docker(cmd, timeout)
         return self._exec_direct(cmd, timeout)
 
+    async def exec_async(
+        self, cmd: str, timeout: int = 60,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict:
+        """Async public entry point — supports cancellation mid-execution."""
+        mode = self.config.mode
+
+        if mode == SandboxMode.NONE:
+            return await self._exec_direct_async(cmd, timeout, cancel_check)
+        if mode == SandboxMode.BUBBLEWRAP:
+            if self._check_bwrap_available():
+                return await self._exec_bwrap_async(cmd, timeout, cancel_check)
+            return await self._exec_direct_async(cmd, timeout, cancel_check)
+        if mode == SandboxMode.DOCKER:
+            # Docker exec is async-adaptable via docker-py, but keep sync for now
+            return self._exec_docker(cmd, timeout)
+        return await self._exec_direct_async(cmd, timeout, cancel_check)
+
     def _exec_direct(self, cmd: str, timeout: int) -> dict:
         # Apply resource limits in the *child* process only — calling
         # ``setrlimit`` on the parent (this Python interpreter) shrinks
@@ -130,20 +149,6 @@ class Sandbox:
                 )
             except (ValueError, OSError, resource.error):
                 pass
-            try:
-                resource.setrlimit(
-                    resource.RLIMIT_NPROC, (limits.max_procs, limits.max_procs + 5)
-                )
-            except (ValueError, OSError, resource.error):
-                pass
-            try:
-                resource.setrlimit(
-                    resource.RLIMIT_NOFILE,
-                    (limits.max_open_files, limits.max_open_files + 10),
-                )
-            except (ValueError, OSError, resource.error):
-                pass
-
         try:
             result = subprocess.run(
                 cmd,
@@ -165,6 +170,96 @@ class Sandbox:
             return {"success": False, "error": "Command timed out", "sandbox": "none"}
         except Exception as e:
             return {"success": False, "error": str(e), "sandbox": "none"}
+
+    async def _exec_direct_async(
+        self, cmd: str, timeout: int,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict:
+        limits = self.config.resource_limits
+
+        def _preexec_apply_rlimits() -> None:
+            try:
+                resource.setrlimit(
+                    resource.RLIMIT_CPU, (limits.cpu_time, limits.cpu_time + 5)
+                )
+            except (ValueError, OSError, resource.error):
+                pass
+            try:
+                mem_bytes = limits.memory_mb * 1024 * 1024
+                resource.setrlimit(
+                    resource.RLIMIT_AS, (mem_bytes, mem_bytes)
+                )
+            except (ValueError, OSError, resource.error):
+                pass
+        process = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(self.config.workspace_root),
+            preexec_fn=_preexec_apply_rlimits,
+        )
+        try:
+            if cancel_check is not None and cancel_check():
+                process.terminate()
+                await process.wait()
+                return {"success": False, "error": "Cancelled", "sandbox": "none"}
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=timeout,
+            )
+            stdout = stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else stdout
+            stderr = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else stderr
+            return {
+                "success": process.returncode == 0,
+                "stdout": stdout,
+                "stderr": stderr,
+                "returncode": process.returncode,
+                "sandbox": "none",
+            }
+        except asyncio.TimeoutError:
+            process.terminate()
+            await process.wait()
+            return {"success": False, "error": "Command timed out", "sandbox": "none"}
+        except Exception as e:
+            process.terminate()
+            await process.wait()
+            return {"success": False, "error": str(e), "sandbox": "none"}
+
+    async def _exec_bwrap_async(
+        self, cmd: str, timeout: int,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict:
+        bwrap_cmd = self._build_bwrap_cmd(cmd)
+        process = await asyncio.create_subprocess_exec(
+            *bwrap_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(self.config.workspace_root),
+        )
+        try:
+            if cancel_check is not None and cancel_check():
+                process.terminate()
+                await process.wait()
+                return {"success": False, "error": "Cancelled", "sandbox": "bwrap"}
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=timeout,
+            )
+            stdout = stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else stdout
+            stderr = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else stderr
+            return {
+                "success": process.returncode == 0,
+                "stdout": stdout,
+                "stderr": stderr,
+                "returncode": process.returncode,
+                "sandbox": "bwrap",
+            }
+        except asyncio.TimeoutError:
+            process.terminate()
+            await process.wait()
+            return {"success": False, "error": "Command timed out", "sandbox": "bwrap"}
+        except Exception as e:
+            process.terminate()
+            await process.wait()
+            return {"success": False, "error": str(e), "sandbox": "bwrap"}
 
     def _exec_bwrap(self, cmd: str, timeout: int) -> dict:
         bwrap_cmd = self._build_bwrap_cmd(cmd)
