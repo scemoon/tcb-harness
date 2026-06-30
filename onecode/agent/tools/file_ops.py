@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from onecode.agent.permissions import PermissionChecker, PermissionSet, create_safe_permission_set
 from onecode.agent.tools.sandbox import Sandbox, SandboxConfig, SandboxMode, ResourceLimits, create_sandbox
@@ -116,6 +117,22 @@ class FileOps:
         except Exception:
             return []
 
+    async def grep_async(self, pattern: str, include: Optional[str] = None, path: Optional[str] = None) -> list[str]:
+        base = self._resolve(path) if path else self.workspace
+        cmd = ["grep", "-rn", pattern, str(base)]
+        if include:
+            cmd.extend(["--include", include])
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=30)
+            return stdout.decode("utf-8", errors="replace").split("\n")
+        except Exception:
+            return []
+
     def list(self, path: str = ".") -> list[dict]:
         p = self._resolve(path)
         if not p.exists():
@@ -175,6 +192,24 @@ class ShellTool:
             return {"success": False, "error": "CWD outside workspace"}
 
         return self._sandbox.exec(cmd, timeout=timeout)
+
+    async def exec_async(
+        self, cmd: str,
+        cwd: Optional[str] = None,
+        timeout: int = 60,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict:
+        result = self._checker.check_command(cmd)
+        if result.value == "deny":
+            return {"success": False, "error": "Command not allowed", "requires_approval": False}
+        if result.value == "ask":
+            return {"success": False, "error": "Command requires approval", "requires_approval": True}
+
+        work_dir = Path(cwd) if cwd else self.workspace
+        if not work_dir.is_relative_to(self.workspace.resolve()):
+            return {"success": False, "error": "CWD outside workspace"}
+
+        return await self._sandbox.exec_async(cmd, timeout=timeout, cancel_check=cancel_check)
 
 
 class ToolFactory:

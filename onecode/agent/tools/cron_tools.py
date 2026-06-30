@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolSpec
+from onecode.agent.tools.registry import Tool, ToolSpec
 
 
 @dataclass
@@ -95,7 +95,7 @@ class CronScheduler:
             self._task = None
 
 
-class CronCreateTool:
+class CronCreateTool(Tool):
     """Create a scheduled cron job (Clawd-Code pattern)."""
 
     def __init__(self, scheduler: CronScheduler):
@@ -131,7 +131,7 @@ class CronCreateTool:
 
 
 
-class CronListTool:
+class CronListTool(Tool):
     """List all cron jobs."""
 
     def __init__(self, scheduler: CronScheduler):
@@ -152,7 +152,7 @@ class CronListTool:
 
 
 
-class CronRemoveTool:
+class CronRemoveTool(Tool):
     """Remove a cron job."""
 
     def __init__(self, scheduler: CronScheduler):

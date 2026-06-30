@@ -53,5 +53,13 @@ class ProjectGridSelect(GridSelect):
         for pf in sorted(project_files):
             yield ProjectSummary(pf.stem, _read_project_path(pf), id=pf.stem)
 
+    async def reload(self) -> None:
+        await self.remove_children()
+        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir.mkdir(parents=True, exist_ok=True)
+        project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
+        for pf in sorted(project_files):
+            self.mount(ProjectSummary(pf.stem, _read_project_path(pf), id=pf.stem))
+
     def refresh(self, **kwargs) -> None:
         super().refresh(**kwargs)

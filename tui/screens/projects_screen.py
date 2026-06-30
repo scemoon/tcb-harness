@@ -139,7 +139,7 @@ class ProjectsScreen(ModalScreen[str]):
             lambda picked: self._on_new_project_components(target, picked),
         )
 
-    def _on_new_project_components(
+    async def _on_new_project_components(
         self,
         target: "Path",
         picked: list[str] | None,
@@ -149,9 +149,9 @@ class ProjectsScreen(ModalScreen[str]):
             return
         if not picked:
             return
-        self._do_new_project(target, picked)
+        await self._do_new_project(target, picked)
 
-    def _do_new_project(
+    async def _do_new_project(
         self,
         target: "Path",
         components: list[str],
@@ -180,8 +180,7 @@ class ProjectsScreen(ModalScreen[str]):
         import yaml
         proj_data = {"name": name, "path": str(target), "description": ""}
         proj_file.write_text(yaml.dump(proj_data))
-        widget = ProjectSummary(name, str(target), id=name)
-        self.project_grid_select.mount(widget)
+        await self.project_grid_select.reload()
         self.project_grid_select.highlighted = len(self.project_grid_select.children) - 1
         self.notify(
             f"Created project '{name}' at {target} "
@@ -198,7 +197,7 @@ class ProjectsScreen(ModalScreen[str]):
             self._on_init_path,
         )
 
-    def _on_init_path(self, path_str: str | None) -> None:
+    async def _on_init_path(self, path_str: str | None) -> None:
         from pathlib import Path
         from onecode.agent.cdh_loader import CdhProjectLoader
 
@@ -222,30 +221,9 @@ class ProjectsScreen(ModalScreen[str]):
                 severity="warning",
             )
             return
-        self.app.push_screen(
-            ComponentPickerScreen(
-                title="Init .cdh — Select Components",
-                subtitle=(
-                    f"Directory: {target}\n"
-                    "Pick the components already present in this directory. "
-                    "Empty selection is allowed (no apps/ created)."
-                ),
-                allow_empty=True,
-            ),
-            lambda picked: self._on_init_components(target, picked),
-        )
+        await self._do_init_project(target, [])
 
-    def _on_init_components(
-        self,
-        target: "Path",
-        picked: list[str] | None,
-    ) -> None:
-        if picked is None:
-            self.notify("Init cancelled", severity="warning")
-            return
-        self._do_init_project(target, picked)
-
-    def _do_init_project(
+    async def _do_init_project(
         self,
         target: "Path",
         components: list[str],
@@ -278,8 +256,7 @@ class ProjectsScreen(ModalScreen[str]):
         proj_file = projects_dir / f"{name}.yaml"
         proj_data = {"name": name, "path": str(target), "description": ""}
         proj_file.write_text(yaml.dump(proj_data))
-        widget = ProjectSummary(name, str(target), id=name)
-        self.project_grid_select.mount(widget)
+        await self.project_grid_select.reload()
         self.project_grid_select.highlighted = len(self.project_grid_select.children) - 1
         suffix = (
             f" (components: {', '.join(components)})"

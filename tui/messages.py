@@ -116,6 +116,8 @@ class SessionUpdate(Message):
     """Project directory path."""
     state: SessionState | None = None
     """New session state."""
+    session_pk: int | None = None
+    """DB primary key of the session."""
 
 
 @dataclass

@@ -694,6 +694,7 @@ class Agent(AgentBase):
             protocol=data["protocol"],
             meta=data["meta"],
         )
+        self.post_message(tui_messages.SessionUpdate(session_pk=self.session_pk))
         self._pending_session_data = None
         await self._save_last_session_to_cdh()
 
@@ -848,7 +849,7 @@ class Agent(AgentBase):
             await self._ensure_db_session()
 
         if session_title:
-            self.post_message(tui_messages.SessionUpdate(name=session_title))
+            self.post_message(tui_messages.SessionUpdate(name=session_title, session_pk=self.session_pk))
 
         await self._save_last_session_to_cdh()
 
@@ -922,7 +923,7 @@ class Agent(AgentBase):
             if session.load():
                 session.name = name
                 session.save()
-        self.post_message(tui_messages.SessionUpdate(name=name))
+        self.post_message(tui_messages.SessionUpdate(name=name, session_pk=self.session_pk))
 
     async def acp_session_cancel(self) -> bool:
         with self.request():

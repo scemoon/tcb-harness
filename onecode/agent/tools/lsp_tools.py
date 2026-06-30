@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolSpec
+from onecode.agent.tools.registry import Tool, ToolSpec
 
 
 class LSPClient:
@@ -263,7 +263,7 @@ class LSPClient:
             self._process = None
 
 
-class LSPTool:
+class LSPTool(Tool):
     def __init__(self):
         self._servers: dict[str, LSPClient] = {}
 

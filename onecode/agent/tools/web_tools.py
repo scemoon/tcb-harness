@@ -8,7 +8,7 @@ from typing import Any, Optional
 import httpx
 
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolSpec
+from onecode.agent.tools.registry import Tool, ToolSpec
 
 
 @dataclass
@@ -121,7 +121,7 @@ def websearch(query: str, num_results: int = 5) -> str:
     return searcher.search(query, num_results)
 
 
-class WebFetchTool:
+class WebFetchTool(Tool):
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="WebFetch",
@@ -146,7 +146,7 @@ class WebFetchTool:
 
 
 
-class WebSearchTool:
+class WebSearchTool(Tool):
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="WebSearch",

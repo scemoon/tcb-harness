@@ -210,33 +210,16 @@ class MainScreen(Screen, can_focus=False):
             new_dir = event.project_dir
             sidebar = self.query_one(SideBar)
             if new_dir is None:
-                sidebar.remove_panel("project-panel")
                 self.project_path = None
                 if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
                     mf.refresh_files()
                 self._swap_directory_watcher(None)
                 return
-            if self.project_path == new_dir and sidebar.has_panel("project-panel"):
+            if self.project_path == new_dir:
                 if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
                     mf.refresh_files()
                 return
             self.project_path = new_dir
-            if not sidebar.has_panel("project-panel"):
-                collapsible = await sidebar.add_panel(
-                    SideBar.Panel(
-                        "Project",
-                        ProjectDirectoryTree(
-                            self.project_path,
-                            id="project_directory_tree",
-                        ),
-                        flex=True,
-                        id="project-panel",
-                    ),
-                )
-                tree = collapsible.query_one(ProjectDirectoryTree)
-                tree.data_bind(path=MainScreen.project_path)
-                tree.guide_depth = 3
-    
             if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
                 mf.refresh_files()
             self._swap_directory_watcher(new_dir)
@@ -247,12 +230,6 @@ class MainScreen(Screen, can_focus=False):
         except Exception:
             pass
 
-    def _has_project_panel(self) -> bool:
-        try:
-            sidebar = self.query_one(SideBar)
-        except Exception:
-            return False
-        return sidebar.has_panel("project-panel")
 
     @on(DirectoryTree.FileSelected, "ProjectDirectoryTree")
     def on_project_directory_tree_selected(self, event: Tree.NodeSelected):
@@ -277,6 +254,7 @@ class MainScreen(Screen, can_focus=False):
                 subtitle=event.subtitle,
                 path=event.path,
                 state=event.state,
+                session_pk=event.session_pk,
             )
         if event.name is not None:
             self.conversation.update_title()

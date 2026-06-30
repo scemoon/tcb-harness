@@ -143,7 +143,7 @@ class EditFieldScreen(ModalScreen[str]):
     EditFieldScreen { background: rgba(0,0,0,0.7); align: center middle; }
     #edit-dialog { width: 50; height: 7; background: #111; border: solid #555; }
     #edit-label { height: 1; background: #333; color: #fff; padding: 0 1; }
-    #edit-input { height: 3; padding: 0 1; }
+    #edit-input { height: 3; padding: 0 1; background: #111; color: #fff; }
     #edit-buttons { height: 3; background: #222; align: center middle; }
     Button { margin: 0 1; background: #444; color: #fff; }
     Button:hover { background: #666; }

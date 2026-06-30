@@ -5,10 +5,10 @@ from typing import Any, Optional
 
 from onecode.agent.tools.file_ops import FileOps
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolSpec
+from onecode.agent.tools.registry import Tool, ToolSpec
 
 
-class ReadTool:
+class ReadTool(Tool):
     def __init__(self, file_ops: FileOps):
         self._file_ops = file_ops
 
@@ -39,7 +39,7 @@ class ReadTool:
 
 
 
-class WriteTool:
+class WriteTool(Tool):
     def __init__(self, file_ops: FileOps):
         self._file_ops = file_ops
 
@@ -66,7 +66,7 @@ class WriteTool:
 
 
 
-class EditTool:
+class EditTool(Tool):
     def __init__(self, file_ops: FileOps):
         self._file_ops = file_ops
 
@@ -95,7 +95,7 @@ class EditTool:
 
 
 
-class InsertTool:
+class InsertTool(Tool):
     def __init__(self, file_ops: FileOps):
         self._file_ops = file_ops
 
@@ -124,7 +124,7 @@ class InsertTool:
 
 
 
-class UndoEditTool:
+class UndoEditTool(Tool):
     def __init__(self, file_ops: FileOps):
         self._file_ops = file_ops
 
@@ -149,7 +149,7 @@ class UndoEditTool:
 
 
 
-class GlobTool:
+class GlobTool(Tool):
     def __init__(self, file_ops: FileOps):
         self._file_ops = file_ops
 
@@ -174,7 +174,7 @@ class GlobTool:
 
 
 
-class GrepTool:
+class GrepTool(Tool):
     def __init__(self, file_ops: FileOps):
         self._file_ops = file_ops
 
@@ -201,7 +201,7 @@ class GrepTool:
 
 
 
-class ListTool:
+class ListTool(Tool):
     def __init__(self, file_ops: FileOps):
         self._file_ops = file_ops
 

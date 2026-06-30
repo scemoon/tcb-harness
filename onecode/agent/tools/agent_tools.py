@@ -4,10 +4,10 @@ import json
 from typing import Any
 
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolRegistry, ToolSpec
+from onecode.agent.tools.registry import Tool, ToolRegistry, ToolSpec
 
 
-class AgentTool:
+class AgentTool(Tool):
     def __init__(self, registry: ToolRegistry, permission_checker=None):
         self._registry = registry
         self._permission_checker = permission_checker
@@ -76,7 +76,7 @@ class AgentTool:
 
 
 
-class TaskTool:
+class TaskTool(Tool):
     VALID_AGENT_TYPES: tuple[str, ...] = (
         "general", "explore", "scout",
         "build", "plan", "solo",

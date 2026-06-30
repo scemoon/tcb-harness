@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolSpec
+from onecode.agent.tools.registry import Tool, ToolSpec
 
 
-class TodoCreateTool:
+class TodoCreateTool(Tool):
     def __init__(self, todo_manager):
         self._tm = todo_manager
 
@@ -42,7 +42,7 @@ class TodoCreateTool:
 
 
 
-class TodoGetTool:
+class TodoGetTool(Tool):
     def __init__(self, todo_manager):
         self._tm = todo_manager
 
@@ -69,7 +69,7 @@ class TodoGetTool:
 
 
 
-class TodoListTool:
+class TodoListTool(Tool):
     def __init__(self, todo_manager):
         self._tm = todo_manager
 
@@ -95,7 +95,7 @@ class TodoListTool:
 
 
 
-class TodoUpdateTool:
+class TodoUpdateTool(Tool):
     def __init__(self, todo_manager):
         self._tm = todo_manager
 
@@ -137,7 +137,7 @@ class TodoUpdateTool:
 
 
 
-class TodoOutputTool:
+class TodoOutputTool(Tool):
     def __init__(self, todo_manager):
         self._tm = todo_manager
 
@@ -161,7 +161,7 @@ class TodoOutputTool:
 
 
 
-class TodoStopTool:
+class TodoStopTool(Tool):
     def __init__(self, todo_manager):
         self._tm = todo_manager
 

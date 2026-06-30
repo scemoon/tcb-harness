@@ -4,13 +4,13 @@ import logging
 from typing import Any
 
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolSpec
+from onecode.agent.tools.registry import Tool, ToolSpec
 from onecode.config import GlobalConfig
 
 logger = logging.getLogger("onecode.tools.config")
 
 
-class ConfigReadTool:
+class ConfigReadTool(Tool):
     """Read configuration values accessible to the LLM (Clawd-Code pattern)."""
 
     def __init__(self, config: GlobalConfig):
@@ -64,7 +64,7 @@ class ConfigReadTool:
 
 
 
-class ConfigWriteTool:
+class ConfigWriteTool(Tool):
     """Write configuration values accessible to the LLM (Clawd-Code pattern)."""
 
     def __init__(self, config: GlobalConfig, save_fn=None):

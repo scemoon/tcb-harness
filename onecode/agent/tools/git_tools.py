@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Any
 
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolSpec
+from onecode.agent.tools.registry import Tool, ToolSpec
 
 
-class WorktreeTool:
+class WorktreeTool(Tool):
     """Manage git worktrees (Clawd-Code pattern)."""
 
     def __init__(self, workspace_root: Path | None = None):

@@ -145,9 +145,8 @@ class SessionsScreen(ModalScreen[str]):
         self.run_worker(self._load_historical_sessions())
 
     async def _on_screen_resume(self, event: ScreenResume) -> None:
+        await self._load_historical_sessions()
         current_mode = self.app.screen_stack[0].id
-        for instructions in self.query(".instructions"):
-            instructions.display = not self.session_grid_select.children
         if current_mode is not None:
             self.session_grid_select.update_current(current_mode)
 

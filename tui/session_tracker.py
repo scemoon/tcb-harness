@@ -77,6 +77,7 @@ class SessionTracker:
         subtitle: str | None = None,
         path: str | None = None,
         state: SessionState | None = None,
+        session_pk: int | None = None,
     ) -> SessionDetails:
         session_details = self.sessions[mode_name]
         if title is not None:
@@ -87,6 +88,8 @@ class SessionTracker:
             session_details.path = path
         if state is not None:
             session_details.state = state
+        if session_pk is not None:
+            session_details.session_pk = session_pk
         self.signal.publish((mode_name, session_details))
         return session_details
 

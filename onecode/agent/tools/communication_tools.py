@@ -4,10 +4,10 @@ import json
 from typing import Any
 
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolRegistry, ToolSpec
+from onecode.agent.tools.registry import Tool, ToolRegistry, ToolSpec
 
 
-class SendMessageTool:
+class SendMessageTool(Tool):
     def __init__(self):
         self.last_message: str = ""
 
@@ -70,7 +70,7 @@ _QUESTION_SCHEMA = {
 }
 
 
-class AskUserTool:
+class AskUserTool(Tool):
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="AskUser",
@@ -118,7 +118,7 @@ class AskUserTool:
 
 
 
-class ToolSearchTool:
+class ToolSearchTool(Tool):
     def __init__(self, registry: ToolRegistry):
         self._registry = registry
 

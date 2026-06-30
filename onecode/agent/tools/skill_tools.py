@@ -3,12 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolSpec
+from onecode.agent.tools.registry import Tool, ToolSpec
 from onecode.skills.loader import SkillLoader
 from onecode.skills.argument_substitution import substitute_arguments
 
 
-class SkillTool:
+class SkillTool(Tool):
     """Run a SKILL.md skill (Clawd-Code pattern)."""
 
     def __init__(self, loader: SkillLoader):

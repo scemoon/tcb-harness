@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from onecode.agent.tools.file_ops import ShellTool
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolSpec
+from onecode.agent.tools.registry import Tool, ToolSpec
 
 
 _DANGEROUS_PATTERNS = [
@@ -21,7 +21,7 @@ _DANGEROUS_PATTERNS = [
 ]
 
 
-class BashTool:
+class BashTool(Tool):
     def __init__(self, shell: ShellTool):
         self._shell = shell
 
@@ -45,21 +45,42 @@ class BashTool:
         command = tool_input.get("command", "")
         timeout = tool_input.get("timeout", 60)
 
+        error = self._validate(command)
+        if error:
+            return error
+
+        result = self._shell.exec(command, timeout=timeout)
+        return self._to_tool_result(result, tool_input)
+
+    async def run_async(
+        self, tool_input: dict[str, Any],
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> ToolResult:
+        command = tool_input.get("command", "")
+        timeout = tool_input.get("timeout", 60)
+
+        error = self._validate(command)
+        if error:
+            return error
+
+        result = await self._shell.exec_async(command, timeout=timeout, cancel_check=cancel_check)
+        return self._to_tool_result(result, tool_input)
+
+    def _validate(self, command: str) -> ToolResult | None:
         if not isinstance(command, str) or not command.strip():
             return ToolResult(name="Bash", output="command must be a non-empty string", is_error=True, content_type="text")
         if "\x00" in command:
             return ToolResult(name="Bash", output="command contains NUL byte", is_error=True, content_type="text")
-
         for pat in _DANGEROUS_PATTERNS:
             if pat.search(command):
                 return ToolResult(name="Bash", output="refusing to run potentially dangerous command", is_error=True, content_type="text")
+        return None
 
-        result = self._shell.exec(command, timeout=timeout)
+    def _to_tool_result(self, result: dict, tool_input: dict) -> ToolResult:
         is_error = not result.get("success", True)
         stdout = result.get("stdout", "") or ""
         stderr = result.get("stderr", "") or ""
         error_msg = result.get("error", "") or ""
-
         formatted = self._format_bash_output(stdout, stderr, error_msg, is_error)
         return ToolResult(
             name="Bash",

@@ -32,22 +32,22 @@ class ComponentPickerScreen(ModalScreen[Optional[list[str]]]):
         width: 78;
         height: auto;
         max-height: 90%;
-        background: #111;
-        border: solid #555;
+        background: $surface;
+        border: solid $border;
         padding: 0 1;
     }
 
     #picker-title {
         height: 1;
-        background: #333;
-        color: #fff;
+        background: $panel;
+        color: $text;
         padding: 0 1;
         text-style: bold;
     }
 
     #picker-subtitle {
         height: 1;
-        color: #aaa;
+        color: $text-muted;
         padding: 0 1;
         margin-bottom: 1;
     }
@@ -56,43 +56,63 @@ class ComponentPickerScreen(ModalScreen[Optional[list[str]]]):
         height: auto;
         max-height: 22;
         padding: 0 1;
+        background: $surface;
     }
 
     .component-row {
         height: 2;
         padding: 0 1;
+        background: $surface;
     }
 
     .component-row Checkbox {
         width: 1fr;
+        background: $surface;
+        color: $text;
+    }
+
+    .component-row Checkbox > .toggle--button {
+        background: $panel;
+        color: $text-muted;
+    }
+
+    .component-row Checkbox.-on > .toggle--button {
+        background: $primary;
+        color: $text;
+    }
+
+    .component-row Checkbox > .toggle--label {
+        color: $text;
+    }
+
+    Footer {
+        background: $panel;
+        color: $text-muted;
     }
 
     #picker-buttons {
         height: 3;
         align: center middle;
-        background: #222;
+        background: $panel;
     }
 
     #picker-buttons Button {
         margin: 0 1;
-        background: #444;
-        color: #fff;
+        background: $panel;
+        color: $text;
     }
 
     #picker-buttons Button:hover {
-        background: #666;
-    }
-
-    #picker-buttons Button:focus {
-        background: #555;
+        background: $primary-darken-2;
     }
 
     #picker-buttons #picker-confirm {
-        background: #1a4d8f;
+        background: $primary-background;
+        color: $text;
     }
 
     #picker-buttons #picker-confirm:hover {
-        background: #2870c2;
+        background: $primary-darken-1;
     }
     """
 

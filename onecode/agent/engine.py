@@ -1016,7 +1016,9 @@ class AgentEngine:
                 return {**base, "content": denied, "is_error": True}
 
             call = RegistryToolCall(name=name, input=inp, tool_use_id=tid)
-            result = self._tool_registry.dispatch(call)
+            result = await self._tool_registry.dispatch_async(
+                call, cancel_check=lambda: self._cancelled,
+            )
 
             # Handle SendMessage tracking
             if name == "SendMessage":

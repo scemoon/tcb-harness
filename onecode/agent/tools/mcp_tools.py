@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolSpec
+from onecode.agent.tools.registry import Tool, ToolSpec
 from onecode.mcp.manager import MCPManager
 
 
-class MCPTool:
+class MCPTool(Tool):
     """Call a tool from a connected MCP server (Clawd-Code pattern)."""
 
     def __init__(self, mcp_manager: MCPManager):
@@ -59,7 +59,7 @@ class MCPTool:
 
 
 
-class MCPResourcesTool:
+class MCPResourcesTool(Tool):
     """Access resources from a connected MCP server."""
 
     def __init__(self, mcp_manager: MCPManager):

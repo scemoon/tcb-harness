@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Optional, Protocol
+from typing import Any, Callable, Iterable, Mapping
 
 from onecode.agent.tools.errors import ToolInputError, ToolPermissionError
 from onecode.agent.tools.protocol import ToolCall, ToolResult
@@ -19,10 +20,18 @@ class ToolSpec:
     max_result_size_chars: int = 20_000
 
 
-class Tool(Protocol):
+class Tool(ABC):
+    @abstractmethod
     def spec(self) -> ToolSpec: ...
 
+    @abstractmethod
     def run(self, tool_input: dict[str, Any]) -> ToolResult: ...
+
+    async def run_async(
+        self, tool_input: dict[str, Any],
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> ToolResult:
+        return self.run(tool_input)
 
 
 class ToolRegistry:
@@ -67,6 +76,64 @@ class ToolRegistry:
                 },
             })
         return schemas
+
+    async def dispatch_async(
+        self,
+        call: ToolCall,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> ToolResult:
+        tool = self.get(call.name)
+        if tool is None:
+            return ToolResult(
+                name=call.name,
+                output={"error": f"unknown tool: {call.name}"},
+                is_error=True,
+                tool_use_id=call.tool_use_id,
+            )
+        try:
+            spec = tool.spec()
+            validate_json_schema(call.input, spec.input_schema, tool_name=call.name)
+            result = await tool.run_async(call.input, cancel_check=cancel_check)
+            max_chars = spec.max_result_size_chars
+            if max_chars > 0 and isinstance(result.output, str) and len(result.output) > max_chars:
+                result = ToolResult(
+                    name=result.name,
+                    output=result.output[:max_chars]
+                    + f"\n\n[Output truncated to {max_chars} characters]",
+                    is_error=result.is_error,
+                    tool_use_id=result.tool_use_id or call.tool_use_id,
+                    content_type=result.content_type,
+                )
+            if result.tool_use_id is None:
+                return ToolResult(
+                    name=result.name,
+                    output=result.output,
+                    is_error=result.is_error,
+                    tool_use_id=call.tool_use_id,
+                    content_type=result.content_type,
+                )
+            return result
+        except ToolInputError as e:
+            return ToolResult(
+                name=call.name,
+                output={"error": str(e)},
+                is_error=True,
+                tool_use_id=call.tool_use_id,
+            )
+        except ToolPermissionError as e:
+            return ToolResult(
+                name=call.name,
+                output={"error": str(e)},
+                is_error=True,
+                tool_use_id=call.tool_use_id,
+            )
+        except Exception as e:
+            return ToolResult(
+                name=call.name,
+                output={"error": str(e)},
+                is_error=True,
+                tool_use_id=call.tool_use_id,
+            )
 
     def dispatch(
         self,

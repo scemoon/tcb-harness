@@ -474,6 +474,7 @@ class Conversation(containers.Vertical):
         self.prompt.prompt_text_area.insert(" ")
 
     def watch_project_path(self, path: Path) -> None:
+        self.working_directory = str(path)
         self.post_message(messages.SessionUpdate(path=str(path)))
 
     async def watch_shell_history_index(self, previous_index: int, index: int) -> None:

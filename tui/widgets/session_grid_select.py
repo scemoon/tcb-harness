@@ -111,6 +111,12 @@ class SessionGridSelect(GridSelect):
                     break
             return
 
+        for i, existing in enumerate(self._all_sessions):
+            if existing.mode_name == mode_name:
+                self._all_sessions[i] = details
+                self._render_page()
+                return
+
         if details.session_pk is not None:
             for i, existing in enumerate(self._all_sessions):
                 if existing.session_pk == details.session_pk:

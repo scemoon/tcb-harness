@@ -6,10 +6,10 @@ from typing import Any
 
 from onecode.agent.tools.file_ops import FileOps
 from onecode.agent.tools.protocol import ToolResult
-from onecode.agent.tools.registry import ToolSpec
+from onecode.agent.tools.registry import Tool, ToolSpec
 
 
-class ApplyPatchTool:
+class ApplyPatchTool(Tool):
     def __init__(self, file_ops: FileOps):
         self._file_ops = file_ops
 
