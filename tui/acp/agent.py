@@ -542,61 +542,64 @@ class Agent(AgentBase):
                 if (task := asyncio.current_task()) is not None:
                     tasks.discard(task)
 
-        while line := await process.stdout.readline():
-            # This line should contain JSON, which may be:
-            #   A) a JSONRPC request
-            #   B) a JSONRPC response to a previous request
-            if not line.strip():
-                continue
-
-            try:
-                line_str = line.decode("utf-8")
-            except Exception as error:
-                logger.error("Unable to decode utf-8 from agent: %s", error)
-                continue
-
-            logger.debug("[agent] %s", line_str.rstrip())
-            try:
-                agent_data: jsonrpc.JSONType = json.loads(line_str)
-            except Exception as error:
-                logger.error("Failed to decode JSON from agent: %s", error)
-                continue
-
-            if isinstance(agent_data, dict):
-                if "result" in agent_data or "error" in agent_data:
-                    # Wait for pending notification dispatch tasks so all ACP
-                    # messages are queued before the response future resolves.
-                    if tasks:
-                        await asyncio.gather(*tasks, return_exceptions=True)
-                        tasks.clear()
-                    API.process_response(agent_data)
+        try:
+            while line := await process.stdout.readline():
+                # This line should contain JSON, which may be:
+                #   A) a JSONRPC request
+                #   B) a JSONRPC response to a previous request
+                if not line.strip():
                     continue
 
-            elif isinstance(agent_data, list):
-                if not all(isinstance(datum, dict) for datum in agent_data):
-                    logger.error("Agent sent invalid data: %r", agent_data)
+                try:
+                    line_str = line.decode("utf-8")
+                except Exception as error:
+                    logger.error("Unable to decode utf-8 from agent: %s", error)
                     continue
 
-            if not isinstance(agent_data, dict):
-                logger.error("Invalid JSON from agent: %r", agent_data)
-                continue
+                logger.debug("[agent] %s", line_str.rstrip())
+                try:
+                    agent_data: jsonrpc.JSONType = json.loads(line_str)
+                except Exception as error:
+                    logger.error("Failed to decode JSON from agent: %s", error)
+                    continue
 
-            if not isinstance(agent_data, dict):
-                logger.error("Invalid JSON from agent: %r", agent_data)
-                continue
+                if isinstance(agent_data, dict):
+                    if "result" in agent_data or "error" in agent_data:
+                        # Wait for pending notification dispatch tasks so all ACP
+                        # messages are queued before the response future resolves.
+                        if tasks:
+                            await asyncio.gather(*tasks, return_exceptions=True)
+                            tasks.clear()
+                        API.process_response(agent_data)
+                        continue
 
-            # By this point we know it is a JSON RPC call
-            assert isinstance(agent_data, dict)
-            tasks.add(asyncio.create_task(call_jsonrpc(agent_data)))
-            await asyncio.sleep(0)
+                elif isinstance(agent_data, list):
+                    if not all(isinstance(datum, dict) for datum in agent_data):
+                        logger.error("Agent sent invalid data: %r", agent_data)
+                        continue
 
-        # Cancel all remaining tasks and wait for them to finish
-        for task in tasks:
-            task.cancel()
+                if not isinstance(agent_data, dict):
+                    logger.error("Invalid JSON from agent: %r", agent_data)
+                    continue
 
-        # Wait for all tasks to complete cancellation
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+                if not isinstance(agent_data, dict):
+                    logger.error("Invalid JSON from agent: %r", agent_data)
+                    continue
+
+                # By this point we know it is a JSON RPC call
+                assert isinstance(agent_data, dict)
+                tasks.add(asyncio.create_task(call_jsonrpc(agent_data)))
+                await asyncio.sleep(0)
+        except Exception as e:
+            logger.exception("Agent read loop failed: %s", e)
+        finally:
+            # Cancel all remaining tasks and wait for them to finish
+            for task in tasks:
+                task.cancel()
+
+            # Wait for all tasks to complete cancellation
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
 
         if process.returncode:
             assert process.stderr is not None

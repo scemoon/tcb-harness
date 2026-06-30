@@ -249,6 +249,16 @@ class TerminalTool(Terminal):
                     break
         finally:
             transport.close()
+            try:
+                write_transport.close()
+            except Exception:
+                pass
+            if self._shell_fd is not None:
+                try:
+                    os.close(self._shell_fd)
+                except OSError:
+                    pass
+                self._shell_fd = None
 
         self.finalize()
         return_code = self._return_code = await process.wait()

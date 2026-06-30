@@ -39,6 +39,11 @@ class ToolEvent:
 
 ToolEventHandler = Callable[[ToolEvent], None]
 
+
+class TurnCancelledError(Exception):
+    """Raised when the user cancels the agent's turn mid-execution."""
+
+
 TOOL_CALL_RE = re.compile(
     r'<tool_call\s+name=["\']([^"\']+)["\']\s+id=["\']([^"\']+)["\']>(.*?)</tool_call>',
     re.DOTALL,
@@ -1042,6 +1047,20 @@ class AgentEngine:
         for child in self._child_engines:
             child._cancelled = True
 
+    async def shutdown(self):
+        """Release OS resources held by this engine (LSP, MCP, cron)."""
+        self._cancelled = True
+        for child in self._child_engines:
+            child._cancelled = True
+        self._lsp_tool.stop_all()
+        await self._mcp.disconnect_all()
+        self._cron_scheduler.stop_loop()
+
+    def __del__(self):
+        """Fallback cleanup on garbage collection."""
+        self._lsp_tool.stop_all()
+        self._cron_scheduler.stop_loop()
+
     async def chat_stream(self, user_input: str | list[dict]) -> AsyncIterator[StreamEvent | str]:
         self._load_skills()
         preview = user_input[:100] if isinstance(user_input, str) else f"[{len(user_input)} content blocks]"
@@ -1214,6 +1233,8 @@ class AgentEngine:
                     _original_cb = self.on_text_chunk
                     def _stream_wrapper(text: str) -> None:
                         self._streaming_used = True
+                        if self._cancelled:
+                            raise TurnCancelledError()
                         _original_cb(text)
                     stream_cb = _stream_wrapper
                 else:
@@ -1291,6 +1312,9 @@ class AgentEngine:
                     logger.exception(f"Error during chat() fallback turn {turn+1}: {e}")
                     yield StreamEvent.error(safe_error_msg(e))
                     break
+            except TurnCancelledError:
+                yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
+                return
             except Exception as e:
                 ctx_msgs = len(self.context.messages)
                 ctx_tokens = self.context._token_count
@@ -1301,6 +1325,12 @@ class AgentEngine:
                 )
                 yield StreamEvent.error(f"Provider error (turn {turn+1}): {safe_error_msg(e)}")
                 break
+
+            # Check cancellation after provider call (covers non-streaming
+            # responses and cases where on_text_chunk was never called).
+            if self._cancelled:
+                yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
+                return
 
             # Track usage
             self._turn_usages.append(turn_usage)
@@ -1397,6 +1427,9 @@ class AgentEngine:
                 yield StreamEvent.tool_call_complete(tu["id"], tu["name"], tu["input"])
 
             for tu in tool_uses:
+                if self._cancelled:
+                    yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
+                    return
                 logger.info(f"Executing tool: {tu['name']} (id={tu['id']})")
 
                 # Spawn tool: forward subagent text deltas to the TUI as
@@ -1423,6 +1456,8 @@ class AgentEngine:
                         async for sub_event, sub_text in self._spawn_subagent_async_streaming(
                             subagent_type, subagent_prompt
                         ):
+                            if self._cancelled:
+                                break
                             if not sub_text:
                                 continue
                             if sub_event.type == StreamEventType.SUBAGENT_END:

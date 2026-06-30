@@ -1015,6 +1015,8 @@ class CDHACPAdapter:
 
     async def session_new(self, cwd: str, mcp_servers: list):
         """Create new session."""
+        if self.agent is not None:
+            await self.agent.shutdown()
         cfg = load_config()
         self.agent = _create_engine(cwd, perm_store=self._perm_store)
         self.agent.set_agent(cfg.default_mode)
@@ -1046,6 +1048,8 @@ class CDHACPAdapter:
 
     async def session_load(self, cwd: str, mcp_servers: list, session_id: str):
         """Load existing session."""
+        if self.agent is not None:
+            await self.agent.shutdown()
         self._perm_store_load(cwd)
         self.agent = _create_engine(cwd, perm_store=self._perm_store)
         self.session_id = session_id
@@ -2080,6 +2084,7 @@ class CDHACPAdapter:
         """Cancel current session."""
         if self.agent:
             await self.agent.cancel()
+            await self.agent.shutdown()
             try:
                 self.agent.save_session()
             except Exception:
