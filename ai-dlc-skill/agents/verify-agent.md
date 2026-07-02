@@ -16,7 +16,7 @@
 3. BDD step defs → `apps/{component}/features/steps/`
 4. 合约测试 → `tests/contract/`
 5. 跨组件 e2e → `tests/cross-stack/`
-6. Contract Diff → `openspec/changes/{id}/contract-diff.md`
+6. Contract Diff → `aidlc/openspec/changes/{id}/contract-diff.md`
 
 ## 质量门禁
 

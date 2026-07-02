@@ -13,7 +13,7 @@
 | wxa | `WXA-FR-*` | JavaScript | Vant Weapp | `apps/wxa/` | WeChat Mini Program |
 | mya | `MYA-FR-*` | JavaScript | Ant Design Mini | `apps/mya/` | Mini Program (e.g. Alipay) |
 | tta | `TTA-FR-*` | TypeScript | — | `apps/tta/` | TikTok Mini Program |
-| contracts | `INT-FR-*` | — | — | `contracts/`, `packages/shared/` | Cross-component contracts |
+| contracts | `INT-FR-*` | — | — | `aidlc/contracts/`, `packages/shared/` | Cross-component contracts |
 
 Cloud: {{cloud_provider}} (default: TCB).
 
@@ -28,7 +28,7 @@ frs:
   - id: INT-FR-001   # if cross-component
 YAML
 # write features/{component}/{domain}/{feature}.feature
-# if cross-component, also write features/cross-stack/{domain}/{feature}.feature
+# if cross-component, also write aidlc/features/cross-stack/{domain}/{feature}.feature
 
 # ② Plan
 # write openspec/changes/CHG-001/design.md
@@ -38,7 +38,7 @@ YAML
 # Per component: TDD red-green-refactor
 {{verify_per_component}}
 # Contracts
-tools/generate_shared.py
+aidlc/tools/generate_shared.py
 pytest tests/contract/
 # Cross-stack (if applies)
 pytest tests/cross-stack/ -k INT-FR-001
@@ -75,7 +75,7 @@ bvt ${PRODUCTION_URL}                                # stack-level BVT
 │   ├── mya/                     # MYA-FR-*   (Mini Program)
 │   ├── tta/                     # TTA-FR-*   (TikTok Mini Program)
 │   └── backend/                 # BE-FR-*    (service)
-├── contracts/                   # INT-FR-*  (single source of truth)
+├── aidlc/contracts/                   # INT-FR-*  (single source of truth)
 │   ├── api/                     # OpenAPI 3.1
 │   ├── events/                  # AsyncAPI / CloudEvent
 │   └── CHANGELOG.md

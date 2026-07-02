@@ -37,12 +37,12 @@ AI-DLC monorepo project. Stack: native + desktop + web + backend + wxa + mya + t
 │       ├── src/
 │       ├── tests/{unit,integration,e2e}/
 │       └── features/
-├── contracts/                         # INT-FR-*   single source of truth
+├── aidlc/contracts/                         # INT-FR-*   single source of truth
 │   ├── api/                           # OpenAPI 3.1
 │   ├── events/                        # AsyncAPI / CloudEvent
 │   └── CHANGELOG.md
 ├── packages/shared/                   # generated from contracts
-├── features/cross-stack/              # INT-FR-*.feature full flow
+├── aidlc/features/cross-stack/              # INT-FR-*.feature full flow
 ├── tests/
 │   ├── contract/                      # INT contract tests
 │   └── cross-stack/                   # cross-stack e2e
@@ -73,7 +73,7 @@ stack:
     - id: tta       { fr_prefix: TTA,    tech: miniprogram,                 dir: apps/tta,     default_language: typescript }
   cross_cutting:
     fr_prefix: INT
-    contracts: contracts/
+    contracts: aidlc/contracts/
     shared_types: packages/shared/
 ```
 
@@ -83,7 +83,7 @@ stack:
 # ① Understand
 # requirements.md → openspec/changes/{id}/spec-delta.md (with affects)
 # → features/{component}/{domain}/{feature}.feature
-# → features/cross-stack/{domain}/{feature}.feature  (if cross-component)
+# → aidlc/features/cross-stack/{domain}/{feature}.feature  (if cross-component)
 
 # ② Plan
 # → openspec/changes/{id}/design.md  (per-component + integration)
@@ -91,7 +91,7 @@ stack:
 
 # ③ Verify
 # For each affected component, per BDD scenario: RED → GREEN → REFACTOR
-# Then: tools/generate_shared.py  →  pytest tests/contract/
+# Then: aidlc/tools/generate_shared.py  →  pytest tests/contract/
 # Then: pytest tests/cross-stack/  (if cross-component)
 
 # ④ Deliver
@@ -110,7 +110,7 @@ bvt ${PRODUCTION_URL}                 # stack BVT
 | BDD scenarios | `pytest-bdd features/` per component | 100% pass |
 | Contract | `pytest tests/contract/` | 100% pass |
 | Cross-stack e2e | `pytest tests/cross-stack/` | 100% pass |
-| Contract diff | `tools/contract_diff.py` | backward-compat |
+| Contract diff | `aidlc/aidlc/tools/contract_diff.py` | backward-compat |
 | Security | `bandit -r apps/` | 0 vulns |
 | Stack BVT | `bvt ${URL}` | all checks pass |
 

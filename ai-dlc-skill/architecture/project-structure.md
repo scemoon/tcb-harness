@@ -12,27 +12,27 @@
 │   ├── wxa/             # WXA-FR-*      WeChat Mini Program (Vant Weapp/JavaScript)
 │   ├── mya/             # MYA-FR-*      Alipay Mini Program (Ant Design Mini/JavaScript)
 │   └── tta/             # TTA-FR-*      TikTok Mini Program (TypeScript)
-├── contracts/           # INT-FR-*      OpenAPI / AsyncAPI / Runtime Contract
+├── aidlc/contracts/           # INT-FR-*      OpenAPI / AsyncAPI / Runtime Contract
 │   ├── api/
 │   ├── events/
 │   └── functions/
 ├── packages/shared/     # INT-FR-*      从 contracts 生成的共享类型
-├── features/            # BDD feature 文件
+├── aidlc/features/            # BDD feature 文件
 │   └── cross-stack/     # 跨组件集成场景
 ├── tests/
 │   ├── contract/        # 合约测试 (INT-FR 级别, provider-agnostic)
 │   └── cross-stack/     # 跨组件 e2e 测试 (对 STACK_URL 运行)
-├── openspec/            # AI-DLC 生命周期产出物
+├── aidlc/openspec/            # AI-DLC 生命周期产出物
 │   └── changes/{id}/
 │       ├── spec-delta.md
 │       ├── design.md
 │       ├── task-list.md
 │       ├── contract-diff.md
 │       └── walkthrough.md
-├── providers/           # 云平台部署配置
+├── aidlc/providers/           # 云平台部署配置
 │   ├── tcb/
 │   └── aliyun/
-├── tools/               # 脚手架脚本
+├── aidlc/tools/               # 脚手架脚本
 │   ├── generate_shared.py
 │   └── contract_diff.py
 ├── .opencode/           # OpenCode 配置
@@ -41,7 +41,7 @@
 │   ├── config.yaml
 │   ├── state.json
 │   └── SKILL.md
-└── AI-DLC-CONTEXT.md    # Brownfield 上下文摘要 (自动生成)
+└── aidlc/AI-DLC-CONTEXT.md    # Brownfield 上下文摘要 (自动生成)
 ```
 
 ## 组件内部结构 (标准模板)
@@ -75,4 +75,4 @@ apps/{component}/
 | MYA-FR-NNN | `apps/mya/` | `apps/mya/tests/` | BACKEND_URL |
 | TTA-FR-NNN | `apps/tta/` | `apps/tta/tests/` | BACKEND_URL |
 | INT-FR-NNN | `contracts/` + `packages/shared/` | `tests/contract/` | generated types |
-| 跨组件 | `features/cross-stack/` | `tests/cross-stack/` | STACK_URL |
+| 跨组件 | `aidlc/features/cross-stack/` | `tests/cross-stack/` | STACK_URL |

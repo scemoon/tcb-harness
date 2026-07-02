@@ -6,7 +6,7 @@ CHANGE_ID="${1:?Usage: collect.sh <change-id>}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROJECT_ROOT="$(cd "$SKILL_DIR/../../.." && pwd)"
-CHANGE_DIR="$PROJECT_ROOT/openspec/changes/$CHANGE_ID"
+CHANGE_DIR="$PROJECT_ROOT/aidlc/openspec/changes/$CHANGE_ID"
 
 if [ ! -d "$CHANGE_DIR" ]; then
   echo "Error: $CHANGE_DIR not found"

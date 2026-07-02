@@ -5,7 +5,7 @@
 ## 使用方式
 
 ```bash
-# 一键生成 AI-DLC-CONTEXT.md
+# 一键生成 aidlc/AI-DLC-CONTEXT.md
 ./brownfield/generate-context.sh
 
 # 单独步骤
@@ -16,7 +16,7 @@
 
 ## 产出
 
-`AI-DLC-CONTEXT.md` 文件包含：
+`aidlc/AI-DLC-CONTEXT.md` 文件包含：
 1. 发现的组件列表 + 技术栈
 2. API 端点摘要
 3. 跨组件依赖 Mermaid 图

@@ -9,15 +9,15 @@ contracts/
 └── functions/        ← Runtime Contract — Serverless 函数接口 (新增)
 ```
 
-## contracts/api/
+## aidlc/contracts/api/
 HTTP API 描述，使用 OpenAPI 3.1 格式。
 每个文件对应一个 INT-FR-NNN，描述请求/响应 schema。
 
-## contracts/events/
+## aidlc/contracts/events/
 事件驱动合约，使用 AsyncAPI 3.0 + CloudEvents 格式。
 描述事件的生产/消费关系。
 
-## contracts/functions/
+## aidlc/contracts/functions/
 Serverless 函数接口描述，Provider-agnostic。
 描述函数的触发器、资源需求、环境变量。
 部署时根据选择的 provider + compute_mode 自动映射到具体平台。

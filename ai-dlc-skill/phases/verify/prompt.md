@@ -4,7 +4,7 @@
 由 Master Agent 委派处理测试验证。
 
 ## 输入
-- `openspec/changes/{id}/design.md` 和 `task-list.md`
+- `aidlc/openspec/changes/{id}/design.md` 和 `task-list.md`
 - BDD feature 文件
 
 ## 任务
@@ -19,7 +19,7 @@
 2. **Contract Verification**
    - 重新生成 `packages/shared/` 类型
    - 运行 `pytest tests/contract/`
-   - 运行 `tools/contract_diff.py`
+   - 运行 `aidlc/aidlc/tools/contract_diff.py`
 
 3. **Cross-Stack e2e**
    - 对 unified preview 运行 `tests/cross-stack/`
@@ -35,7 +35,7 @@
 - `apps/{component}/src/{module}/{feature}.py`
 - `tests/contract/test_{contract}.py`
 - `tests/cross-stack/test_{flow}.py`
-- `openspec/changes/{id}/contract-diff.md`（填充）
+- `aidlc/openspec/changes/{id}/contract-diff.md`（填充）
 
 ## 约束
 - 遵守 `rules.md` 中的 VRF-001 到 VRF-006

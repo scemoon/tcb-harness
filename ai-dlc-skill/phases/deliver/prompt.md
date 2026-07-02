@@ -4,7 +4,7 @@
 由 Master Agent 委派处理部署交付。
 
 ## 输入
-- `openspec/changes/{id}/contract-diff.md`
+- `aidlc/openspec/changes/{id}/contract-diff.md`
 - 所有 e2e 测试报告
 
 ## 任务

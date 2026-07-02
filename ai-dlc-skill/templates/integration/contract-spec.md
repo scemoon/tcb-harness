@@ -6,9 +6,9 @@
 
 ## Kind
 
-- [ ] REST API (OpenAPI 3.1) — `contracts/api/{{name}}.yaml`
-- [ ] AsyncAPI event — `contracts/events/{{name}}.yaml`
-- [ ] GraphQL schema — `contracts/api/{{name}}.graphql`
+- [ ] REST API (OpenAPI 3.1) — `aidlc/contracts/api/{{name}}.yaml`
+- [ ] AsyncAPI event — `aidlc/contracts/events/{{name}}.yaml`
+- [ ] GraphQL schema — `aidlc/contracts/api/{{name}}.graphql`
 
 ## Versioning
 
@@ -18,7 +18,7 @@
 - PATCH: doc / example only
 
 > Any MAJOR bump requires human approval (INT-002) and a migration note in
-> `contracts/CHANGELOG.md`.
+> `aidlc/contracts/CHANGELOG.md`.
 
 ## Change
 
@@ -45,5 +45,5 @@
 
 ## See Also
 
-- `contracts/CHANGELOG.md` — version history
-- `openspec/changes/{{change_id}}/contract-diff.md` — auto-generated diff
+- `aidlc/contracts/CHANGELOG.md` — version history
+- `aidlc/openspec/changes/{{change_id}}/contract-diff.md` — auto-generated diff

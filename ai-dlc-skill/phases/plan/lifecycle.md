@@ -130,7 +130,7 @@ units:
     fr: INT-FR-001
     affects: [contracts]
     depends_on: []
-    deliverables: [contracts/api/auth.yaml]
+    deliverables: [aidlc/contracts/api/auth.yaml]
   - id: be-unit-1
     fr: BE-FR-001
     affects: [backend]
@@ -180,7 +180,7 @@ Test cases:
 
 For each contract change, list:
 - Old version, new version
-- Breaking? (yes / no) → if yes, plan migration in `contracts/CHANGELOG.md`
+- Breaking? (yes / no) → if yes, plan migration in `aidlc/contracts/CHANGELOG.md`
 - Consumers affected (which components will pull the new shared types)
 - Backward-compat strategy (additive vs. deprecate-then-remove)
 
@@ -188,10 +188,10 @@ For each contract change, list:
 
 | Artifact | Location | Purpose |
 |----------|----------|---------|
-| Design doc | `openspec/changes/{id}/design.md` | Per-component + integration |
-| Task list | `openspec/changes/{id}/task-list.md` | DAG with cross-component edges |
+| Design doc | `aidlc/openspec/changes/{id}/design.md` | Per-component + integration |
+| Task list | `aidlc/openspec/changes/{id}/task-list.md` | DAG with cross-component edges |
 | Test plan | Embedded in task-list or separate | Per-scenario, per-layer |
-| Contract plan | `openspec/changes/{id}/contract-diff.md` placeholder | Filled in Verify |
+| Contract plan | `aidlc/openspec/changes/{id}/contract-diff.md` placeholder | Filled in Verify |
 
 ## Gate
 

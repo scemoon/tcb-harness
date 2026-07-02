@@ -11,8 +11,8 @@
 
 ## 关键产出
 
-1. Design Doc → `openspec/changes/{id}/design.md`
-2. Task DAG → `openspec/changes/{id}/task-list.md`
+1. Design Doc → `aidlc/openspec/changes/{id}/design.md`
+2. Task DAG → `aidlc/openspec/changes/{id}/task-list.md`
 3. Test Plan → embedded in task-list
 4. Contract Plan → `contract-diff.md` 占位
 

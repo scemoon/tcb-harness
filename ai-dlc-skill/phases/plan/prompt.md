@@ -4,18 +4,18 @@
 由 Master Agent 委派处理方案设计。
 
 ## 输入
-- `openspec/changes/{id}/spec-delta.md`
+- `aidlc/openspec/changes/{id}/spec-delta.md`
 - BDD feature 文件
 
 ## 任务
 
 1. **SDD: Design Doc**
-   - 在 `openspec/changes/{id}/design.md` 输出
+   - 在 `aidlc/openspec/changes/{id}/design.md` 输出
    - 包含：架构图（Mermaid）、数据模型、API 表、状态机
    - 每组件独立 section + 集成 section
 
 2. **SDD: Task Decomposition**
-   - 在 `openspec/changes/{id}/task-list.md` 输出
+   - 在 `aidlc/openspec/changes/{id}/task-list.md` 输出
    - YAML 格式，unit 带 `depends_on` DAG
    - 跨组件 task 显示声明 `depends_on` 关系
 
@@ -28,9 +28,9 @@
    - 如需 breaking change 标记为 human-approval 阻塞
 
 ## 输出产物
-- `openspec/changes/{id}/design.md`
-- `openspec/changes/{id}/task-list.md`
-- `openspec/changes/{id}/contract-diff.md`（占位）
+- `aidlc/openspec/changes/{id}/design.md`
+- `aidlc/openspec/changes/{id}/task-list.md`
+- `aidlc/openspec/changes/{id}/contract-diff.md`（占位）
 
 ## 约束
 - 遵守 `rules.md` 中的 PLN-001 到 PLN-004

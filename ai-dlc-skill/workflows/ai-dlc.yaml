@@ -38,8 +38,8 @@ phases:
       - requirements.md
       - openspec/changes/{id}/spec-delta.md
       - apps/{component}/features/{domain}/{feature}.feature
-      - features/cross-stack/{domain}/{feature}.feature
-      - contracts/api|events/{name}.{yaml,graphql}
+      - aidlc/features/cross-stack/{domain}/{feature}.feature
+      - aidlc/contracts/api|events/{name}.{yaml,graphql}
 
   - name: plan
     label: "② Plan — 规划"

@@ -16,10 +16,10 @@ This skill implements the AI-Driven Development Lifecycle for **monorepo multi-c
 │       │              │           │                    │
 │       └──────┬───────┴─────┬─────┘                    │
 │              │             │                          │
-│          contracts/  packages/shared/                 │
-│          (INT-FR-*)   (generated types)               │
+│          aidlc/contracts/  packages/shared/                 │
+│          (INT-FR-*)   (generated types)                     │
 │                                                        │
-│  features/  tests/  openspec/  providers/              │
+│  aidlc/features/  tests/  aidlc/openspec/  aidlc/providers/              │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -34,7 +34,7 @@ FR namespaces:
 | `WXA-*` | `apps/wxa` | WeChat Mini Program behavior |
 | `MYA-*` | `apps/mya` | Mini Program (e.g. Alipay) behavior |
 | `TTA-*` | `apps/tta` | TikTok Mini Program behavior |
-| `INT-*` | `contracts/`, `packages/shared/` | Cross-component contract & integration |
+| `INT-*` | `aidlc/contracts/`, `packages/shared/` | Cross-component contract & integration |
 
 ## Functional Requirements
 
@@ -106,10 +106,10 @@ FR namespaces:
 **the system SHALL** define and verify the contract between components before integration.
 
 **Acceptance Criteria:**
-- All public APIs and async events are described in `contracts/` (OpenAPI/AsyncAPI) and tagged with `INT-FR-NNN`
+- All public APIs and async events are described in `aidlc/contracts/` (OpenAPI/AsyncAPI) and tagged with `INT-FR-NNN`
 - Contract changes require a contract-diff review (backward-compat by default)
 - Shared types are generated from contracts, not hand-written, in `packages/shared/`
-- Contract tests run on every PR that touches `contracts/` or any consumer
+- Contract tests run on every PR that touches `aidlc/contracts/` or any consumer
 - A breaking contract change requires a major version bump and human approval
 
 ### FR-006: Monorepo Stack Awareness

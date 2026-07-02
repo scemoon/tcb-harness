@@ -3,7 +3,7 @@
 ## PLN-001: Design Documentation
 **Severity:** MUST
 **Description:** Each feature MUST have a design document covering architecture, data model, API contracts, and state machine. For multi-component features, MUST have per-component sections and an integration section.
-**Valid:** `openspec/changes/{id}/design.md` with `## Component: backend`, `## Component: web`, `## Integration`.
+**Valid:** `aidlc/openspec/changes/{id}/design.md` with `## Component: backend`, `## Component: web`, `## Integration`.
 **Invalid:** A single flat architecture section with no per-component concerns.
 
 ## PLN-002: Dependency DAG

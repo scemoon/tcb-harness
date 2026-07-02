@@ -1,6 +1,6 @@
 # Runtime Contract 模板 — Serverless 函数接口声明
 # Provider-agnostic: 描述函数"做什么"，不涉及具体部署平台
-# 放置在 contracts/functions/{name}.yaml
+# 放置在 aidlc/contracts/functions/{name}.yaml
 
 function: {{function_name}}
 version: {{semver}}

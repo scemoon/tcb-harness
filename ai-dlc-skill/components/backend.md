@@ -28,7 +28,7 @@
 
 ## 特定约束
 - 后端组件是 Stack 部署的入口点（先部署再暴露 BACKEND_URL）
-- API 合约定义在 `contracts/api/`（OpenAPI 3.1）
+- API 合约定义在 `aidlc/contracts/api/`（OpenAPI 3.1）
 - 依赖注入使用 provider pattern
 - 所有输入必须验证（SEC-002）
 - DB 查询必须使用参数化语句（SEC-003）

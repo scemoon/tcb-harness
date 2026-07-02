@@ -73,7 +73,7 @@ stack:
   cross_cutting:
     fr_prefix: INT
     owns:
-      - contracts/
+      - aidlc/contracts/
       - packages/shared/
   e2e_layers:
     - unit
@@ -105,7 +105,7 @@ integration:
     publish: workspace-package
   event_contract:
     format: asyncapi | cloudevent
-    registry: contracts/events/
+    registry: aidlc/contracts/events/
     version_strategy: semver-major-for-breaking
 
 deploy:

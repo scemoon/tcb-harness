@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-OUTPUT="$PROJECT_ROOT/AI-DLC-CONTEXT.md"
+OUTPUT="$PROJECT_ROOT/aidlc/AI-DLC-CONTEXT.md"
 
 echo "# AI-DLC Context — $(basename "$PROJECT_ROOT")"
 echo ""
@@ -29,8 +29,8 @@ echo ""
 # 2. API surface
 echo "## API Surface"
 echo ""
-if [ -d "$PROJECT_ROOT/contracts/api" ]; then
-  find "$PROJECT_ROOT/contracts/api" -name "*.yaml" -o -name "*.yml" | while read -r f; do
+if [ -d "$PROJECT_ROOT/aidlc/contracts/api" ]; then
+  find "$PROJECT_ROOT/aidlc/contracts/api" -name "*.yaml" -o -name "*.yml" | while read -r f; do
     echo "- $(basename "$f")"
   done
 else

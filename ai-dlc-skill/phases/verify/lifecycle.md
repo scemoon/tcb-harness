@@ -24,9 +24,9 @@ For each unit in DAG order (within each affected component):
   │
   ▼
 After per-component units: regenerate shared types + contract tests
-  tools/generate_shared.py
+  aidlc/tools/generate_shared.py
   pytest tests/contract/
-  tools/contract_diff.py
+  aidlc/tools/contract_diff.py
   │
   ▼
 After contracts: cross-stack e2e against unified preview
@@ -94,7 +94,7 @@ After per-component units pass and before cross-stack e2e:
 
 ```bash
 # 1. Regenerate shared types from contracts
-tools/generate_shared.py
+aidlc/tools/generate_shared.py
 # → packages/shared/{api,events} updated
 
 # 2. Run contract tests
@@ -102,14 +102,14 @@ pytest tests/contract/ --verbose
 # → All contract scenarios pass (uses packages/shared)
 
 # 3. Run contract compat check
-tools/contract_diff.py --base main --head HEAD
+aidlc/tools/contract_diff.py --base main --head HEAD
 # → exit 0 = backward-compatible
 # → exit 1 = breaking change detected, BLOCKED unless human-approved
 ```
 
 **Rule INT-001:** Contract tests must be 100% pass.
 
-**Rule INT-002:** Any breaking contract change (field removed, type changed, status code changed, required field added) is BLOCKED until a human approves the major version bump and a migration note is added to `contracts/CHANGELOG.md`.
+**Rule INT-002:** Any breaking contract change (field removed, type changed, status code changed, required field added) is BLOCKED until a human approves the major version bump and a migration note is added to `aidlc/contracts/CHANGELOG.md`.
 
 **Rule INT-003:** Shared types must be generated, not hand-written. CI runs `generate_shared` and fails the build if `packages/shared/` is out of date.
 
@@ -136,7 +136,7 @@ pytest-bdd apps/mya/features/ --verbose
 pytest-bdd apps/tta/features/ --verbose
 
 # Cross-stack
-pytest-bdd features/cross-stack/ --verbose
+pytest-bdd aidlc/features/cross-stack/ --verbose
 ```
 
 ## Quality Gates (Backpressure)
@@ -152,7 +152,7 @@ pytest apps/{component}/ --cov --cov-fail-under=80 && \
 
 # Cross-component
 pytest tests/contract/ && \
-  tools/contract_diff.py --base main --head HEAD
+  aidlc/tools/contract_diff.py --base main --head HEAD
 
 # Stack
 pytest tests/cross-stack/ --stack-url $STACK_URL
@@ -176,17 +176,17 @@ pytest tests/cross-stack/ --stack-url $STACK_URL
 | TDD tests (unit/integration) | `apps/{comp}/tests/{unit,integration}/test_{feature}.py` |
 | TDD tests (e2e) | `apps/{comp}/tests/e2e/test_{feature}.py` |
 | BDD step defs (component) | `apps/{comp}/features/steps/test_{feature}_steps.py` |
-| BDD step defs (cross-stack) | `features/cross-stack/steps/test_{feature}_steps.py` |
+| BDD step defs (cross-stack) | `aidlc/features/cross-stack/steps/test_{feature}_steps.py` |
 | Implementation | `apps/{comp}/src/{module}/{feature}.py` |
 | Contract tests | `tests/contract/test_{contract}.py` |
 | Cross-stack e2e | `tests/cross-stack/test_{flow}.py` |
-| Contract diff | `openspec/changes/{id}/contract-diff.md` (filled) |
+| Contract diff | `aidlc/openspec/changes/{id}/contract-diff.md` (filled) |
 
 ## Gate
 
 **Before advancing to Deliver phase:**
 - [ ] Per-component: All BDD scenarios pass (100%), coverage ≥80%, 0 vulns, no TODO
-- [ ] Contracts: `tools/contract_diff.py` exits 0; `tests/contract/` 100% pass; `packages/shared/` regenerated and in sync
+- [ ] Contracts: `aidlc/aidlc/tools/contract_diff.py` exits 0; `tests/contract/` 100% pass; `packages/shared/` regenerated and in sync
 - [ ] Cross-stack: `tests/cross-stack/` 100% pass against stack preview
-- [ ] `openspec/changes/{id}/contract-diff.md` is filled and reviewed
+- [ ] `aidlc/openspec/changes/{id}/contract-diff.md` is filled and reviewed
 - [ ] All existing tests still pass

@@ -23,7 +23,7 @@ SDD: Spec Delta (EARS format — ADDED/MODIFIED/REMOVED, FR namespaces)
   ▼
 BDD: Feature Files
   - features/{component}/{domain}/{feature}.feature   (per-component)
-  - features/cross-stack/{domain}/{feature}.feature   (full flow, if applies)
+  - aidlc/features/cross-stack/{domain}/{feature}.feature   (full flow, if applies)
   │
   ▼
 Gate: Human review → approved or revise
@@ -168,10 +168,10 @@ Feature: Cross-stack login flow
 | Artifact | Location | Purpose |
 |----------|----------|---------|
 | Intent | `requirements.md` | Business need + `affects` |
-| Spec delta | `openspec/changes/{id}/spec-delta.md` | EARS, FR namespaces, `affects` |
+| Spec delta | `aidlc/openspec/changes/{id}/spec-delta.md` | EARS, FR namespaces, `affects` |
 | Per-component BDD | `apps/{component}/features/{domain}/{feature}.feature` | Component behavior |
-| Cross-stack BDD | `features/cross-stack/{domain}/{feature}.feature` | End-to-end flow |
-| Contract spec | `contracts/{api,events}/{name}.{yaml,graphql}` | INT-FR-NNN source of truth |
+| Cross-stack BDD | `aidlc/features/cross-stack/{domain}/{feature}.feature` | End-to-end flow |
+| Contract spec | `aidlc/contracts/{api,events}/{name}.{yaml,graphql}` | INT-FR-NNN source of truth |
 
 ## Gate
 
@@ -179,6 +179,6 @@ Feature: Cross-stack login flow
 - [ ] `affects: [...]` declared in spec-delta
 - [ ] Spec delta uses EARS format
 - [ ] Per-component FRs: each tagged `@FR-{PREFIX}-NNN` (e.g. `@NATIVE-`, `@DESKTOP-`, `@WEB-`, `@BE-`, `@WXA-`, `@MYA-`, `@TTA-`), ≥3 scenarios (positive/negative/edge)
-- [ ] If `affects` includes ≥2 components: at least one `INT-FR-NNN` and a `features/cross-stack/*.feature` with ≥3 scenarios
-- [ ] If `affects` includes contracts: contract file present in `contracts/`
+- [ ] If `affects` includes ≥2 components: at least one `INT-FR-NNN` and a `aidlc/features/cross-stack/*.feature` with ≥3 scenarios
+- [ ] If `affects` includes contracts: contract file present in `aidlc/contracts/`
 - [ ] Human reviewed and approved

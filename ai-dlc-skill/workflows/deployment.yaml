@@ -142,7 +142,7 @@ stages:
         command: curl -f ${PRODUCTION_URL}/health
         timeout: 30s
       - name: archive_contract_diff
-        command: cp openspec/changes/{id}/contract-diff.md deploy-artifacts/
+        command: cp openspec/changes/{id}/contract-diff.md aidlc/deploy-artifacts/
 
 rollback:
   triggers:

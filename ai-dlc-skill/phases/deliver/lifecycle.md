@@ -104,7 +104,7 @@ pytest apps/tta/tests/e2e/ --backend-url $BACKEND_URL
 
 ```bash
 pytest tests/cross-stack/ --stack-url $STACK_URL --verbose
-# Runs the full multi-client ↔ backend flow defined in features/cross-stack/
+# Runs the full multi-client ↔ backend flow defined in aidlc/features/cross-stack/
 ```
 
 **Rule STK-001:** All `cross-stack` scenarios must pass before staging or production.
@@ -158,7 +158,7 @@ deploy_stack --rollback ${LAST_STABLE_STACK_VERSION}
 deploy_stack --rollback --stack-version v1.2.3
 ```
 
-The previous stable stack version is identified by the `contracts/CHANGELOG.md` version at the time of the last green BVT.
+The previous stable stack version is identified by the `aidlc/contracts/CHANGELOG.md` version at the time of the last green BVT.
 
 ## Artifacts
 
@@ -167,7 +167,7 @@ The previous stable stack version is identified by the `contracts/CHANGELOG.md` 
 | `STACK_URL` / `BACKEND_URL` | Dynamic, per-platform, per-env |
 | Per-component e2e report | Scenario pass/fail per component |
 | Cross-stack e2e report | Full flow pass/fail |
-| `openspec/changes/{id}/contract-diff.md` | Final contract change record |
+| `aidlc/openspec/changes/{id}/contract-diff.md` | Final contract change record |
 | BVT report | Stack-level health check results |
 | Deploy log | Stack version, timestamp, component versions |
 
@@ -182,4 +182,4 @@ The previous stable stack version is identified by the `contracts/CHANGELOG.md` 
 - [ ] Production stack deploy succeeded
 - [ ] Stack BVT passed
 - [ ] (If BVT failed) Stack rollback executed and confirmed
-- [ ] `openspec/changes/{id}/contract-diff.md` archived
+- [ ] `aidlc/openspec/changes/{id}/contract-diff.md` archived

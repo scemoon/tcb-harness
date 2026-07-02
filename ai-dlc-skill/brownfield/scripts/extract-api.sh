@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# extract-api.sh — Extract API surface from contracts/ directory
+# extract-api.sh — Extract API surface from aidlc/contracts/ directory
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -7,13 +7,13 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 echo "# API Surface"
 echo ""
 
-if [ ! -d "$PROJECT_ROOT/contracts" ]; then
-  echo "(No contracts/ directory found)"
+if [ ! -d "$PROJECT_ROOT/aidlc/contracts" ]; then
+  echo "(No aidlc/contracts/ directory found)"
   exit 0
 fi
 
 # OpenAPI
-for f in "$PROJECT_ROOT"/contracts/api/*.yaml "$PROJECT_ROOT"/contracts/api/*.yml; do
+for f in "$PROJECT_ROOT"/aidlc/contracts/api/*.yaml "$PROJECT_ROOT"/aidlc/contracts/api/*.yml; do
   [ -f "$f" ] || continue
   echo "## File: $(basename "$f")"
   python3 -c "
@@ -31,7 +31,7 @@ if 'info' in d:
 done
 
 # AsyncAPI
-for f in "$PROJECT_ROOT"/contracts/events/*.yaml "$PROJECT_ROOT"/contracts/events/*.yml; do
+for f in "$PROJECT_ROOT"/aidlc/contracts/events/*.yaml "$PROJECT_ROOT"/aidlc/contracts/events/*.yml; do
   [ -f "$f" ] || continue
   echo "## File: $(basename "$f")"
   python3 -c "

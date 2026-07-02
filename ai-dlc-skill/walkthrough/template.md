@@ -15,14 +15,14 @@
 ## Phase By Phase
 
 ### Understand
-- Spec Delta: `openspec/changes/{{change_id}}/spec-delta.md`
+- Spec Delta: `aidlc/openspec/changes/{{change_id}}/spec-delta.md`
 - BDD 场景数: {{scenario_count}}
   - Positive: {{positive_count}}
   - Negative: {{negative_count}}
   - Edge: {{edge_count}}
 
 ### Plan
-- Design Doc: `openspec/changes/{{change_id}}/design.md`
+- Design Doc: `aidlc/openspec/changes/{{change_id}}/design.md`
 - Task DAG: {{task_count}} units
 - 跨组件依赖: {{cross_component_edges}}
 
