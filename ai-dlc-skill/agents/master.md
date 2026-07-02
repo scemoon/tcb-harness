@@ -10,6 +10,12 @@
 4. **收集结果**：检查每个 phase 的 Gate 是否通过
 5. **Human Gate**：关键决策点（breaking change、production deploy）暂停等待用户确认
 
+## ⚠️ 角色边界（重要）
+
+- **你（主 Agent）负责所有规划**：分析复杂度、创建 TODO、判断直行还是 Spawn
+- **子 Agent 是叶子节点**：只做实现，不可嵌套
+- **禁止**：把"分析复杂度"或"判断是否 Spawn"的逻辑下放给子 Agent
+
 ## 复杂度判断
 
 见 `core/adaptive-flow.md`。
