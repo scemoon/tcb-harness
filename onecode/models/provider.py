@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -605,7 +606,15 @@ class Provider(ABC):
         Default implementation: falls back to chat() for providers that
         don't implement structured streaming.
         """
-        response = await self.chat(messages, model=model, **kwargs)
+        logging.getLogger("onecode.models.provider").warning(
+            "[PROVIDER-STREAM] %s does not override chat_stream_response — "
+            "falling back to non-streaming chat() (on_text_chunk will NOT fire)",
+            type(self).__name__,
+        )
+        response = await asyncio.wait_for(
+            self.chat(messages, model=model, **kwargs),
+            timeout=300,
+        )
         return ChatResponse(
             content=response.get_text(),
             tool_uses=[

@@ -280,7 +280,7 @@ class TestDailyLogRotation:
 
         # Redirect LOG_DIR to a temp path so we don't pollute ~/.cdh.
         monkeypatch.setattr("onecode.cli.LOG_DIR", tmp_path)
-        monkeypatch.setattr("onecode.cli.LOG_FILE", tmp_path / "cdh.log")
+        monkeypatch.setattr("onecode.cli.LOG_FILE", tmp_path / "onecode.log")
 
         root = setup_logging("INFO")
         try:
@@ -300,7 +300,7 @@ class TestDailyLogRotation:
     def test_log_writes_appear_in_file(self, tmp_path: Path, monkeypatch):
         from onecode.cli import setup_logging
 
-        log_file = tmp_path / "cdh.log"
+        log_file = tmp_path / "onecode.log"
         monkeypatch.setattr("onecode.cli.LOG_DIR", tmp_path)
         monkeypatch.setattr("onecode.cli.LOG_FILE", log_file)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -416,7 +417,22 @@ class TodoManager:
         on the fly to the new ``{subject, status}`` shape.
         """
         tm = cls(on_change=on_change)
-        tm._id_counter = data.get("id_counter", 0)
+        tm.reload_from_dict(data)
+        return tm
+
+    def reload_from_dict(self, data: dict) -> None:
+        """Reload state from *data* in place, preserving the instance identity.
+
+        This is critical because tool instances (``TodoCreateTool`` etc.)
+        hold a direct reference to the same ``TodoManager`` object.  If we
+        replaced ``self._todo_manager`` with a new instance, the tools
+        would silently write to the stale one while the engine reads from
+        the fresh one — creating the illusion of success but never
+        persisting or emitting plan updates.
+        """
+        self._todos.clear()
+        self._order.clear()
+        self._id_counter = data.get("id_counter", 0)
 
         raw_todos: list[dict] = []
         if "todos" in data:
@@ -431,13 +447,12 @@ class TodoManager:
             if "status" not in todo and "done" in todo:
                 todo["status"] = "completed" if todo.pop("done") else "pending"
             todo.setdefault("status", "pending")
-            tid = todo.get("id") or tm._next_id()
+            tid = todo.get("id") or self._next_id()
             todo["id"] = tid
-            todo.setdefault("_order", tm._id_counter)
-            tm._todos[tid] = todo
-            if tid not in tm._order:
-                tm._order.append(tid)
-        return tm
+            todo.setdefault("_order", self._id_counter)
+            self._todos[tid] = todo
+            if tid not in self._order:
+                self._order.append(tid)
 
 
 # Tools that require a task plan before execution (plan gate)
@@ -513,6 +528,19 @@ class AgentEngine:
 
         # Subagent depth limit — subagents are leaf nodes (max depth = 1).
         self._subagent_depth: int = 0
+
+        # Skip codebase auto-retrieval / long-term memory recall inside
+        # subagent engines.  Both are project-seeding steps meant for the
+        # top-level chat loop; a subagent already receives a fully-formed
+        # explicit prompt from the parent and does NOT need toEmbed/index
+        # the whole codebase or recall memories again — that path
+        # previously called ``CodebaseIndexer.index()`` (a long
+        # synchronous loop, blocking the event loop and cancel) plus
+        # ``CodebaseRetriever._retrieve_embedding()`` (one httpx call per
+        # chunk, each with a 30s timeout, so ~minutes of dead time), which
+        # is the root cause of the "subagent shows no stream output and
+        # can't be stopped" hang observed in production.
+        self._disable_retrieval: bool = False
 
         # Monotonic tool-call id counter — shared across every
         # ``chat_stream`` turn so the same id is never reused even when the
@@ -751,8 +779,11 @@ class AgentEngine:
 
         Sets a dirty flag so the next opportunity in ``chat_stream`` will
         emit a fresh plan event.  Decoupling the callback from the emit
-        keeps the public API synchronous and avoids re-entrancy when
-        subagents mutate the same TodoManager concurrently.
+        keeps the public API synchronous and avoids re-entrancy.
+
+        Subagents have an isolated TodoManager and (since Todo tools are
+        disabled for subagents) cannot mutate the parent's shared plan, so
+        this callback only fires for the main agent's own TodoManager.
 
         Also persists todos to ``.cdh/todos.json`` immediately so they
         survive a crash or Ctrl+C before the next ACP turn boundary.
@@ -800,12 +831,15 @@ class AgentEngine:
             "\n## Response style\n"
             "- **Every turn must start with Chain of Thought reasoning** "
             "inside `<thinking>`. Analyze the current state, determine the "
-            "next step, and decide whether to delegate via `Spawn` or track via `TodoCreate`.\n"
-            "- **Route by complexity**:\n"
-            "  - Simple / single-step work → use the direct tool and optionally "
-            "`TodoCreate` to surface progress in the sidebar.\n"
-            "  - Complex / multi-step work → use `Spawn(agent_type, prompt)` to "
-            "delegate to a focused subagent rather than calling execution tools directly.\n"
+            "next step, then plan with `TodoCreate` and route execution by complexity.\n"
+            "- **Plan + execution routing**:\n"
+            "  - Every task is a `TodoCreate` (persisted to .cdh/todos.json, "
+            "sidebar Plan). No work without a todo.\n"
+            "  - Simple / single-step todo → execute directly, then "
+            "`TodoUpdate(status=\"completed\")`.\n"
+            "  - Complex / multi-step todo → `Spawn(agent_type, prompt)` to "
+            "delegate execution to an isolated subagent, then "
+            "`TodoUpdate(status=\"completed\")`.\n"
             "- If you need to reason between tool calls, wrap your "
             "reasoning in `<thinking>...</thinking>`.  The TUI will "
             "render the wrapped block as a collapsible thought and "
@@ -1089,7 +1123,14 @@ class AgentEngine:
         self._plan_dirty = False
 
         # ── Codebase auto-retrieval ──
-        if isinstance(user_input, str) and self._should_retrieve_codebase():
+        # Skipped entirely for subagent engines (see _disable_retrieval)
+        # to avoid the 2.3s+ indexer loop and the per-chunk embedding httpx
+        # calls that block the event loop and freeze streaming/cancel.
+        if (
+            isinstance(user_input, str)
+            and self._should_retrieve_codebase()
+            and not self._disable_retrieval
+        ):
             try:
                 engine = await self._get_codebase_engine()
                 if engine:
@@ -1104,7 +1145,11 @@ class AgentEngine:
                 logger.warning("Codebase retrieval failed: %s", e)
 
         # ── Long-term memory recall ──
-        if isinstance(user_input, str) and self._session:
+        if (
+            isinstance(user_input, str)
+            and self._session
+            and not self._disable_retrieval
+        ):
             try:
                 results = self._memory.search_memories(user_input, top_k=5)
                 if results:
@@ -1178,12 +1223,13 @@ class AgentEngine:
             "Begin this turn by reasoning step by step in `<thinking>`:\n"
             "1. **Current state**: Analyze the user request and what needs to be done.\n"
             "2. **Goal**: What should I accomplish this turn?\n"
-            "3. **Routing**: For the next action, choose by complexity:\n"
-            "   - Simple (1 tool call, 1 file) → direct tool + optional `TodoCreate` for tracking\n"
-            "   - Complex (multi-file, multi-step, research-heavy) → `Spawn(agent_type, prompt)`\n"
+            "3. **Plan**: Is this work tracked by a todo? If not, `TodoCreate` first "
+            "(persists to .cdh/todos.json + sidebar Plan).\n"
+            "4. **Execution routing** (by complexity):\n"
+            "   - Simple (1 tool call, 1 file) → execute directly, then `TodoUpdate(status)`\n"
+            "   - Complex (multi-file, multi-step, needs isolated context) → "
+            "`Spawn(agent_type, prompt)` delegates to a subagent, then `TodoUpdate(status)`\n"
             "   - Pure research → `Read/Grep/Glob/WebFetch` directly, or `explore/scout` subagent\n"
-            "4. **Plan when needed**: For multi-step work, create a todo plan first via "
-            "`TodoCreate`, then mark each todo as `in_progress` / `completed` as you go.\n"
         )
         if not self.context.replace_system_section("REACT_PHASE", cot_phase_init):
             self.context.add_system(cot_phase_init)
@@ -1207,11 +1253,11 @@ class AgentEngine:
                     "Begin this turn by reasoning step by step in `<thinking>`:\n"
                     "1. **Current state**: What just happened? What results do I have?\n"
                     "2. **Goal**: What should I accomplish this turn?\n"
-                    "3. **Routing**: For the next action, choose by complexity:\n"
-                    "   - Simple (1 tool call, 1 file) → direct tool + optional `TodoCreate` for tracking\n"
-                    "   - Complex (multi-file, multi-step, research-heavy) → `Spawn(agent_type, prompt)`\n"
-                    "4. **Plan when needed**: For multi-step work, advance todos via `TodoUpdate` "
-                    "and delegate substantial items via `Spawn`.\n"
+                    "3. **Plan**: Advance existing todos via `TodoUpdate`; create new ones "
+                    "via `TodoCreate` if work is untracked.\n"
+                    "4. **Execution routing**: Simple todo → execute directly + "
+                    "`TodoUpdate(status)`. Complex todo → `Spawn(agent_type, prompt)` + "
+                    "`TodoUpdate(status)`.\n"
                 )
                 self.context.replace_system_section("REACT_PHASE", cot_phase)
 
@@ -1394,14 +1440,15 @@ class AgentEngine:
 
             self.iterations += 1
 
-            if not tool_uses:
-                if not self._streaming_used:
-                    if clean_text.strip():
-                        for i in range(0, len(clean_text), 12):
-                            yield StreamEvent.text_delta(clean_text[i:i + 12])
-                    elif self._last_user_msg:
-                        yield StreamEvent.text_delta(self._last_user_msg)
+            # Always yield text content as TEXT_DELTA, regardless of tool uses.
+            # Without this, subagent text is consumed silently when it also
+            # emits tool calls — the text goes to context but never reaches
+            # _spawn_subagent_async_streaming / the subagent_chunk stream.
+            if not self._streaming_used and clean_text.strip():
+                for i in range(0, len(clean_text), 12):
+                    yield StreamEvent.text_delta(clean_text[i:i + 12])
 
+            if not tool_uses:
                 # ── Store conversation in long-term memory ──
                 if self._session:
                     try:
@@ -1451,29 +1498,82 @@ class AgentEngine:
                     else:
                         subagent_type = tu["input"].get("agent_type", "general")
                         subagent_prompt = tu["input"].get("prompt", "")
+                        _sp_id = tu["id"]
+                        _sp_bytes_fwd = 0
+                        _sp_chunk_count = 0
+                        logger.debug(
+                            "[SPAWN-PARENT %s] start subagent_type=%s prompt_len=%d "
+                            "tool_id=%s cancelled=%s",
+                            _sp_id, subagent_type, len(subagent_prompt),
+                            _sp_id, self._cancelled,
+                        )
                         is_failed = False
                         error_msg = ""
                         yield StreamEvent.subagent_start(subagent_type, tu["id"], subagent_prompt)
                         accumulated: list[str] = []
-                        async for sub_event, sub_text in self._spawn_subagent_async_streaming(
-                            subagent_type, subagent_prompt
-                        ):
-                            if self._cancelled:
-                                break
-                            if not sub_text:
-                                continue
-                            if sub_event.type == StreamEventType.SUBAGENT_END:
-                                # Carry status/error from subagent_end event
-                                if hasattr(sub_event, "subagent_status") and sub_event.subagent_status == "failed":
-                                    is_failed = True
-                                    error_msg = sub_event.subagent_error or ""
-                                continue  # 修复 Bug 1: 不 append final combined text（避免文本重复）
-                            if sub_event.type == StreamEventType.SUBAGENT_THINKING:
-                                yield StreamEvent.subagent_thinking(tu["id"], sub_text)
-                                continue
-                            # TEXT_DELTA
-                            accumulated.append(sub_text)
-                            yield StreamEvent.subagent_chunk(tu["id"], sub_text)
+                        try:
+                            async for sub_event, sub_text in self._spawn_subagent_async_streaming(
+                                subagent_type, subagent_prompt, subagent_id=tu["id"]
+                            ):
+                                _sp_chunk_count += 1
+                                if self._cancelled:
+                                    logger.debug(
+                                        "[SPAWN-PARENT %s] cancelled mid-iter "
+                                        "chunk=%d → break", _sp_id, _sp_chunk_count)
+                                    break
+                                if sub_event.type == StreamEventType.SUBAGENT_END:
+                                    if hasattr(sub_event, "subagent_status") and sub_event.subagent_status == "failed":
+                                        is_failed = True
+                                        error_msg = sub_event.subagent_error or ""
+                                    logger.debug(
+                                        "[SPAWN-PARENT %s] recv SUBAGENT_END "
+                                        "status=%s → continue",
+                                        _sp_id, getattr(sub_event, "subagent_status", "?"),
+                                    )
+                                    continue  # 修复 Bug 1: 不 append final combined text（避免文本重复）
+                                if sub_event.type == StreamEventType.SUBAGENT_THINKING:
+                                    yield StreamEvent.subagent_thinking(tu["id"], sub_text)
+                                    continue
+                                # Structured subagent tool events: forward as-is
+                                # (they already carry subagent_id=tu["id"]) so the
+                                # ACP emits tool_call/tool_call_update sessionUpdates
+                                # tagged with subagentId and the TUI renders real
+                                # ToolCall cards inside the SubAgent widget.
+                                if sub_event.type in (
+                                    StreamEventType.SUBAGENT_TOOL_CALL,
+                                    StreamEventType.SUBAGENT_TOOL_RESULT,
+                                ):
+                                    yield sub_event
+                                    continue
+                                if not sub_text:
+                                    continue
+                                accumulated.append(sub_text)
+                                _sp_bytes_fwd += len(sub_text)
+                                if _sp_chunk_count <= 5 or _sp_chunk_count % 50 == 0:
+                                    logger.debug(
+                                        "[SPAWN-PARENT %s] fwd chunk#%d bytes=%d "
+                                        "total=%d",
+                                        _sp_id, _sp_chunk_count, len(sub_text),
+                                        _sp_bytes_fwd,
+                                    )
+                                yield StreamEvent.subagent_chunk(tu["id"], sub_text)
+                        except asyncio.CancelledError:
+                            logger.debug(
+                                "[SPAWN-PARENT %s] CancelledError → subagent_end "
+                                "failed=cancelled + re-raise", _sp_id)
+                            yield StreamEvent.subagent_end(
+                                tu["id"],
+                                agent_type=subagent_type,
+                                status="failed",
+                                error="cancelled",
+                            )
+                            raise
+                        logger.debug(
+                            "[SPAWN-PARENT %s] subagent done fwd_chunks=%d "
+                            "bytes_fwd=%d is_failed=%s err=%r → yield subagent_end",
+                            _sp_id, _sp_chunk_count, _sp_bytes_fwd, is_failed,
+                            error_msg[:80],
+                        )
                         yield StreamEvent.subagent_end(
                             tu["id"],
                             agent_type=subagent_type,
@@ -1481,6 +1581,10 @@ class AgentEngine:
                             error=error_msg,
                         )
                         raw_output = "".join(accumulated)
+                        logger.debug(
+                            "[SPAWN-PARENT %s] formatting result raw_len=%d "
+                            "is_failed=%s", _sp_id, len(raw_output), is_failed,
+                        )
                         formatted = self._format_subagent_output(
                             subagent_type, subagent_prompt, raw_output
                         ) if not is_failed else (
@@ -1525,16 +1629,17 @@ class AgentEngine:
                         self.context.add_system(
                             "<!-- PLAN_REMINDER -->\n"
                             "## Routing Decision\n"
-                            "Before your next action, choose the right tool based on complexity:\n\n"
-                            "**Simple / single-step work** → use `TodoCreate` to track a lightweight "
-                            "checklist item in the sidebar. Examples: 1 file edit, 1 Read, 1 Bash. "
-                            "The Todo widget shows progress to the user.\n\n"
-                            "**Complex / multi-step work** → use `Spawn(agent_type, prompt)` to "
-                            "delegate to a focused subagent. Examples: cross-file refactor, multi-"
-                            "file feature, research requiring 3+ tool calls, work needing isolated "
-                            "context. The subagent encapsulates work and returns structured output.\n\n"
-                            "**Default**: When unsure → `Spawn`. Todo is for visible progress on "
-                            "simple items; Spawn is for substantial work.\n"
+                            "Every task is a todo: create it with `TodoCreate` first (it "
+                            "persists to .cdh/todos.json and shows in the sidebar Plan).\n"
+                            "Then route EXECUTION by complexity:\n\n"
+                            "**Simple / single-step** → execute the todo directly with "
+                            "`Read`/`Edit`/`Bash`, then `TodoUpdate(status=\"completed\")`.\n\n"
+                            "**Complex / multi-step / needs isolated context** → "
+                            "`Spawn(agent_type, prompt)` delegates to a focused subagent; "
+                            "on return, `TodoUpdate(status=\"completed\")`.\n\n"
+                            "**Plan vs execution**: TodoCreate = planning (always); "
+                            "Spawn = execution delegation (complex only). They are not "
+                            "alternatives — Spawn executes a todo, it does not replace one.\n"
                         )
                         result = await self._execute_tool(tu)
                 else:
@@ -1546,17 +1651,19 @@ class AgentEngine:
                             self.context.add_system(
                                 "<!-- ROUTING_REMINDER -->\n"
                                 "You've used direct execution tools repeatedly. Pause and decide:\n"
-                                "- If this is a single-step trivial change → continue, but "
-                                "consider `TodoCreate` to surface progress in the sidebar.\n"
+                                "- Is this work tracked by a todo? If not, `TodoCreate` first.\n"
+                                "- If the todo is a single-step trivial change → continue, then "
+                                "`TodoUpdate(status=\"completed\")`.\n"
                                 "- If this work involves >1 tool call, multiple files, or "
                                 "research → STOP direct execution and delegate via "
                                 "`Spawn(agent_type=\"general\", prompt=\"...\")` instead. The "
-                                "subagent isolates context and returns a structured summary."
+                                "subagent isolates context and returns a structured summary; "
+                                "then mark the todo completed."
                             )
                 result_str = str(result.get("content", ""))
                 is_error = result.get("is_error", False)
                 category = result.get("category", "unknown")
-                # For Task tools, use raw subagent output for TUI display
+                # For Spawn tools, use raw subagent output for TUI display
                 # (no SUMMARY/CHANGES/… structured wrapper)
                 tui_content = str(result.get("raw_content", result_str))
 
@@ -1664,6 +1771,13 @@ class AgentEngine:
                         path=tu["input"].get("path", ""),
                         command=tu["input"].get("command", "")[:200],
                     )
+                    # Generator resumes here after approval. The approved tool
+                    # may have mutated todos (e.g. TodoUpdate via resolve_approval),
+                    # flushing _plan_dirty so the TUI stays in sync.
+                    if self._plan_dirty:
+                        for event in self._emit_plan_update():
+                            yield event
+                        self._plan_dirty = False
                 else:
                     from onecode.models.messages import ToolCategory as MsgToolCategory
                     try:
@@ -1869,7 +1983,7 @@ class AgentEngine:
         return self._format_subagent_output(agent_type, prompt, result)
 
     async def _spawn_subagent_async_streaming(
-        self, agent_type: str, prompt: str
+        self, agent_type: str, prompt: str, subagent_id: str = ""
     ) -> AsyncIterator[tuple[StreamEvent, str]]:
         """Streaming variant of :meth:`_spawn_subagent_async`.
 
@@ -1892,50 +2006,275 @@ class AgentEngine:
 
         sub_engine._subagent_depth = self._subagent_depth + 1
 
-        # Inherit parent context: project info, skills
+        # Inherit parent context: project info (but NOT full skill content,
+        # which contains Master Orchestrator instructions that conflict with
+        # the subagent role). The subagent's own _load_skills() will load
+        # only non-conflicting reference info via its own SkillLoader.
         sub_engine._project_context_loaded = self._project_context_loaded
         sub_engine._project_config = dict(self._project_config)
-        sub_engine._skills_loaded = True
-        for skill in self._skill_loader.get_enabled():
-            if skill.content not in (m.content for m in sub_engine.context.messages if m.role == "system"):
-                sub_engine.context.add_system(skill.content)
+        sub_engine._skills_loaded = False
 
+        # Inherit the parent's already-built codebase engine so the subagent
+        # does NOT re-run the full project index (CodebaseIndexer.index()
+        # is a synchronous chunk loop that would otherwise block the event
+        # loop for the duration of indexing and freeze streaming/cancel).
+        # Sharing the instance also avoids duplicate SQLite writes.
+        sub_engine._codebase_engine = self._codebase_engine
+        logger.debug(
+            "[SA-STREAM %s] inheriting codebase_engine from parent: %s",
+            agent_type, "shared" if self._codebase_engine is not None else "none",
+        )
+
+        # CRITICAL: disable codebase auto-retrieval + memory recall inside
+        # the subagent.  Production logs prove that every Spawn hung here:
+        # the subagent's ``chat_stream`` re-ran ``CodebaseIndexer.index()``
+        # (a 2.3–2.6s synchronous loop, no await yield points) and then
+        # ``CodebaseRetriever._retrieve_embedding()`` issued one ``httpx``
+        # POST per chunk (30s timeout each, no effective cap), so a 148-
+        # chunk project could block the event loop for ~minutes — during
+        # which ``on_text_chunk`` never fires (no stream output) and
+        # ``CancelledError`` injected by ``prompt_task.cancel()`` cannot
+        # propagate (cannot be stopped).  A subagent executes a specific
+        # prompt handed down by the parent; it does not need project-level
+        # codebase seeding or memory recall.
+        sub_engine._disable_retrieval = True
+        logger.debug(
+            "[SA-STREAM %s] set _disable_retrieval=True (subagent skips "
+            "codebase auto-retrieval + memory recall)", agent_type,
+        )
+
+        # Do NOT propagate parent TUI-facing callbacks to the sub_engine.
+        # - on_tool_call_delta: would fire the ACP's _on_tool_call_delta for
+        #   the subagent's inner tools (Read/Bash/...), leaking their NAMES
+        #   into the MAIN conversation as orphaned in_progress cards while
+        #   the RESULT only reaches the SubAgent widget via the stream path
+        #   below (tool_call_start/tool_result -> text_delta -> subagent_chunk).
+        # - on_thinking: would append subagent thinking into the PARENT's
+        #   _pending_thinking_blocks, polluting the parent's persisted session.
+        # The subagent's tool calls/thinking are already relayed to the
+        # SubAgent widget via SUBAGENT_CHUNK / SUBAGENT_THINKING (see the
+        # consumer loop below). on_event is left propagated: the ACP does
+        # not wire it, so it is None on the parent and a no-op here.
+        if self.on_event is not None:
+            sub_engine.on_event = self.on_event
+
+        # Apply the requested agent_type's config (role description,
+        # response-style / <thinking> tags, tool allow/deny list, REACT_CYCLE)
+        # as the AGENT_CONFIG system section.
         sub_engine.set_agent(agent_type)
 
         # Track child so parent cancellation cascades
         self._child_engines.append(sub_engine)
 
+        # ── Real-time streaming via asyncio.Queue ──
+        # on_text_chunk puts provider tokens into the queue as they arrive,
+        # and a background task puts chat_stream events into the same queue.
+        # The main loop reads from the queue and yields (event, text) pairs,
+        # giving the TUI live subagent output instead of "等待输出".
+        _queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+        _sa_log_prefix = f"[SA-STREAM {agent_type} depth={self._subagent_depth + 1}]"
+        _sa_total_bytes = 0
+        _sa_chunk_count = 0
+        _sa_text_count = 0
+        _sa_first_byte_logged = False
+
+        def _on_subagent_text(text: str) -> None:
+            nonlocal _sa_total_bytes, _sa_text_count, _sa_first_byte_logged
+            try:
+                _queue.put_nowait(("text", text))
+                _sa_text_count += 1
+                _sa_total_bytes += len(text)
+                if not _sa_first_byte_logged:
+                    _sa_first_byte_logged = True
+                    logger.debug(
+                        "%s on_text_chunk FIRST token bytes=%d (text_count so far=%d)",
+                        _sa_log_prefix, len(text), _sa_text_count,
+                    )
+                if _sa_text_count % 20 == 0:
+                    logger.debug(
+                        "%s on_text_chunk progress text_calls=%d total_bytes=%d "
+                        "queued=%d",
+                        _sa_log_prefix, _sa_text_count, _sa_total_bytes,
+                        _queue.qsize(),
+                    )
+            except Exception as e:
+                logger.warning("%s on_text_chunk queue.put failed: %s", _sa_log_prefix, e)
+
+        sub_engine.on_text_chunk = _on_subagent_text
+        logger.debug("%s wiring on_text_chunk → queue (sub_engine id=%x)",
+                     _sa_log_prefix, id(sub_engine))
+
+        async def _run_chat_stream() -> None:
+            logger.debug("%s _run_chat_stream task started", _sa_log_prefix)
+            try:
+                async for chunk in sub_engine.chat_stream(prompt):
+                    await _queue.put(("event", chunk))
+            except asyncio.CancelledError:
+                logger.debug("%s _run_chat_stream CancelledError → queue(cancelled)",
+                             _sa_log_prefix)
+                await _queue.put(("cancelled", None))
+            except Exception as e:
+                logger.exception("%s _run_chat_stream exception: %s", _sa_log_prefix, e)
+                await _queue.put(("error", e))
+            finally:
+                logger.debug(
+                    "%s _run_chat_stream finally → queue(done) text=%d bytes=%d "
+                    "chunk_events=%d",
+                    _sa_log_prefix, _sa_text_count, _sa_total_bytes, _sa_chunk_count,
+                )
+                await _queue.put(("done", None))
+
+        _stream_task = asyncio.create_task(_run_chat_stream())
+        logger.debug("%s created _stream_task id=%x cancelled_flag=%s",
+                     _sa_log_prefix, id(_stream_task), self._cancelled)
+
         parts: list[str] = []
+        _streamed_via_text = False  # True once on_text_chunk has delivered tokens
+
         try:
-            async for chunk in sub_engine.chat_stream(prompt):
-                if isinstance(chunk, StreamEvent):
-                    if chunk.type == StreamEventType.TEXT_DELTA and chunk.text:
-                        parts.append(chunk.text)
-                        yield chunk, chunk.text
-                    elif chunk.type == StreamEventType.THINKING and chunk.thinking:
-                        # 修复 Bug 4: 转发思考块
-                        yield chunk, chunk.thinking
-                else:
-                    if chunk:
-                        parts.append(chunk)
-        except Exception as e:
-            logger.exception(f"Subagent error: {e}")
-            err_text = (
-                f"SUMMARY:\nSub-agent failed with error: {e}\n\n"
-                "CHANGES:\nNone.\n\nEVIDENCE:\nNone.\n\nRISKS:\nNone.\n\n"
-                f"BLOCKERS:\n{e}"
-            )
+            logger.debug("%s entering queue.get() consumer loop", _sa_log_prefix)
+            while True:
+                item_type, item = await _queue.get()
+                _sa_chunk_count += 1
+                if _sa_chunk_count <= 5 or _sa_chunk_count % 50 == 0:
+                    logger.debug(
+                        "%s queue.get() #%d type=%s cancelled_flag=%s qsize=%d "
+                        "text=%d bytes=%d",
+                        _sa_log_prefix, _sa_chunk_count, item_type,
+                        self._cancelled, _queue.qsize(), _sa_text_count,
+                        _sa_total_bytes,
+                    )
+
+                if item_type == "text":
+                    _streamed_via_text = True
+                    parts.append(item)
+                    yield (StreamEvent.text_delta(item), item)
+
+                elif item_type == "event":
+                    chunk = item
+                    if isinstance(chunk, StreamEvent):
+                        if chunk.type == StreamEventType.TEXT_DELTA and chunk.text:
+                            # Skip TEXT_DELTA if tokens were already streamed
+                            # in real-time via on_text_chunk (avoids doubles).
+                            if not _streamed_via_text:
+                                if _sa_chunk_count <= 5:
+                                    logger.debug(
+                                        "%s TEXT_DELTA via event path (no "
+                                        "streamed_via_text) bytes=%d",
+                                        _sa_log_prefix, len(chunk.text),
+                                    )
+                                parts.append(chunk.text)
+                                yield (chunk, chunk.text)
+                            else:
+                                if _sa_chunk_count <= 3:
+                                    logger.debug(
+                                        "%s TEXT_DELTA skipped (already "
+                                        "streamed_via_text) bytes=%d",
+                                        _sa_log_prefix, len(chunk.text),
+                                    )
+                        elif chunk.type == StreamEventType.THINKING and chunk.thinking:
+                            logger.debug("%s THINKING event bytes=%d",
+                                         _sa_log_prefix, len(chunk.thinking))
+                            yield (chunk, chunk.thinking)
+                        elif chunk.type == StreamEventType.TOOL_CALL_START:
+                            logger.debug("%s TOOL_CALL_START tool=%s",
+                                         _sa_log_prefix, chunk.tool_name)
+                            yield (StreamEvent.subagent_tool_call(
+                                subagent_id, "start", chunk.tool_id,
+                                chunk.tool_name, chunk.tool_category,
+                            ), "")
+                        elif chunk.type == StreamEventType.TOOL_CALL_COMPLETE:
+                            logger.debug("%s TOOL_CALL_COMPLETE tool=%s",
+                                         _sa_log_prefix, chunk.tool_name)
+                            yield (StreamEvent.subagent_tool_call(
+                                subagent_id, "complete", chunk.tool_id,
+                                chunk.tool_name, chunk.tool_category,
+                                chunk.tool_args,
+                            ), "")
+                        elif chunk.type == StreamEventType.TOOL_RESULT:
+                            logger.debug("%s TOOL_RESULT tool=%s",
+                                         _sa_log_prefix, chunk.tool_name)
+                            yield (StreamEvent.subagent_tool_result(
+                                subagent_id, chunk.tool_id, chunk.tool_name,
+                                chunk.result_content, chunk.result_is_error,
+                                chunk.result_category,
+                            ), "")
+                        elif chunk.type == StreamEventType.ERROR:
+                            logger.debug("%s ERROR event msg=%s",
+                                         _sa_log_prefix, chunk.error_message)
+                            text = f"\n[Error: {chunk.error_message}]\n"
+                            yield (StreamEvent.text_delta(text), text)
+                    else:
+                        if chunk:
+                            parts.append(chunk)
+
+                elif item_type == "done":
+                    logger.debug("%s queue.get()=done → break loop", _sa_log_prefix)
+                    break
+
+                elif item_type == "cancelled":
+                    logger.debug(
+                        "%s queue.get()=cancelled → yield subagent_end "
+                        "failed=cancelled", _sa_log_prefix)
+                    yield (StreamEvent.subagent_end(
+                        "", agent_type=agent_type, status="failed", error="cancelled",
+                    ), "")
+                    return
+
+                elif item_type == "error":
+                    logger.exception("%s queue.get()=error: %s", _sa_log_prefix, item)
+                    err_text = (
+                        f"SUMMARY:\nSub-agent failed with error: {item}\n\n"
+                        "CHANGES:\nNone.\n\nEVIDENCE:\nNone.\n\nRISKS:\nNone.\n\n"
+                        f"BLOCKERS:\n{item}"
+                    )
+                    yield (StreamEvent.subagent_end(
+                        "", agent_type=agent_type, status="failed", error=str(item),
+                    ), err_text)
+                    return
+
+        except asyncio.CancelledError:
+            logger.debug("%s consumer loop CancelledError → subagent_end", _sa_log_prefix)
+            # Parent cancelled — emit subagent_end so the TUI widget
+            # transitions out of "running", then re-raise.
             yield (StreamEvent.subagent_end(
-                "", agent_type=agent_type, status="failed", error=str(e),
-            ), err_text)
-        else:
-            yield (StreamEvent.subagent_end(
-                "", agent_type=agent_type, status="completed",
-            ), "".join(parts))
+                "", agent_type=agent_type, status="failed", error="cancelled",
+            ), "")
+            raise
         finally:
-            # Clean up completed subagent to prevent memory leak
+            logger.debug(
+                "%s consumer finally: stream_task.done=%s cancelled_flag=%s "
+                "text=%d bytes=%d chunk_events=%d",
+                _sa_log_prefix, _stream_task.done(), self._cancelled,
+                _sa_text_count, _sa_total_bytes, _sa_chunk_count,
+            )
+            if not _stream_task.done():
+                logger.debug("%s finally: cancelling _stream_task (still running)",
+                             _sa_log_prefix)
+                _stream_task.cancel()
+                try:
+                    logger.debug("%s finally: awaiting _stream_task ...",
+                                 _sa_log_prefix)
+                    await _stream_task
+                    logger.debug("%s finally: await _stream_task returned cleanly",
+                                 _sa_log_prefix)
+                except asyncio.CancelledError:
+                    logger.debug("%s finally: await _stream_task CancelledError",
+                                 _sa_log_prefix)
+                except Exception as e:
+                    logger.debug("%s finally: await _stream_task exception=%s",
+                                 _sa_log_prefix, e)
             if sub_engine in self._child_engines:
                 self._child_engines.remove(sub_engine)
+            logger.debug(
+                "%s finally done text=%d bytes=%d chunk_events=%d",
+                _sa_log_prefix, _sa_text_count, _sa_total_bytes, _sa_chunk_count,
+            )
+
+        # Normal completion
+        yield (StreamEvent.subagent_end(
+            "", agent_type=agent_type, status="completed",
+        ), "".join(parts))
     
     def _format_subagent_output(self, agent_type: str, prompt: str, result: str) -> str:
         """Format sub-agent output in DeepSeek-TUI structured contract format.
@@ -2003,10 +2342,10 @@ class AgentEngine:
         if session.messages:
             self.context.load_from_session(session.messages)
         if session.todos:
-            self._todo_manager = TodoManager.from_dict({
+            self._todo_manager.reload_from_dict({
                 "todos": session.todos,
                 "id_counter": len(session.todos),
-            }, on_change=self._on_todo_change)
+            })
         # Restore context usage stats
         self._restore_session_stats(session)
 
@@ -2036,10 +2375,10 @@ class AgentEngine:
         self._session = session
         self.context.load_from_session(session.messages)
         if session.todos:
-            self._todo_manager = TodoManager.from_dict({
+            self._todo_manager.reload_from_dict({
                 "todos": session.todos,
                 "id_counter": len(session.todos),
-            }, on_change=self._on_todo_change)
+            })
             self._inject_loaded_tasks_into_context()
         # Restore context usage stats
         self._restore_session_stats(session)
@@ -2096,7 +2435,14 @@ class AgentEngine:
         from onecode.agent.cdh_loader import CdhProjectLoader
         cdh_dir = CdhProjectLoader.find_cdh_dir(self._project_dir)
         if cdh_dir is None:
-            return
+            # Create .cdh dir if it doesn't exist yet (e.g., project opened
+            # without going through init)
+            cdh_dir = self._project_dir / CdhProjectLoader.CDH_DIRNAME
+            try:
+                cdh_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                logger.warning("Failed to create .cdh directory: %s", e)
+                return
         try:
             tm_data = self._todo_manager.to_dict()
             CdhProjectLoader.save_todos(cdh_dir, tm_data)
@@ -2112,9 +2458,7 @@ class AgentEngine:
         try:
             data = CdhProjectLoader.load_todos(cdh_dir)
             if data and (data.get("tasks") or data.get("todos")):
-                self._todo_manager = TodoManager.from_dict(
-                    data, on_change=self._on_todo_change
-                )
+                self._todo_manager.reload_from_dict(data)
         except Exception as e:
             logger.warning("Failed to load todos from .cdh: %s", e)
 

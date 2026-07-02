@@ -191,9 +191,9 @@ class GeneralAgent(AgentConfig):
             permission_bash=AgentPermission.ALLOW,
             permission_read=AgentPermission.ALLOW,
             permission_task=AgentPermission.DENY,
-            permission_question=AgentPermission.DENY,
+            permission_question=AgentPermission.ALLOW,
             permission_todowrite=AgentPermission.DENY,
-            disallowed_tools=["Spawn", "Agent", "AskUser"],
+            disallowed_tools=["Spawn", "Agent", "AskUser", "TodoCreate", "TodoUpdate", "TodoStop", "TodoList", "TodoGet", "TodoOutput"],
         )
 
 
@@ -209,7 +209,7 @@ class ExploreAgent(AgentConfig):
             permission_task=AgentPermission.DENY,
             permission_question=AgentPermission.DENY,
             permission_todowrite=AgentPermission.DENY,
-            disallowed_tools=["Spawn", "Agent", "AskUser"],
+            disallowed_tools=["Spawn", "Agent", "AskUser", "TodoCreate", "TodoUpdate", "TodoStop", "TodoList", "TodoGet", "TodoOutput"],
             hidden=True,
         )
 
@@ -228,7 +228,7 @@ class ScoutAgent(AgentConfig):
             permission_task=AgentPermission.DENY,
             permission_question=AgentPermission.DENY,
             permission_todowrite=AgentPermission.DENY,
-            disallowed_tools=["Spawn", "Agent", "AskUser"],
+            disallowed_tools=["Spawn", "Agent", "AskUser", "TodoCreate", "TodoUpdate", "TodoStop", "TodoList", "TodoGet", "TodoOutput"],
             hidden=True,
         )
 
@@ -324,7 +324,7 @@ SUBAGENT_CONSTRAINTS = """
 You are running as a subagent spawned by a parent agent via the Spawn tool.
 - You CANNOT spawn subagents (Spawn tool is disabled).
 - You CANNOT execute batched tool calls (Agent tool is disabled).
-- You CANNOT manage task plans (TodoCreate/TodoUpdate/TodoStop are disabled).
+- You CANNOT manage todos (all Todo* tools are disabled). The parent owns the shared plan.
 - You CANNOT interact with the user (AskUser is disabled).
 - You are a leaf node in the agent hierarchy. Execute the task in your prompt
   and return a structured SUMMARY/CHANGES/EVIDENCE/RISKS/BLOCKERS response.
@@ -404,7 +404,7 @@ Rules:
 - **WebSearch**: websearch(query) - Search the web and return results.
 
 ### Agent
-- **Task**: task(agent_type, prompt) - Spawn subagent to handle subtask.
+- **Spawn**: spawn(agent_type, prompt) - Delegate execution of a complex todo to a specialized subagent (isolated context). Use for multi-file/multi-step work. Then TodoUpdate(status="completed").
 - **Agent**: agent(calls, stop_on_error=True) - Execute a batch of tool calls as an atomic step. Each call includes {name, input}. Halts on first error when stop_on_error is true.
 - **ToolSearch**: tool_search(query) - Search for available tools by keyword.
 - **Skill**: skill(name) - Load skill by name.
@@ -469,14 +469,14 @@ Rules:
 - **ConfigRead**: config_read(key) - Read configuration values.
 - **ConfigWrite**: config_write(key, value) - Set allowed configuration values (does NOT expose secrets).
 
-### Tasks & Planning (CDH)
-- **TodoCreate**: todo_create(subject, description, activeForm="", metadata={}) - Create a task. Returns task id.
-- **TodoGet**: todo_get(taskId) - Retrieve a task by ID.
-- **TodoList**: todo_list() - List all tasks with status, owner, and blockers.
-- **TodoUpdate**: todo_update(taskId, subject, description, activeForm, status, owner, addBlocks, addBlockedBy, metadata, output) - Update task fields and dependencies.
-- **TodoOutput**: todo_output(task_id) - Get output from a task.
-- **TodoStop**: todo_stop(task_id) - Stop a running task.
-- **Spawn**: spawn(agent_type, prompt) - Delegate a subtask to a specialized subagent.
+### Planning (Todo) & Delegation (Spawn)
+- **TodoCreate**: todo_create(subject, description, activeForm="", metadata={}) - Create a todo (plan item). ALL tasks use TodoCreate; persisted to .cdh/todos.json and mirrored to sidebar Plan. Returns todo id.
+- **TodoGet**: todo_get(taskId) - Retrieve a todo by ID.
+- **TodoList**: todo_list() - List all todos with status, owner, and blockers.
+- **TodoUpdate**: todo_update(taskId, subject, description, activeForm, status, owner, addBlocks, addBlockedBy, metadata, output) - Update todo fields, status, and dependencies.
+- **TodoOutput**: todo_output(taskId) - Get output from a todo.
+- **TodoStop**: todo_stop(taskId) - Stop a running todo.
+- **Spawn**: spawn(agent_type, prompt) - Delegate EXECUTION of a complex todo to a specialized subagent (isolated context). Not a plan replacement — execute the todo, then TodoUpdate(status="completed").
 """
 
 def filter_tool_descriptions(
@@ -540,19 +540,23 @@ Before any action, reason step by step inside `<thinking>`:
 1. **Current state**: What do I know? What has been done? What are the results?
 2. **Goal**: What needs to be accomplished next?
 3. **Plan**: How should I approach it? What's the smallest next step?
-4. **Routing — choose by complexity**:
-   - **Simple / single-step** → use a direct read/search/exec tool, optionally
-     track with `TodoCreate` so the sidebar shows progress.
-   - **Complex / multi-step** → use `Spawn(agent_type, prompt)` to delegate to
-     a focused subagent.
-   - **Multi-file refactor / new feature** → ALWAYS use `Spawn`.
+4. **Plan + execution routing**:
+   - **Plan**: Every task is a `TodoCreate` (persists to .cdh/todos.json, mirrors
+     to sidebar Plan). No work without a todo.
+   - **Execute simple** (1 tool call, 1 file) → direct tool, then `TodoUpdate(status)`.
+   - **Execute complex** (multi-file, multi-step, isolated context) →
+     `Spawn(agent_type, prompt)`, then `TodoUpdate(status)`.
+   - **Multi-file refactor / new feature** → ALWAYS `Spawn` to execute the todo.
 
 ### Action Phase (行动阶段)
-Execute the chosen action. **Action types (in priority order)**:
-1. **Delegate via Spawn** (complex work): `Spawn(agent_type="general"|"explore"|"scout", prompt="...")`.
-2. **Track via Todo** (simple work): `TodoCreate(subject, description, activeForm, metadata)` and `TodoUpdate(...)`. The sidebar shows progress to the user.
-3. **Research directly**: `Read()` / `Grep()` / `Glob()` / `WebFetch()` / `WebSearch()` for single-step information needs.
-4. **Direct execute**: Only for trivial single-step operations that cannot justify a subagent or a todo.
+Execute the chosen todo. **Execution routing (by complexity)**:
+1. **Plan first**: ensure the work has a `TodoCreate` todo; if not, create one.
+2. **Simple todo** → execute directly with `Read`/`Edit`/`Bash`, then
+   `TodoUpdate(status="completed")`.
+3. **Complex todo** → `Spawn(agent_type="general"|"explore"|"scout", prompt="...")`
+   delegates execution to an isolated subagent; on return, `TodoUpdate(status="completed")`.
+4. **Research directly**: `Read()` / `Grep()` / `Glob()` / `WebFetch()` / `WebSearch()`
+   for single-step information needs (still tracked by a todo).
 
 ### Observation Phase (观察阶段)
 The tool result IS your observation. Process it:
@@ -562,8 +566,11 @@ The tool result IS your observation. Process it:
 
 ### Core Rules
 - **ALL reasoning goes in `<thinking>`**: Never narrate "I will now..." in visible text
-- **Route by complexity**: Simple → Todo, complex → Spawn. Never blindly use Spawn for trivial work.
-- **One responsibility per Spawn / Todo**: Each unit should have a clear, focused goal
+- **Todo = plan, Spawn = execution delegation**: Every task is a `TodoCreate`.
+  Simple todos are executed directly; complex todos are executed via `Spawn`.
+  Spawn does not replace a todo — it executes one. Never blindly use Spawn for
+  trivial work a single tool call can finish.
+- **One responsibility per todo / Spawn**: Each unit should have a clear, focused goal
 - **Pass context**: Include relevant context (file paths, findings) in Spawn prompts and Todo descriptions
 - **CoT every cycle**: Every turn starts with `<thinking>` reasoning before any action
 """
@@ -588,9 +595,15 @@ Plan/Build/Solo are different configurations of this same ReAct engine:
 - **build**/**solo** mode: soft gate — execution allowed but planning encouraged.
 
 **Routing principle**:
-- **Simple todo** = 1 tool call, 1 file, ≤2 lines of code change, single Read/Glob. Use `TodoCreate` + direct tool.
-- **Complex work** = >1 tool call, multi-file, research, refactor, new feature. Use `Spawn(agent_type, prompt)`.
-- When in doubt, choose `Spawn`. Subagents encapsulate work cleanly; todos are for visible progress on the main agent's own work.
+- **Todo = plan, Spawn = execution delegation.** Every task is created with
+  `TodoCreate` (persisted to .cdh/todos.json, mirrored to sidebar Plan).
+- **Simple todo** = 1 tool call, 1 file, ≤2 lines of code change, single Read/Glob.
+  Execute directly, then `TodoUpdate(status="completed")`.
+- **Complex todo** = >1 tool call, multi-file, research, refactor, new feature, or
+  work that benefits from an isolated context. Execute via `Spawn(agent_type, prompt)`,
+  then `TodoUpdate(status="completed")`.
+- Spawn does NOT replace a todo — it executes one. There is no "Todo vs Spawn" choice;
+  the choice is "execute this todo directly or via Spawn".
 
 ---
 
@@ -669,7 +682,7 @@ next Thought:
 
 - **No top-level planning prose**: All planning goes through `TodoCreate`/`TodoUpdate` so the sidebar renders it.
 - **CoT in `<thinking>`**: Every turn starts with chain-of-thought reasoning inside `<thinking>`. Never narrate "I will now…" in visible text.
-- **Route by complexity**: Simple → Todo + direct tool. Complex → Spawn.
+- **Todo = plan, Spawn = execution**: Every task is a `TodoCreate`. Execute simple todos directly; delegate complex todos to `Spawn`. They are not alternatives.
 - **Todo status discipline**: `pending` → `in_progress` → `completed`. Every todo transitions through all three.
 - **No execution without a plan**: Write/Edit/Insert/ApplyPatch/Bash require todos. Create todos first.
 - **Human at key decisions**: Present the plan, get approval, then execute. Report progress as you go.

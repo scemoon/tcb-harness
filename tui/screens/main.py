@@ -2,6 +2,7 @@ import asyncio
 from functools import partial
 from pathlib import Path
 import random
+import subprocess
 
 from textual import on
 from textual.app import ComposeResult
@@ -235,6 +236,48 @@ class MainScreen(Screen, can_focus=False):
     def on_project_directory_tree_selected(self, event: Tree.NodeSelected):
         if (data := event.node.data) is not None:
             self.conversation.insert_path_into_prompt(data.path)
+
+    @on(ModifiedFiles.FileSelected)
+    async def on_modified_files_file_selected(self, event: ModifiedFiles.FileSelected):
+        event.stop()
+        filepath = event.filepath
+        project_path = self.project_path
+        if project_path is None:
+            return
+
+        before, after = self._get_file_diff_content(project_path, filepath)
+        if before is None and after is None:
+            self.app.notify("No diff available", severity="warning")
+            return
+        full_path = str(project_path / filepath)
+        await self.conversation.post_diff(full_path, before, after or "")
+
+    def _get_file_diff_content(
+        self, project_path: Path, filepath: str
+    ) -> tuple[str | None, str | None]:
+        after: str | None = None
+        current_path = project_path / filepath
+        try:
+            after = current_path.read_text()
+        except Exception:
+            after = "" if current_path.exists() else None
+
+        before: str | None = None
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(project_path), "show", f"HEAD:{filepath}"],
+                capture_output=True, text=True, timeout=5.0,
+            )
+            if r.returncode == 0:
+                before = r.stdout
+        except Exception:
+            pass
+
+        if before == after:
+            return None, None
+        if before is None and after is None:
+            return None, None
+        return before, after or ""
 
     @on(acp_messages.Plan)
     async def on_acp_plan(self, message: acp_messages.Plan):

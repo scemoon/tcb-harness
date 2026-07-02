@@ -166,7 +166,7 @@ class TestStreamingCallback:
 class TestBuildToolCallContent:
     """_build_tool_call_content produces correct content blocks."""
 
-    def test_write_emits_path_and_code_fence(self):
+    def test_write_emits_code_fence(self):
         from onecode.agent.onecode_agent_acp import _build_tool_call_content
 
         result = _build_tool_call_content("Write", {"path": "/tmp/test.py", "content": "print(1)"})
@@ -174,18 +174,14 @@ class TestBuildToolCallContent:
         block = result[0]
         assert block["type"] == "content"
         text = block["content"]["text"]
-        assert "📄 /tmp/test.py" in text
         assert "```python" in text
         assert "print(1)" in text
 
-    def test_read_emits_path_only(self):
+    def test_read_returns_empty(self):
         from onecode.agent.onecode_agent_acp import _build_tool_call_content
 
         result = _build_tool_call_content("Read", {"path": "/tmp/file.txt"})
-        assert len(result) == 1
-        text = result[0]["content"]["text"]
-        assert "📄 /tmp/file.txt" in text
-        assert "```" not in text
+        assert result == []
 
     def test_edit_emits_diff_block(self):
         from onecode.agent.onecode_agent_acp import _build_tool_call_content

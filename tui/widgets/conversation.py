@@ -263,8 +263,18 @@ This is a view of your conversation with the agent.
     BINDING_GROUP_TITLE = "View"
     BINDINGS = [Binding("end", "screen.focus_prompt", "Prompt")]
 
+    auto_follow: var[bool] = var(True)
+
     def update_node_styles(self, animate: bool = True) -> None:
         pass
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        self.auto_follow = new_value >= self.max_scroll_y
+        super().watch_scroll_y(old_value, new_value)
+
+    def scroll_end_if_following(self, animate: bool = True) -> None:
+        if self.auto_follow:
+            self.scroll_end(animate=animate)
 
 
 def _plan_entries_from_dicts(raw_entries):
@@ -329,6 +339,12 @@ class Conversation(containers.Vertical):
             "mode_switcher",
             "Modes",
             tooltip="Open the mode switcher",
+        ),
+        Binding(
+            "ctrl+n",
+            "fullscreen_block",
+            "Full screen",
+            tooltip="Open full-screen view of the cursor block",
         ),
         Binding(
             "ctrl+c",
@@ -722,6 +738,13 @@ class Conversation(containers.Vertical):
                 self.refresh_bindings()
                 self.call_after_refresh(self.cursor.follow, cursor_block)
 
+    async def action_fullscreen_block(self) -> None:
+        if (cursor_block := self.cursor_block) is not None:
+            fullscreen = getattr(cursor_block, "action_fullscreen", None)
+            if fullscreen:
+                fullscreen()
+                self.call_after_refresh(self.cursor.follow, cursor_block)
+
     async def post_agent_response(self, fragment: str = "") -> AgentResponse | None:
         """Get or create an agent response widget."""
         from tui.widgets.agent_response import AgentResponse
@@ -972,6 +995,14 @@ class Conversation(containers.Vertical):
         self._agent_response = None
         self._complete_thought()
 
+        # Safety net: mark any still-active subagents as cancelled.
+        # Normal flow emits subagent_end before getting here, but
+        # cancellation or errors can leave widgets stuck in "running".
+        if self._active_subagents:
+            for sa in self._active_subagents.values():
+                sa.complete(status="cancelled", error="Turn ended")
+            self._active_subagents.clear()
+
         if self._directory_changed or not self.is_watching_directory:
             self._directory_changed = False
             self.post_message(messages.ProjectDirectoryUpdated(project_dir=self.app.project_dir))
@@ -1169,6 +1200,15 @@ class Conversation(containers.Vertical):
                             entry.get("error", ""),
                         )
 
+                case "subagent_tool_call":
+                    # Defer mounting: ToolCall widgets must mount INSIDE the
+                    # SubAgent (after it is mounted below), so stash them.
+                    sa = created_subagents.get(entry["id"])
+                    if sa is not None:
+                        sa._pending_tool_calls.append(
+                            (entry["tool_id"], entry["tool_call"])
+                        )
+
                 case "ask_user":
                     current_thought = None
                     self.new_block()
@@ -1181,9 +1221,15 @@ class Conversation(containers.Vertical):
 
         if widgets:
             await self.contents.mount(*widgets)
+        # Mount deferred subagent tool cards now that their SubAgent parents
+        # are mounted and composed.
+        for sa in created_subagents.values():
+            for tool_id, tc in sa._pending_tool_calls:
+                await sa.add_or_update_tool_call(tool_id, tc)
+            sa._pending_tool_calls.clear()
         self._replay_buffer.clear()
         self._complete_thought()
-        self.window.scroll_end(animate=False)
+        self.window.scroll_end_if_following(animate=False)
 
     @on(acp_messages.RequestPermission)
     async def on_acp_request_permission(self, message: acp_messages.RequestPermission):
@@ -1276,6 +1322,25 @@ class Conversation(containers.Vertical):
             return
         tool_id = message.tool_id
 
+        # Tools invoked *inside* a subagent carry a ``subagentId`` (the parent
+        # Spawn toolCallId). Render them as ToolCall cards INSIDE the owning
+        # SubAgent widget (same style as main-conversation tools) instead of
+        # the main conversation.
+        subagent_id = tool_call.get("subagentId")
+        if subagent_id:
+            if self._replay:
+                self._replay_buffer.append({
+                    "kind": "subagent_tool_call",
+                    "id": subagent_id,
+                    "tool_id": tool_id,
+                    "tool_call": tool_call,
+                })
+                return
+            sa = self._get_subagent(subagent_id)
+            if sa is not None:
+                await sa.add_or_update_tool_call(tool_id, tool_call)
+            return
+
         if self._replay:
             if isinstance(message, acp_messages.ToolCall):
                 self._replay_buffer.append({"kind": "tool_call", "tool_call": tool_call, "tool_id": tool_id})
@@ -1350,12 +1415,18 @@ class Conversation(containers.Vertical):
         from tui.widgets.subagent import SubAgent
 
         message.stop()
+        logger.debug(
+            "[TUI-SUBagent] on_start id=%s type=%s prompt_len=%d replay=%s",
+            message.subagent_id, message.agent_type,
+            len(message.prompt or ""), self._replay,
+        )
         if self._replay:
             self._replay_buffer.append({"kind": "subagent_start", "agent_type": message.agent_type, "id": message.subagent_id, "prompt": message.prompt})
             return
         sa = SubAgent(message.agent_type, tool_id=message.subagent_id, prompt=message.prompt)
         self._active_subagents[message.subagent_id] = sa
         await self.post(sa, new_block=True)
+        logger.debug("[TUI-SUBagent] on_start posted SubAgent id=%s", message.subagent_id)
 
     def _get_subagent(self, subagent_id: str):
         from tui.widgets.subagent import SubAgent
@@ -1371,10 +1442,19 @@ class Conversation(containers.Vertical):
     @on(acp_messages.SubAgentChunk)
     async def on_acp_subagent_chunk(self, message: acp_messages.SubAgentChunk):
         message.stop()
+        sa = self._get_subagent(message.subagent_id)
+        _cnt = (sa._chunk_count_log + 1) if sa else 0
+        if sa:
+            sa._chunk_count_log = _cnt
+        if _cnt <= 5 or _cnt % 50 == 0:
+            logger.debug(
+                "[TUI-SUBagent] on_chunk id=%s chunk#%d bytes=%d sa=%s",
+                message.subagent_id, _cnt, len(message.text or ""),
+                "yes" if sa else "MISSING",
+            )
         if self._replay:
             self._replay_buffer.append({"kind": "subagent_chunk", "id": message.subagent_id, "text": message.text})
             return
-        sa = self._get_subagent(message.subagent_id)
         if sa is not None:
             sa.append_chunk(message.text)
 
@@ -1395,6 +1475,16 @@ class Conversation(containers.Vertical):
     @on(acp_messages.SubAgentEnd)
     async def on_acp_subagent_end(self, message: acp_messages.SubAgentEnd):
         message.stop()
+        logger.debug(
+            "[TUI-SUBagent] on_end id=%s status=%s err=%r active=%s "
+            "chunks=%d bytes=%d",
+            message.subagent_id, message.status, (message.error or "")[:80],
+            message.subagent_id in self._active_subagents,
+            (self._get_subagent(message.subagent_id)._chunk_count_log
+             if self._get_subagent(message.subagent_id) else 0),
+            (self._get_subagent(message.subagent_id)._byte_count_log
+             if self._get_subagent(message.subagent_id) else 0),
+        )
         if self._replay:
             self._replay_buffer.append({
                 "kind": "subagent_end",

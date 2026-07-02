@@ -14,10 +14,12 @@ class TodoCreateTool(Tool):
         return ToolSpec(
             name="TodoCreate",
             description=(
-                "Create a todo (lightweight checklist item) for tracking progress "
-                "in the sidebar. Use for SIMPLE / single-step work (1-3 tool calls). "
-                "For complex multi-step work, prefer delegating via `Spawn` subagent "
-                "and use TodoCreate only to surface the overall plan. Returns todo id."
+                "Create a todo (plan item) for tracking progress. ALL tasks — simple "
+                "or complex — are created via TodoCreate, persisted to .cdh/todos.json, "
+                "and mirrored to the sidebar Plan widget. At execution time, route by "
+                "complexity: simple todos are executed directly; complex todos are "
+                "delegated via `Spawn` (mark with metadata={\"delegate_to\": \"general\"}). "
+                "Returns todo id."
             ),
             input_schema={
                 "type": "object",
@@ -148,14 +150,14 @@ class TodoOutputTool(Tool):
             input_schema={
                 "type": "object",
                 "properties": {
-                    "task_id": {"type": "string", "description": "Todo id to get output for"},
+                    "taskId": {"type": "string", "description": "Todo id to get output for"},
                 },
-                "required": ["task_id"],
+                "required": ["taskId"],
             },
         )
 
     def run(self, tool_input: dict[str, Any]) -> ToolResult:
-        todo_id = tool_input.get("task_id", "")
+        todo_id = tool_input.get("taskId", "")
         result = self._tm.get_todo_output(todo_id)
         return ToolResult(name="TodoOutput", output=result)
 
@@ -172,17 +174,17 @@ class TodoStopTool(Tool):
             input_schema={
                 "type": "object",
                 "properties": {
-                    "task_id": {"type": "string", "description": "Todo id to stop"},
+                    "taskId": {"type": "string", "description": "Todo id to stop"},
                 },
-                "required": ["task_id"],
+                "required": ["taskId"],
             },
         )
 
     def run(self, tool_input: dict[str, Any]) -> ToolResult:
-        todo_id = tool_input.get("task_id", "")
+        todo_id = tool_input.get("taskId", "")
         result = self._tm.update_todo(todo_id, status="completed")
         if result is None:
             return ToolResult(name="TodoStop", output={"success": False, "stopped": False, "error": "Todo not found"}, is_error=True)
         if result.get("deleted"):
-            return ToolResult(name="TodoStop", output={"success": True, "stopped": True, "task_id": todo_id})
-        return ToolResult(name="TodoStop", output={"success": True, "stopped": True, "task_id": todo_id})
+            return ToolResult(name="TodoStop", output={"success": True, "stopped": True, "taskId": todo_id})
+        return ToolResult(name="TodoStop", output={"success": True, "stopped": True, "taskId": todo_id})

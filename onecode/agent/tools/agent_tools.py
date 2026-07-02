@@ -88,7 +88,7 @@ class TaskTool(Tool):
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="Spawn",
-            description="Delegate a subtask to a specialized subagent. Use for large, independent, or specialized work that benefits from a focused sub-agent.",
+            description="Delegate a subtask to a specialized subagent. Use for complex multi-step work or work that benefits from an isolated context.",
             input_schema={
                 "type": "object",
                 "properties": {

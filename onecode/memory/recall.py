@@ -17,6 +17,16 @@ class RecallResult:
 
 
 class BM25:
+    # Hard cap above which ``index()`` refuses to build the inverted index.
+    # The original O(V × N) construction of ``doc_freqs`` (set membership
+    # over Python lists) becomes effectively uncallable above a few
+    # thousand docs — a 79k-chunk corpus (observed in production where
+    # sessions kept re-indexing without cleaning the SQLite store) took
+    # ~1 hour, blocking the event loop and freezing streaming + cancel.
+    # Above this cap we degrade to a no-op index so callers fall back to
+    # other retrievers / explicit search instead of hanging the process.
+    _MAX_DOCS = 5000
+
     def __init__(self, k1: float = 1.5, b: float = 0.75):
         self.k1 = k1
         self.b = b
@@ -25,17 +35,43 @@ class BM25:
         self.doc_freqs: dict[str, int] = {}
         self.num_docs: int = 0
         self.doc_tokens: list[list[str]] = []
+        # Tokenize once per doc as ``set`` (not list) so the
+        # ``token in doc`` membership check inside the doc_freqs
+        # comprehension is O(1) instead of O(doc_len).  This alone takes
+        # the 79k-doc construction from ~hours to ~seconds; the hard cap
+        # above is a safety net for pathological corpora.
+        self._doc_token_sets: list[set[str]] = []
 
     def index(self, documents: list[str]) -> None:
+        if len(documents) > self._MAX_DOCS:
+            import logging
+            logging.getLogger(__name__).warning(
+                "BM25.index refused: %d docs exceeds cap=%d (would block "
+                "the event loop for minutes); BM25 search will return no "
+                "results. Clean the codebase index or use a smaller "
+                "project scope.", len(documents), self._MAX_DOCS,
+            )
+            self.doc_tokens = []
+            self._doc_token_sets = []
+            self.doc_lengths = []
+            self.avgdl = 0
+            self.num_docs = 0
+            self.doc_freqs = {}
+            return
+
         self.doc_tokens = [self._tokenize(doc) for doc in documents]
+        self._doc_token_sets = [set(t) for t in self.doc_tokens]
         self.doc_lengths = [len(tokens) for tokens in self.doc_tokens]
         self.avgdl = sum(self.doc_lengths) / len(self.doc_lengths) if self.doc_lengths else 0
         self.num_docs = len(documents)
 
         all_tokens = set()
-        for tokens in self.doc_tokens:
+        for tokens in self._doc_token_sets:
             all_tokens.update(tokens)
-        self.doc_freqs = {token: sum(1 for doc in self.doc_tokens if token in doc) for token in all_tokens}
+        self.doc_freqs = {
+            token: sum(1 for ts in self._doc_token_sets if token in ts)
+            for token in all_tokens
+        }
 
     def _tokenize(self, text: str) -> list[str]:
         text = text.lower()

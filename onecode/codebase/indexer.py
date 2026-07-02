@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -82,7 +83,19 @@ class CodebaseIndexer:
         files = self.walk_files()
         result.total_files = len(files)
 
-        for fpath in files:
+        # Yield control to the event loop periodically so:
+        #   - CancelledError injected by ``prompt_task.cancel()`` during a
+        #     subagent chat_stream can actually propagate (without this
+        #     the synchronous SQLite/chunker loop below would monopolise
+        #     the event loop and a stuck subagent could never be stopped).
+        #   - other coroutines (e.g. the ACP stdin loop, TUI refresh) keep
+        #     getting scheduled while a long indexing pass runs.
+        _YIELD_EVERY = 16
+
+        for i, fpath in enumerate(files):
+            if i and (i % _YIELD_EVERY) == 0:
+                await asyncio.sleep(0)
+
             if not force and not self.needs_reindex(fpath):
                 result.skipped_files += 1
                 continue

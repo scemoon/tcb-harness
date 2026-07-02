@@ -43,6 +43,21 @@ def debug_log(*args, **kwargs):
         print("[onecode]", *args, file=sys.stderr, flush=True)
 
 
+def info_log(*args, **kwargs):
+    """INFO-level lifecycle log so critical events survive even default log_level=info.
+
+    ``debug_log`` is filtered out at INFO; previously all ACP/subagent
+    diagnostic markers were DEBUG, so users running with the default
+    ``log_level: info`` saw an empty log and could not diagnose the
+    subagent hang.  Use ``info_log`` for critical lifecycle boundaries
+    (adapter init, cancel, subagent dispatch markers).
+    """
+    if logger.handlers or logging.getLogger().handlers:
+        logger.info(" ".join(str(a) for a in args), **kwargs)
+    else:
+        print("[onecode]", *args, file=sys.stderr, flush=True)
+
+
 _CRASH_LOG_DIR = Path.home() / ".cdh" / "logs"
 
 
@@ -325,8 +340,8 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
     (Markdown / Static). JSON-fence fallbacks only kick in for tools we
     don't recognise, so known tools render as their intended visual.
 
-    Write emits a Markdown block (`path` header + code fence) so the
-    content reads as code rather than a noisy all-additions diff.
+    Write emits a code fence so the content reads as proper code
+    rather than a noisy all-additions diff view.
     Edit keeps the diff block because there are real before/after changes.
     """
     if not arguments:
@@ -337,7 +352,7 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
 
     _HEADER_ONLY_TOOLS = frozenset({
         "TodoCreate", "TodoGet", "TodoList", "TodoUpdate", "TodoOutput", "TodoStop",
-        "Glob", "Spawn",
+        "Glob", "List", "Spawn",
     })
     if name in _HEADER_ONLY_TOOLS:
         return []
@@ -351,7 +366,7 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
                 "type": "content",
                 "content": {
                     "type": "text",
-                    "text": f"📄 {path}\n```{lang}\n{content}\n```",
+                    "text": f"```{lang}\n{content}\n```",
                 },
             }]
 
@@ -467,7 +482,7 @@ def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
     if parsed.get("success") is True:
         if path := parsed.get("path"):
             return f"✓ {path}"
-        visible = {k: v for k, v in parsed.items() if k != "success"}
+        visible = {k: v for k, v in parsed.items() if k != "success" and v not in ("", None)}
         if not visible:
             return "✓ done"
         try:
@@ -661,6 +676,14 @@ class CDHACPAdapter:
         self._request_seq = 0
         self._perm_store = PermissionStore()
         self._ask_user_future: asyncio.Future[dict] | None = None
+        # Diagnostics: per-subagent ACP forward counters (id → int)
+        self._subagent_fwd_count: dict[str, int] = {}
+        self._subagent_fwd_bytes: dict[str, int] = {}
+        # Display state for tools invoked *inside* a subagent, keyed by a
+        # namespaced id ``"sa:{subagent_id}:{inner_tool_id}"`` (kept separate
+        # from ``self.tool_calls`` so subagent tool cards never collide with
+        # main-agent tool ids nor get persisted into the main session view).
+        self._subagent_tool_calls: dict[str, dict] = {}
 
     def _perm_store_load(self, cwd: str | None = None) -> None:
         """Load permission overrides from ``.cdh/permissions.json``."""
@@ -837,9 +860,23 @@ class CDHACPAdapter:
     def cancel_prompt(self):
         """Synchronously cancel the current prompt (called from main loop)."""
         if self.agent:
+            n_children = len(self.agent._child_engines)
+            child_ids = [hex(id(c)) for c in self.agent._child_engines]
+            info_log(
+                "[ACP-CANCEL] cancel_prompt called; marking agent._cancelled=True; "
+                "children=%d ids=%s already_cancelled=%s",
+                n_children, child_ids, self.agent._cancelled,
+            )
             self.agent._cancelled = True
             for child in self.agent._child_engines:
                 child._cancelled = True
+            info_log(
+                "[ACP-CANCEL] after mark: agent._cancelled=%s subagent_fwd=%s",
+                self.agent._cancelled,
+                dict(self._subagent_fwd_count),
+            )
+        else:
+            info_log("[ACP-CANCEL] cancel_prompt called but self.agent is None")
 
     def resolve_ask_user(self, answer: str, cancelled: bool) -> dict:
         """Resolve the pending ask_user request with the user's answer.
@@ -857,6 +894,146 @@ class CDHACPAdapter:
             "update": update,
         })
 
+    def _subagent_tool_ns_id(self, subagent_id: str, inner_tool_id: str) -> str:
+        """Namespaced toolCallId so subagent tool cards never collide with
+        main-agent tool ids in the TUI or in ``self.tool_calls``."""
+        return f"sa:{subagent_id}:{inner_tool_id}"
+
+    def _handle_subagent_tool_call(self, event) -> None:
+        """Render a tool invoked *inside* a subagent as a real tool_call /
+        tool_call_update sessionUpdate tagged with ``subagentId`` so the TUI
+        mounts a ToolCall card inside the owning SubAgent widget (same style
+        as main-conversation tools) instead of a ``[Tool: X]`` text line."""
+        sa_id = event.subagent_id
+        ns_id = self._subagent_tool_ns_id(sa_id, event.tool_id)
+        tname = event.tool_name or "Tool"
+        if tname == "Spawn":
+            # Nested spawn is disallowed (depth limit); skip rendering.
+            return
+        tool_kind = _kind_for_category(event.tool_category)
+
+        if event.subagent_tool_phase != "complete":
+            # start: in_progress card with the tool name as title.
+            entry = self._subagent_tool_calls.get(ns_id)
+            if entry is None:
+                entry = {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": ns_id,
+                    "subagentId": sa_id,
+                    "title": tname,
+                    "kind": tool_kind,
+                    "status": "in_progress",
+                    "content": [],
+                    "_tool_name": tname,
+                    "_tool_args": {},
+                }
+                self._subagent_tool_calls[ns_id] = entry
+            else:
+                entry["subagentId"] = sa_id
+                entry["kind"] = tool_kind
+                entry["status"] = "in_progress"
+                entry["_tool_name"] = tname
+            self.send_session_update(entry)
+            return
+
+        # complete: enrich title from args + attach args content.
+        args = event.tool_args or {}
+        title = tname
+        if args:
+            if args.get("path", ""):
+                title = f"{tname}: {_short_path(args.get('path', ''), self.agent._project_dir)}"
+            elif tname == "Bash":
+                cmd = str(args.get("command", ""))
+                if cmd:
+                    title = f"Bash: {cmd}"
+            elif tname in ("TodoCreate", "TodoUpdate"):
+                subject = str(args.get("subject", ""))
+                if subject:
+                    title = f"{tname}: {subject}"
+            elif tname in ("TodoGet", "TodoStop", "TodoOutput"):
+                tid = str(args.get("taskId", args.get("task_id", "")))
+                if tid:
+                    title = f"{tname}: {tid}"
+            elif tname == "Glob":
+                pattern = str(args.get("pattern", ""))
+                if pattern:
+                    title = f"Glob: {pattern}"
+        content = _build_tool_call_content(tname, args)
+        entry = self._subagent_tool_calls.get(ns_id)
+        if entry is None:
+            entry = {
+                "sessionUpdate": "tool_call",
+                "toolCallId": ns_id,
+                "subagentId": sa_id,
+                "title": tname,
+                "kind": tool_kind,
+                "status": "in_progress",
+                "content": [],
+                "_tool_name": tname,
+                "_tool_args": {},
+            }
+            self._subagent_tool_calls[ns_id] = entry
+        entry.update({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": ns_id,
+            "subagentId": sa_id,
+            "title": title,
+            "status": "in_progress",
+            "content": content,
+            "_tool_name": tname,
+            "_tool_args": args,
+        })
+        self.send_session_update(entry)
+
+    def _handle_subagent_tool_result(self, event) -> None:
+        """Attach a subagent tool's result to its card (completed/failed)."""
+        sa_id = event.subagent_id
+        ns_id = self._subagent_tool_ns_id(sa_id, event.tool_id)
+        entry = self._subagent_tool_calls.get(ns_id)
+        tname = (entry or {}).get("_tool_name", "") or event.tool_name or "Tool"
+        targs = (entry or {}).get("_tool_args", {}) or {}
+        if tname == "Spawn":
+            return
+        status = "failed" if event.result_is_error else "completed"
+        display_text = _format_tui_display_text(event.result_content or "", tname)
+        # Fence multi-line results so the TUI renders a code block (mirrors
+        # the main TOOL_RESULT handler).
+        if display_text and "\n" in display_text and "```" not in display_text:
+            lang = ""
+            if tname in ("Bash", "Glob"):
+                lang = "bash"
+            elif tname == "Read" and isinstance(targs, dict):
+                path = str(targs.get("path", ""))
+                if path:
+                    lang = _language_for_path(path)
+            display_text = f"```{lang}\n{display_text}\n```" if lang else f"```\n{display_text}\n```"
+        content_block = [{
+            "type": "content",
+            "content": {"type": "text", "text": display_text},
+        }] if display_text else []
+        existing_content = (entry or {}).get("content", [])
+        if not isinstance(existing_content, list):
+            existing_content = []
+        if entry is None:
+            entry = {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": ns_id,
+                "subagentId": sa_id,
+                "title": tname,
+                "kind": _kind_for_category(get_tool_category(tname)),
+                "status": status,
+                "content": existing_content + content_block,
+                "_tool_name": tname,
+                "_tool_args": targs,
+            }
+            self._subagent_tool_calls[ns_id] = entry
+        else:
+            entry["subagentId"] = sa_id
+            entry["status"] = status
+            entry["content"] = existing_content + content_block
+            entry["sessionUpdate"] = "tool_call_update"
+        self.send_session_update(entry)
+
     def _emit_tool_result(self, block: ToolResult) -> None:
         """Send a tool_result as a tool_call_update, accumulating with existing content."""
         # Spawn results are rendered as SubAgent widgets via
@@ -869,6 +1046,11 @@ class CDHACPAdapter:
         if tool_name and ":" in tool_name:
             tool_name = tool_name.split(":", 1)[0].strip()
         display_text = _format_tui_display_text(block.content, tool_name)
+
+        # For edit/write tools the diff/code block + header ✔ status is
+        # sufficient — skip the redundant "✓ /path" result text.
+        if display_text and self.tool_calls.get(block.tool_use_id, {}).get("kind") == "edit":
+            display_text = ""
 
         # Update title with path/subject from result if not already set
         if block.content and block.tool_use_id in self.tool_calls:
@@ -1488,6 +1670,13 @@ class CDHACPAdapter:
         # Fresh per-turn tracking (tool_calls accumulates across one turn only)
         self.tool_calls = {}
         self.agent._cancelled = False
+        self._subagent_fwd_count = {}
+        self._subagent_fwd_bytes = {}
+        self._subagent_tool_calls = {}
+        info_log(
+            "[ACP-PROMPT] entering chat_stream loop; agent._cancelled reset to "
+            "False; session=%s", session_id,
+        )
 
         # Create chunkers for agent_message_chunk and agent_thought_chunk
         self._text_chunker = TextChunker(
@@ -1733,25 +1922,66 @@ class CDHACPAdapter:
                 elif event.type == StreamEventType.SUBAGENT_START:
                     self._text_chunker.flush()
                     self._thought_chunker.flush()
+                    info_log(
+                        "[ACP-SUBagent] SUBAGENT_START id=%s type=%s prompt_len=%d",
+                        event.subagent_id, event.subagent_type,
+                        len(event.subagent_prompt or ""),
+                    )
                     self.send_session_update({
                         "sessionUpdate": "subagent_start",
                         "subagentId": event.subagent_id,
                         "agentType": event.subagent_type,
                         "prompt": event.subagent_prompt,
                     })
+                    self._subagent_fwd_count[event.subagent_id] = 0
+                    self._subagent_fwd_bytes[event.subagent_id] = 0
                 elif event.type == StreamEventType.SUBAGENT_CHUNK:
+                    _cnt = self._subagent_fwd_count.get(event.subagent_id, 0) + 1
+                    self._subagent_fwd_count[event.subagent_id] = _cnt
+                    _by = self._subagent_fwd_bytes.get(event.subagent_id, 0) + len(event.subagent_text or "")
+                    self._subagent_fwd_bytes[event.subagent_id] = _by
+                    if _cnt <= 5 or _cnt % 50 == 0:
+                        debug_log(
+                            "[ACP-SUBagent] SUBAGENT_CHUNK id=%s chunk#%d bytes=%d total=%d",
+                            event.subagent_id, _cnt, len(event.subagent_text or ""),
+                            _by,
+                        )
                     self.send_session_update({
                         "sessionUpdate": "subagent_chunk",
                         "subagentId": event.subagent_id,
                         "text": event.subagent_text,
                     })
                 elif event.type == StreamEventType.SUBAGENT_THINKING:
+                    debug_log(
+                        "[ACP-SUBagent] SUBAGENT_THINKING id=%s bytes=%d",
+                        event.subagent_id, len(event.subagent_thinking_text or ""),
+                    )
                     self.send_session_update({
                         "sessionUpdate": "subagent_thinking",
                         "subagentId": event.subagent_id,
                         "text": event.subagent_thinking_text,
                     })
                 elif event.type == StreamEventType.SUBAGENT_END:
+                    chunk_count = self._subagent_fwd_count.pop(event.subagent_id, None)
+                    byte_count = self._subagent_fwd_bytes.pop(event.subagent_id, None)
+                    info_log(
+                        "[ACP-SUBagent] SUBAGENT_END id=%s type=%s status=%s "
+                        "err=%r chunk_count=%s",
+                        event.subagent_id, event.subagent_type,
+                        event.subagent_status, (event.subagent_error or "")[:100],
+                        chunk_count,
+                    )
+                    # If there's no active subagent for this id, the engine
+                    # rejected a nested Spawn (depth exceeded). Drop the
+                    # orphan end event so the TUI doesn't get a stale
+                    # subagent_end without a matching subagent_start.
+                    if chunk_count is None:
+                        debug_log(
+                            "[ACP-SUBagent] DROP orphan SUBAGENT_END id=%s "
+                            "(no matching start — likely nested Spawn rejection)",
+                            event.subagent_id,
+                        )
+                        continue
                     self.send_session_update({
                         "sessionUpdate": "subagent_end",
                         "subagentId": event.subagent_id,
@@ -1759,6 +1989,10 @@ class CDHACPAdapter:
                         "status": event.subagent_status,
                         "error": event.subagent_error,
                     })
+                elif event.type == StreamEventType.SUBAGENT_TOOL_CALL:
+                    self._handle_subagent_tool_call(event)
+                elif event.type == StreamEventType.SUBAGENT_TOOL_RESULT:
+                    self._handle_subagent_tool_result(event)
                 elif event.type == StreamEventType.PLAN:
                     self.send_session_update({
                         "sessionUpdate": "plan",
@@ -1951,6 +2185,8 @@ class CDHACPAdapter:
                               "content": result_str, "is_error": is_error}],
                             name=tid,
                         )
+                        # Sync plan after approval — the tool may have mutated todos
+                        self._emit_plan_update_to_tui()
                     verb = "Approved" if approved else "Rejected"
                     self.send_session_update({
                         "sessionUpdate": "agent_message_chunk",
@@ -1995,6 +2231,9 @@ class CDHACPAdapter:
             self.agent.save_todos_to_project()
         except Exception:
             debug_log("Failed to save tasks to .cdh at turn end", exc_info=True)
+
+        # Sync plan to TUI so sidebar shows final todo state
+        self._emit_plan_update_to_tui()
 
         # Send context usage stats to TUI sidebar
         ctx = self.agent.context
@@ -2303,6 +2542,27 @@ async def _main():
                 def _on_prompt_done(t, req=req):
                     try:
                         resp = t.result()
+                    except asyncio.CancelledError:
+                        # Prompt was cancelled (session/cancel). Send a
+                        # stopReason=cancelled response so the TUI's pending
+                        # session/prompt request resolves and the turn ends
+                        # cleanly — otherwise the TUI hangs forever waiting
+                        # for a response that never comes.
+                        info_log(
+                            "[ACP-CANCEL] _on_prompt_done CancelledError raised; "
+                            "req_id=%s subagent_fwd=%s",
+                            req.get("id"), dict(adapter._subagent_fwd_count),
+                        )
+                        if req.get("id") is not None:
+                            try:
+                                print(json.dumps({
+                                    "jsonrpc": "2.0",
+                                    "result": {"stopReason": "cancelled"},
+                                    "id": req["id"],
+                                }), flush=True)
+                            except (TypeError, ValueError, OSError):
+                                pass
+                        return
                     except Exception as exc:
                         _dump_crash("_on_prompt_done")
                         debug_log(f"Prompt task raised unhandled exception: {exc}", exc_info=True)
@@ -2315,8 +2575,18 @@ async def _main():
                             debug_log("_on_prompt_done send failed: %s", e)
                 prompt_task.add_done_callback(_on_prompt_done)
             elif method == "session/cancel":
+                info_log(
+                    "[ACP-CANCEL] received session/cancel; prompt_task=%s done=%s",
+                    "exists" if prompt_task else "none",
+                    prompt_task.done() if prompt_task else "n/a",
+                )
                 if prompt_task and not prompt_task.done():
                     adapter.cancel_prompt()
+                    info_log("[ACP-CANCEL] calling prompt_task.cancel() now")
+                    prompt_task.cancel()
+                    info_log("[ACP-CANCEL] prompt_task.cancel() returned")
+                else:
+                    info_log("[ACP-CANCEL] no in-flight prompt_task to cancel")
                 # Notification (no id) — nothing to respond with
             else:
                 response = await server.handle_request(req)
@@ -2329,6 +2599,20 @@ async def _main():
 
 
 def main():
+    # Initialise file logging ONCE at adapter entry.  Previously the ACP
+    # subprocess never called ``setup_logging`` (only the ``cli`` command
+    # path did), so every ``logger.debug(...)`` / ``debug_log(...)`` call
+    # in the engine/provider/ACP layers was silently dropped and
+    # ``~/.cdh/logs/cdh.log`` stayed empty during live reproductions.
+    # Honour the same ``CDH_LOG_LEVEL`` env var as the CLI so users can
+    # turn on DEBUG diagnostics without code changes.
+    import os
+    from onecode.cli import setup_logging
+    setup_logging(os.environ.get("CDH_LOG_LEVEL", "INFO"))
+    info_log(
+        "[ACP-INIT] cdh_acp adapter starting; log_level=%s pid=%d",
+        os.environ.get("CDH_LOG_LEVEL", "INFO"), os.getpid(),
+    )
     asyncio.run(_main())
 
 if __name__ == "__main__":

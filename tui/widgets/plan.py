@@ -182,7 +182,7 @@ class Plan(containers.Grid):
         elif status == "pending":
             return Content(" • ")
         elif status == "in_progress":
-            return Content("👉 ")
+            return Content(" 👉")
         return Content()
 
 

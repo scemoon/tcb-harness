@@ -5,10 +5,15 @@ import subprocess
 
 from textual import work
 from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.message import Message
 from textual.reactive import reactive
 from textual.timer import Timer
+from textual.widget import Widget
 from textual.widgets import Static
 from textual import containers
+
+from dataclasses import dataclass
 
 
 CONTENT_WIDTH = 35
@@ -55,12 +60,16 @@ def _tag_color(added: int, deleted: int) -> str:
     return DIFF_COLORS["dim"]
 
 
-class ModifiedFiles(containers.Vertical):
+class ModifiedFiles(containers.Vertical, can_focus=True):
     DEFAULT_CSS = """
     ModifiedFiles {
         height: auto;
         overflow-y: auto;
         padding: 0 0 0 0;
+
+        &:focus {
+            background-tint: $surface 10%;
+        }
 
         #mf-files {
             height: auto;
@@ -69,8 +78,24 @@ class ModifiedFiles(containers.Vertical):
     }
     """
 
+    BINDINGS = [
+        Binding("up", "cursor_up", "Up", group="Files"),
+        Binding("down", "cursor_down", "Down", group="Files"),
+        Binding("enter", "select", "Select"),
+    ]
+
+    @dataclass
+    class FileSelected(Message):
+        filepath: str
+        modified_files: "ModifiedFiles"
+
+        @property
+        def control(self) -> Widget:
+            return self.modified_files
+
     path: reactive[Path | None] = reactive(None)
     files: reactive[list[str]] = reactive(list, recompose=False)
+    highlighted: reactive[int | None] = reactive(None)
 
     def __init__(
         self,
@@ -84,6 +109,8 @@ class ModifiedFiles(containers.Vertical):
         self._status_kind: str = "no-changes"
         self._status_text: str = NO_CHANGES_TEXT
         self._initial_path: Path | None = path
+        self._filepaths: list[str] = []
+        self._lines_data: tuple[list[str], dict[str, tuple[int, int]]] | None = None
 
     def on_mount(self) -> None:
         initial = self._initial_path
@@ -96,13 +123,11 @@ class ModifiedFiles(containers.Vertical):
         if path is None:
             self._show_status("no-changes", NO_CHANGES_TEXT)
             return
-        self._show_status("-loading", LOADING_TEXT)
         self._schedule_run(path)
 
     def refresh_files(self) -> None:
         if self.path is not None:
             self._cancel_debounce()
-            self._show_status("-loading", LOADING_TEXT)
             self._run_git_status(self.path)
 
     def _schedule_run(self, path: Path) -> None:
@@ -184,13 +209,33 @@ class ModifiedFiles(containers.Vertical):
     def _render_lines(self, data: tuple[list[str], dict[str, tuple[int, int]]]) -> None:
         lines, diffmap = data
         self.files = list(lines)
+        self._filepaths = [l[3:] for l in lines]
         if not lines:
             self._show_status("no-changes", NO_CHANGES_TEXT)
+            self._lines_data = None
+            self.highlighted = None
             return
         self._show_status("file-modified", "")
+        self._lines_data = data
+        if self.highlighted is None or self.highlighted >= len(self._filepaths):
+            self.highlighted = 0
+        self._apply_rendering()
 
+    def on_focus(self) -> None:
+        if self.highlighted is None and self._filepaths:
+            self.highlighted = 0
+
+    def watch_highlighted(
+        self, old: int | None, highlighted: int | None
+    ) -> None:
+        if self._lines_data is not None:
+            self._apply_rendering()
+
+    def _apply_rendering(self) -> None:
+        assert self._lines_data is not None
+        lines, diffmap = self._lines_data
         out: list[str] = []
-        for raw_line in lines:
+        for idx, raw_line in enumerate(lines):
             filepath = raw_line[3:]
             icon, sc = _status_info(raw_line[:2])
 
@@ -216,10 +261,37 @@ class ModifiedFiles(containers.Vertical):
             disp = filepath[:max_fn - 1] + "…" if len(filepath) > max_fn else filepath
             pad = CONTENT_WIDTH - 2 - len(disp) - tag_len
             pad_s = " " * pad if pad > 0 else ""
-            out.append(f"[{sc}]{icon} {disp}[/]{pad_s}{tag_s}")
+            line = f"[{sc}]{icon} {disp}[/]{pad_s}{tag_s}"
+
+            if idx == self.highlighted:
+                line = f"[reverse]{line}[/]"
+            out.append(line)
 
         files_widget = self.query_one("#mf-files", Static)
         files_widget.update("\n".join(out))
+
+    def action_cursor_up(self) -> None:
+        if not self._filepaths:
+            return
+        if self.highlighted is None or self.highlighted <= 0:
+            self.highlighted = 0
+        else:
+            self.highlighted -= 1
+
+    def action_cursor_down(self) -> None:
+        if not self._filepaths:
+            return
+        if self.highlighted is None:
+            self.highlighted = 0
+        elif self.highlighted >= len(self._filepaths) - 1:
+            self.highlighted = len(self._filepaths) - 1
+        else:
+            self.highlighted += 1
+
+    def action_select(self) -> None:
+        if self.highlighted is not None and self._filepaths:
+            filepath = self._filepaths[self.highlighted]
+            self.post_message(self.FileSelected(filepath, self))
 
     def _show_status(self, kind: str, text: str) -> None:
         self._status_kind = kind

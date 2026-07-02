@@ -6,8 +6,8 @@ from typing import Optional
 
 from onecode.config import ensure_dirs, load_config, save_config
 
-LOG_DIR = Path.home() / ".cdh" / "logs"
-LOG_FILE = LOG_DIR / "cdh.log"
+LOG_DIR = Path.home() / ".onecode" / "logs"
+LOG_FILE = LOG_DIR / "onecode.log"
 LOG_BACKUP_COUNT = 7  # keep 7 days of history
 
 _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}

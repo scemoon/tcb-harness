@@ -217,6 +217,11 @@ class ToolCall(SchemaDict, total=False, extra_items=Any):
     status: ToolCallStatus
     title: Required[str]
     toolCallId: Required[ToolCallId]
+    # Custom (non-ACP) field: when set, this tool call was invoked *inside* a
+    # subagent and the TUI should mount/update the ToolCall card inside the
+    # owning SubAgent widget (subagentId = the parent Spawn toolCallId) rather
+    # than in the main conversation.
+    subagentId: str
 
 
 # https://agentclientprotocol.com/protocol/schema#toolcallupdate
@@ -231,6 +236,7 @@ class ToolCallUpdate(SchemaDict, total=False, extra_items=Any):
     status: ToolCallStatus | None
     title: str | None
     toolCallId: Required[ToolCallId]
+    subagentId: str
 
 
 # https://agentclientprotocol.com/protocol/schema#param-tool-call

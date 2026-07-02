@@ -1,5 +1,15 @@
 from textual_diff_view import DiffView
 
+# Workaround for textual_diff_view crash: DiffCode has ALLOW_SELECT = True
+# but its parent chain is not a proper Widget, causing Textual's
+# _forward_event to assert-fail on mouse move.
+try:
+    from textual_diff_view._diff_view import DiffCode
+
+    DiffCode.ALLOW_SELECT = False
+except ImportError:
+    pass
+
 from tui.app import A2TUIApp
 
 

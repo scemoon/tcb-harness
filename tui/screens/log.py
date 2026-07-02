@@ -285,7 +285,7 @@ class LogScreen(ModalScreen[None]):
         padding: 0 1;
     }
 
-    LogScreen VerticalScroll {
+    LogScreen #log-list {
         height: 1fr;
         background: $surface;
     }
@@ -308,7 +308,8 @@ class LogScreen(ModalScreen[None]):
             yield Static(self._header_text(), id="log-header")
             yield VerticalScroll(id="log-list")
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
+        self.query_one("#log-list", VerticalScroll).can_focus = False
         if self._log_path is None:
             self._append_system("No log file yet. Start an agent to begin logging.")
             return
@@ -318,7 +319,7 @@ class LogScreen(ModalScreen[None]):
             )
             self._poll_timer = self.set_interval(0.2, self._poll_new_lines)
             return
-        self._begin_tailing()
+        await self._begin_tailing()
 
     # ── Page helpers ───────────────────────────────────────────────
 
@@ -330,25 +331,24 @@ class LogScreen(ModalScreen[None]):
         end = min(start + _PAGE_SIZE, len(self._entries))
         return start, end
 
-    def _render_page(self) -> None:
+    async def _render_page(self) -> None:
         scroller = self.query_one("#log-list", VerticalScroll)
-        scroller.remove_children()
+        await scroller.remove_children()
         start, end = self._page_range()
         page_entries = self._entries[start:end]
-        for tag, raw in page_entries:
-            scroller.mount(LogEntry(tag, raw))
+        await scroller.mount(*[LogEntry(tag, raw) for tag, raw in page_entries])
         self._current_index = 0 if page_entries else -1
         self._apply_selection()
         self._refresh_header()
 
-    def _navigate_to_page(self, page: int) -> None:
+    async def _navigate_to_page(self, page: int) -> None:
         total = self._total_pages()
         self._current_page = max(1, min(page, total))
-        self._render_page()
+        await self._render_page()
 
     # ── File loading ───────────────────────────────────────────────
 
-    def _begin_tailing(self) -> None:
+    async def _begin_tailing(self) -> None:
         """Read entire log file and start polling."""
         assert self._log_path is not None
         try:
@@ -360,9 +360,9 @@ class LogScreen(ModalScreen[None]):
             return
         self._file_was_present = True
         self._entries = []
-        self._ingest(data)
+        await self._ingest(data)
         self._current_page = self._total_pages()
-        self._render_page()
+        await self._render_page()
         if self._poll_timer is None:
             self._poll_timer = self.set_interval(0.2, self._poll_new_lines)
 
@@ -413,14 +413,14 @@ class LogScreen(ModalScreen[None]):
 
     # ── Polling for new lines ──────────────────────────────────────
 
-    def _poll_new_lines(self) -> None:
+    async def _poll_new_lines(self) -> None:
         if self._log_path is None:
             return
         if not self._log_path.exists():
             return
         if not self._file_was_present:
             self._append_system(f"── log file appeared: {self._log_path} ──")
-            self._begin_tailing()
+            await self._begin_tailing()
             return
         try:
             size = self._log_path.stat().st_size
@@ -433,11 +433,11 @@ class LogScreen(ModalScreen[None]):
                 new_text = f.read()
             self._file_pos = size
             if new_text:
-                self._ingest(new_text)
+                await self._ingest(new_text)
         except OSError:
             pass
 
-    def _ingest(self, chunk: str) -> None:
+    async def _ingest(self, chunk: str) -> None:
         was_on_last_page = (
             len(self._entries) == 0
             or self._current_page == self._total_pages()
@@ -466,7 +466,7 @@ class LogScreen(ModalScreen[None]):
                 self._entries.append(("error", line))
         if was_on_last_page:
             self._current_page = self._total_pages()
-            self._render_page()
+            await self._render_page()
         else:
             self._refresh_header()
 
@@ -479,19 +479,19 @@ class LogScreen(ModalScreen[None]):
                 return child
         return None
 
-    def action_next_page(self) -> None:
+    async def action_next_page(self) -> None:
         if self._current_page < self._total_pages():
-            self._navigate_to_page(self._current_page + 1)
+            await self._navigate_to_page(self._current_page + 1)
 
-    def action_prev_page(self) -> None:
+    async def action_prev_page(self) -> None:
         if self._current_page > 1:
-            self._navigate_to_page(self._current_page - 1)
+            await self._navigate_to_page(self._current_page - 1)
 
-    def action_first_page(self) -> None:
-        self._navigate_to_page(1)
+    async def action_first_page(self) -> None:
+        await self._navigate_to_page(1)
 
-    def action_last_page(self) -> None:
-        self._navigate_to_page(self._total_pages())
+    async def action_last_page(self) -> None:
+        await self._navigate_to_page(self._total_pages())
 
     def action_next_entry(self) -> None:
         scroller = self.query_one("#log-list", VerticalScroll)

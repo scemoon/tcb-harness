@@ -280,6 +280,11 @@ class StreamEventType(str, Enum):
     SUBAGENT_CHUNK = "subagent_chunk"
     SUBAGENT_THINKING = "subagent_thinking"
     SUBAGENT_END = "subagent_end"
+    # A tool invoked *inside* a subagent, forwarded to the parent so the TUI
+    # can render it as a real ToolCall card inside the SubAgent widget (same
+    # style as main-conversation tools) instead of a plain "[Tool: X]" line.
+    SUBAGENT_TOOL_CALL = "subagent_tool_call"
+    SUBAGENT_TOOL_RESULT = "subagent_tool_result"
 
 
 @dataclass
@@ -327,6 +332,10 @@ class StreamEvent:
     subagent_thinking_text: str = ""
     subagent_status: str = ""
     subagent_error: str = ""
+    # SUBAGENT_TOOL_CALL fields ("start" | "complete"; reuses tool_id/name/
+    # category/args). SUBAGENT_TOOL_RESULT reuses tool_id/result_* and needs
+    # tool_name for display when no prior TOOL_CALL_COMPLETE was captured.
+    subagent_tool_phase: str = ""
 
     @classmethod
     def text_delta(cls, text: str) -> "StreamEvent":
@@ -446,6 +455,54 @@ class StreamEvent:
             subagent_type=agent_type,
             subagent_status=status,
             subagent_error=error,
+        )
+
+    @classmethod
+    def subagent_tool_call(
+        cls,
+        subagent_id: str,
+        phase: str,
+        tool_id: str,
+        tool_name: str,
+        tool_category: ToolCategory = ToolCategory.UNKNOWN,
+        tool_args: dict[str, Any] | None = None,
+    ) -> "StreamEvent":
+        """A tool invocation *inside* a subagent.
+
+        ``phase`` is ``"start"`` (model began the call) or ``"complete"``
+        (args fully streamed). Carries the parent Spawn ``subagent_id`` so
+        the ACP can tag the emitted ``tool_call`` sessionUpdate and the TUI
+        can mount the card inside the owning SubAgent widget.
+        """
+        return cls(
+            type=StreamEventType.SUBAGENT_TOOL_CALL,
+            subagent_id=subagent_id,
+            subagent_tool_phase=phase,
+            tool_id=tool_id,
+            tool_name=tool_name,
+            tool_category=tool_category,
+            tool_args=tool_args or {},
+        )
+
+    @classmethod
+    def subagent_tool_result(
+        cls,
+        subagent_id: str,
+        tool_id: str,
+        tool_name: str,
+        result_content: str,
+        is_error: bool = False,
+        category: ToolCategory = ToolCategory.UNKNOWN,
+    ) -> "StreamEvent":
+        """Result of a tool invoked *inside* a subagent."""
+        return cls(
+            type=StreamEventType.SUBAGENT_TOOL_RESULT,
+            subagent_id=subagent_id,
+            tool_id=tool_id,
+            tool_name=tool_name,
+            result_content=result_content,
+            result_is_error=is_error,
+            result_category=category,
         )
 
     @staticmethod
