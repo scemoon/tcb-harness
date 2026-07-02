@@ -136,7 +136,26 @@ class ToolCall(containers.VerticalGroup):
         super().__init__(id=id, classes=classes)
 
     async def update_tool_call(self, tool_call: protocol.ToolCall) -> None:
+        old_call = self.tool_call
+        old_status = old_call.get("status") if old_call else None
+        old_content_len = len(old_call.get("content", [])) if old_call else 0
+        new_status = tool_call.get("status")
+        new_content = tool_call.get("content", [])
+
         self.tool_call = tool_call
+
+        # Update header immediately (cheap)
+        try:
+            self.query_one(ToolCallHeader).update(self.tool_call_header_content)
+        except NoMatches:
+            pass
+
+        if old_status != new_status:
+            self.check_expand()
+
+        # Skip full recompose if nothing material changed
+        if old_status == new_status and old_content_len == len(new_content):
+            return
         await self.recompose()
 
     def get_block_menu(self) -> Iterable[MenuItem]:
@@ -192,10 +211,18 @@ class ToolCall(containers.VerticalGroup):
             return
         tool_call = self.tool_call
         assert tool_call is not None
-        if tool_call.get("kind", "") == "read":
+        kind = tool_call.get("kind", "")
+        if kind == "read":
             return
-        tool_call_expand = self.app.settings.get("tools.expand", str, expand=False)
+
         status = tool_call.get("status")
+
+        # write/edit: always expanded
+        if kind == "edit":
+            self.expanded = True
+            return
+
+        tool_call_expand = self.app.settings.get("tools.expand", str, expand=False)
         if tool_call_expand == "always":
             self.expanded = True
         elif tool_call_expand != "never" and status is not None:
@@ -303,6 +330,12 @@ class ToolCall(containers.VerticalGroup):
     def _compose_content(
         self, tool_call_content: list[protocol.ToolCallContent]
     ) -> ComposeResult:
+        # TodoCreate/TodoList/TodoUpdate return trivial "updated" text - skip display
+        title = self.tool_call.get("title", "") if self.tool_call else ""
+        tool_name = title.split(":")[0] if ":" in title else title
+        if tool_name in ("TodoCreate", "TodoList", "TodoUpdate"):
+            return
+
         found = False
         for widget in compose_tool_content(tool_call_content, self.app):
             yield widget
