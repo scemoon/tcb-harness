@@ -912,6 +912,15 @@ class Agent(AgentBase):
     async def set_mode(self, mode_id: str) -> str | None:
         return await self.acp_session_set_mode(mode_id)
 
+    async def acp_session_clear_todos(self) -> dict:
+        """Clear all todos via the session/clear_todos RPC."""
+        if self.session_id is None:
+            return {"cleared": False}
+        with self.request():
+            response = api.session_clear_todos(self.session_id)
+        result = await response.wait()
+        return result or {"cleared": False}
+
     async def set_session_name(self, name: str) -> None:
         if self.session_pk is None:
             return

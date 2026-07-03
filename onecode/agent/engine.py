@@ -396,6 +396,7 @@ class TodoManager:
     def clear_todos(self) -> None:
         self._todos.clear()
         self._order.clear()
+        self._id_counter = 0
         self._mark_dirty()
 
     # ── Serialization ──
@@ -576,7 +577,7 @@ class AgentEngine:
         from onecode.agent.tools.web_tools import WebFetchTool, WebSearchTool
         from onecode.agent.tools.communication_tools import SendMessageTool, AskUserTool, ToolSearchTool
         from onecode.agent.tools.todo_tools import (TodoCreateTool, TodoGetTool, TodoListTool, TodoUpdateTool,
-            TodoOutputTool, TodoStopTool)
+            TodoOutputTool, TodoStopTool, TodoClearTool)
         from onecode.agent.tools.agent_tools import AgentTool, TaskTool
         from onecode.agent.tools.skill_tools import SkillTool
         from onecode.agent.tools.mcp_tools import MCPTool as MCPToolTool, MCPResourcesTool
@@ -610,6 +611,7 @@ class AgentEngine:
         registry.register(TodoUpdateTool(self._todo_manager))
         registry.register(TodoOutputTool(self._todo_manager))
         registry.register(TodoStopTool(self._todo_manager))
+        registry.register(TodoClearTool(self._todo_manager))
         # Agent tools
         registry.register(AgentTool(registry, permission_checker=self._check_tool_permission))
         registry.register(TaskTool(self._spawn_subagent_async))
@@ -840,6 +842,7 @@ class AgentEngine:
             "  - Complex / multi-step todo → `Spawn(agent_type, prompt)` to "
             "delegate execution to an isolated subagent, then "
             "`TodoUpdate(status=\"completed\")`.\n"
+            "  - Use `TodoClear` to reset the entire plan and start fresh.\n"
             "- If you need to reason between tool calls, wrap your "
             "reasoning in `<thinking>...</thinking>`.  The TUI will "
             "render the wrapped block as a collapsible thought and "
@@ -877,12 +880,19 @@ class AgentEngine:
         # Remove previously loaded skill-tagged messages so they don't
         # accumulate across agent switches or skill re-loads.
         self.context.remove_system_by_marker("<!-- SKILL:")
+        self.context.remove_system_by_marker("<!-- PROJECT_DOC -->")
         self.context.remove_system_by_marker("<!-- CDH_PROJECT -->")
         self._skills_loaded = True
 
         for skill in self._skill_loader.get_enabled():
             tagged = f"<!-- SKILL:{skill.name} -->\n{skill.content}"
             self.context.add_system(tagged)
+
+        # Project-level single-file doc (AGENTS.md at workspace root)
+        from onecode.agent.project_doc import load_project_doc
+        project_doc = load_project_doc(self._workspace)
+        if project_doc:
+            self.context.add_system(f"<!-- PROJECT_DOC -->\n{project_doc}")
 
         # Load project .cdh/ state into context
         from onecode.agent.cdh_loader import CdhProjectLoader
@@ -2431,12 +2441,11 @@ class AgentEngine:
             self._turn_usages = list(restored_turns)
 
     def save_todos_to_project(self) -> None:
-        """Save todos to .cdh/todos.json in the project directory."""
+        """Save todos to .cdh/todos.json — uses find_cdh_dir_for_todos
+        so sub-projects never overwrite a parent project's todos."""
         from onecode.agent.cdh_loader import CdhProjectLoader
-        cdh_dir = CdhProjectLoader.find_cdh_dir(self._project_dir)
+        cdh_dir = CdhProjectLoader.find_cdh_dir_for_todos(self._project_dir)
         if cdh_dir is None:
-            # Create .cdh dir if it doesn't exist yet (e.g., project opened
-            # without going through init)
             cdh_dir = self._project_dir / CdhProjectLoader.CDH_DIRNAME
             try:
                 cdh_dir.mkdir(parents=True, exist_ok=True)
@@ -2450,15 +2459,19 @@ class AgentEngine:
             logger.warning("Failed to save todos to .cdh: %s", e)
 
     def load_todos_from_project(self) -> None:
-        """Restore todos from .cdh/todos.json (with legacy tasks.json fallback)."""
+        """Restore todos from .cdh/todos.json — uses find_cdh_dir_for_todos
+        so sub-projects never accidentally load a parent project's todos.
+        If todos are found, the ``<!-- NEW_SESSION_HINT -->`` marker is
+        removed from the system context (it only applies to blank sessions)."""
         from onecode.agent.cdh_loader import CdhProjectLoader
-        cdh_dir = CdhProjectLoader.find_cdh_dir(self._project_dir)
+        cdh_dir = CdhProjectLoader.find_cdh_dir_for_todos(self._project_dir)
         if cdh_dir is None:
             return
         try:
             data = CdhProjectLoader.load_todos(cdh_dir)
             if data and (data.get("tasks") or data.get("todos")):
                 self._todo_manager.reload_from_dict(data)
+                self.context.remove_system_by_marker("<!-- NEW_SESSION_HINT -->")
         except Exception as e:
             logger.warning("Failed to load todos from .cdh: %s", e)
 

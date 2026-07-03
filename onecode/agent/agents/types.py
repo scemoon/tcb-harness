@@ -476,6 +476,7 @@ Rules:
 - **TodoUpdate**: todo_update(taskId, subject, description, activeForm, status, owner, addBlocks, addBlockedBy, metadata, output) - Update todo fields, status, and dependencies.
 - **TodoOutput**: todo_output(taskId) - Get output from a todo.
 - **TodoStop**: todo_stop(taskId) - Stop a running todo.
+- **TodoClear**: todo_clear() - Clear ALL todos and start a fresh blank plan.
 - **Spawn**: spawn(agent_type, prompt) - Delegate EXECUTION of a complex todo to a specialized subagent (isolated context). Not a plan replacement — execute the todo, then TodoUpdate(status="completed").
 """
 

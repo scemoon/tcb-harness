@@ -15,14 +15,6 @@ from onecode.config import CLOUD_DEV_HARNESS_DIR
 USER_SKILLS_DIR = CLOUD_DEV_HARNESS_DIR / "skills"
 
 
-SKILL_LOCATIONS = [
-    ("user", USER_SKILLS_DIR),
-    (".opencode", ".opencode/skills"),
-    (".claude", ".claude/skills"),
-    (".agents", ".agents/skills"),
-]
-
-
 class SkillLoader:
     def __init__(self, workspace_root: Path | None = None):
         self._workspace_root = workspace_root or Path.cwd()
@@ -37,15 +29,6 @@ class SkillLoader:
         builtin_dir = Path(__file__).resolve().parent.parent / "builtin_skills"
         if builtin_dir.exists():
             dirs.append(("builtin", builtin_dir))
-
-        # Project root-level directories containing SKILL.md
-        try:
-            for d in sorted(self._workspace_root.iterdir()):
-                if d.is_dir() and (d / "SKILL.md").exists():
-                    dirs.append(("project", self._workspace_root))
-                    break
-        except Exception:
-            pass
 
         search_paths = [
             (".opencode", ".claude", ".agents"),

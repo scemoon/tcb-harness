@@ -59,3 +59,9 @@ def session_set_mode(sessionId: str, modeId: str) -> protocol.SetSessionModeResp
 def session_save(sessionId: str) -> dict:
     """Save the session state."""
     ...
+
+
+@API.method(name="session/clear_todos")
+def session_clear_todos(sessionId: str) -> dict:
+    """Clear all todos in the current session."""
+    ...

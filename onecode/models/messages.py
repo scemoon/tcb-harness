@@ -105,6 +105,7 @@ TOOL_CATEGORY_MAP: dict[str, ToolCategory] = {
     "TodoUpdate": ToolCategory.TODO_MGMT,
     "TodoOutput": ToolCategory.TODO_MGMT,
     "TodoStop": ToolCategory.TODO_MGMT,
+    "TodoClear": ToolCategory.TODO_MGMT,
     "AskUser": ToolCategory.INTERACTION,
 }
 

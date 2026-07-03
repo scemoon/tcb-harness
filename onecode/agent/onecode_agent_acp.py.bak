@@ -340,8 +340,8 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
     (Markdown / Static). JSON-fence fallbacks only kick in for tools we
     don't recognise, so known tools render as their intended visual.
 
-    Write emits a code fence so the content reads as proper code
-    rather than a noisy all-additions diff view.
+    Write emits a Markdown block (`path` header + code fence) so the
+    content reads as code rather than a noisy all-additions diff.
     Edit keeps the diff block because there are real before/after changes.
     """
     if not arguments:
@@ -351,8 +351,8 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
         return []
 
     _HEADER_ONLY_TOOLS = frozenset({
-        "TodoCreate", "TodoGet", "TodoList", "TodoUpdate", "TodoOutput", "TodoStop", "TodoClear",
-        "Glob", "List", "Spawn",
+        "TodoCreate", "TodoGet", "TodoList", "TodoUpdate", "TodoOutput", "TodoStop",
+        "Glob", "Spawn",
     })
     if name in _HEADER_ONLY_TOOLS:
         return []
@@ -366,7 +366,7 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
                 "type": "content",
                 "content": {
                     "type": "text",
-                    "text": f"```{lang}\n{content}\n```",
+                    "text": f"📄 {path}\n```{lang}\n{content}\n```",
                 },
             }]
 
@@ -479,12 +479,10 @@ def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
     # Todo tools: collapse verbose state echoes to one-liner.
     if tool_name in _STATUS_ONLY_TOOLS:
         return "✓ updated"
-    if tool_name == "Write":
-        return ""
     if parsed.get("success") is True:
         if path := parsed.get("path"):
             return f"✓ {path}"
-        visible = {k: v for k, v in parsed.items() if k != "success" and v not in ("", None)}
+        visible = {k: v for k, v in parsed.items() if k != "success"}
         if not visible:
             return "✓ done"
         try:
@@ -501,7 +499,6 @@ _STATUS_ONLY_TOOLS = frozenset({
     "TodoUpdate",
     "TodoOutput",
     "TodoStop",
-    "TodoClear",
 })
 
 
@@ -682,11 +679,6 @@ class CDHACPAdapter:
         # Diagnostics: per-subagent ACP forward counters (id → int)
         self._subagent_fwd_count: dict[str, int] = {}
         self._subagent_fwd_bytes: dict[str, int] = {}
-        # Display state for tools invoked *inside* a subagent, keyed by a
-        # namespaced id ``"sa:{subagent_id}:{inner_tool_id}"`` (kept separate
-        # from ``self.tool_calls`` so subagent tool cards never collide with
-        # main-agent tool ids nor get persisted into the main session view).
-        self._subagent_tool_calls: dict[str, dict] = {}
 
     def _perm_store_load(self, cwd: str | None = None) -> None:
         """Load permission overrides from ``.cdh/permissions.json``."""
@@ -897,146 +889,6 @@ class CDHACPAdapter:
             "update": update,
         })
 
-    def _subagent_tool_ns_id(self, subagent_id: str, inner_tool_id: str) -> str:
-        """Namespaced toolCallId so subagent tool cards never collide with
-        main-agent tool ids in the TUI or in ``self.tool_calls``."""
-        return f"sa:{subagent_id}:{inner_tool_id}"
-
-    def _handle_subagent_tool_call(self, event) -> None:
-        """Render a tool invoked *inside* a subagent as a real tool_call /
-        tool_call_update sessionUpdate tagged with ``subagentId`` so the TUI
-        mounts a ToolCall card inside the owning SubAgent widget (same style
-        as main-conversation tools) instead of a ``[Tool: X]`` text line."""
-        sa_id = event.subagent_id
-        ns_id = self._subagent_tool_ns_id(sa_id, event.tool_id)
-        tname = event.tool_name or "Tool"
-        if tname == "Spawn":
-            # Nested spawn is disallowed (depth limit); skip rendering.
-            return
-        tool_kind = _kind_for_category(event.tool_category)
-
-        if event.subagent_tool_phase != "complete":
-            # start: in_progress card with the tool name as title.
-            entry = self._subagent_tool_calls.get(ns_id)
-            if entry is None:
-                entry = {
-                    "sessionUpdate": "tool_call",
-                    "toolCallId": ns_id,
-                    "subagentId": sa_id,
-                    "title": tname,
-                    "kind": tool_kind,
-                    "status": "in_progress",
-                    "content": [],
-                    "_tool_name": tname,
-                    "_tool_args": {},
-                }
-                self._subagent_tool_calls[ns_id] = entry
-            else:
-                entry["subagentId"] = sa_id
-                entry["kind"] = tool_kind
-                entry["status"] = "in_progress"
-                entry["_tool_name"] = tname
-            self.send_session_update(entry)
-            return
-
-        # complete: enrich title from args + attach args content.
-        args = event.tool_args or {}
-        title = tname
-        if args:
-            if args.get("path", ""):
-                title = f"{tname}: {_short_path(args.get('path', ''), self.agent._project_dir)}"
-            elif tname == "Bash":
-                cmd = str(args.get("command", ""))
-                if cmd:
-                    title = f"Bash: {cmd}"
-            elif tname in ("TodoCreate", "TodoUpdate"):
-                subject = str(args.get("subject", ""))
-                if subject:
-                    title = f"{tname}: {subject}"
-            elif tname in ("TodoGet", "TodoStop", "TodoOutput"):
-                tid = str(args.get("taskId", args.get("task_id", "")))
-                if tid:
-                    title = f"{tname}: {tid}"
-            elif tname == "Glob":
-                pattern = str(args.get("pattern", ""))
-                if pattern:
-                    title = f"Glob: {pattern}"
-        content = _build_tool_call_content(tname, args)
-        entry = self._subagent_tool_calls.get(ns_id)
-        if entry is None:
-            entry = {
-                "sessionUpdate": "tool_call",
-                "toolCallId": ns_id,
-                "subagentId": sa_id,
-                "title": tname,
-                "kind": tool_kind,
-                "status": "in_progress",
-                "content": [],
-                "_tool_name": tname,
-                "_tool_args": {},
-            }
-            self._subagent_tool_calls[ns_id] = entry
-        entry.update({
-            "sessionUpdate": "tool_call_update",
-            "toolCallId": ns_id,
-            "subagentId": sa_id,
-            "title": title,
-            "status": "in_progress",
-            "content": content,
-            "_tool_name": tname,
-            "_tool_args": args,
-        })
-        self.send_session_update(entry)
-
-    def _handle_subagent_tool_result(self, event) -> None:
-        """Attach a subagent tool's result to its card (completed/failed)."""
-        sa_id = event.subagent_id
-        ns_id = self._subagent_tool_ns_id(sa_id, event.tool_id)
-        entry = self._subagent_tool_calls.get(ns_id)
-        tname = (entry or {}).get("_tool_name", "") or event.tool_name or "Tool"
-        targs = (entry or {}).get("_tool_args", {}) or {}
-        if tname == "Spawn":
-            return
-        status = "failed" if event.result_is_error else "completed"
-        display_text = _format_tui_display_text(event.result_content or "", tname)
-        # Fence multi-line results so the TUI renders a code block (mirrors
-        # the main TOOL_RESULT handler).
-        if display_text and "\n" in display_text and "```" not in display_text:
-            lang = ""
-            if tname in ("Bash", "Glob"):
-                lang = "bash"
-            elif tname == "Read" and isinstance(targs, dict):
-                path = str(targs.get("path", ""))
-                if path:
-                    lang = _language_for_path(path)
-            display_text = f"```{lang}\n{display_text}\n```" if lang else f"```\n{display_text}\n```"
-        content_block = [{
-            "type": "content",
-            "content": {"type": "text", "text": display_text},
-        }] if display_text else []
-        existing_content = (entry or {}).get("content", [])
-        if not isinstance(existing_content, list):
-            existing_content = []
-        if entry is None:
-            entry = {
-                "sessionUpdate": "tool_call_update",
-                "toolCallId": ns_id,
-                "subagentId": sa_id,
-                "title": tname,
-                "kind": _kind_for_category(get_tool_category(tname)),
-                "status": status,
-                "content": existing_content + content_block,
-                "_tool_name": tname,
-                "_tool_args": targs,
-            }
-            self._subagent_tool_calls[ns_id] = entry
-        else:
-            entry["subagentId"] = sa_id
-            entry["status"] = status
-            entry["content"] = existing_content + content_block
-            entry["sessionUpdate"] = "tool_call_update"
-        self.send_session_update(entry)
-
     def _emit_tool_result(self, block: ToolResult) -> None:
         """Send a tool_result as a tool_call_update, accumulating with existing content."""
         # Spawn results are rendered as SubAgent widgets via
@@ -1049,11 +901,6 @@ class CDHACPAdapter:
         if tool_name and ":" in tool_name:
             tool_name = tool_name.split(":", 1)[0].strip()
         display_text = _format_tui_display_text(block.content, tool_name)
-
-        # For edit/write tools the diff/code block + header ✔ status is
-        # sufficient — skip the redundant "✓ /path" result text.
-        if display_text and self.tool_calls.get(block.tool_use_id, {}).get("kind") == "edit":
-            display_text = ""
 
         # Update title with path/subject from result if not already set
         if block.content and block.tool_use_id in self.tool_calls:
@@ -1218,14 +1065,9 @@ class CDHACPAdapter:
         self.agent.attach_session(session)
         self.session_id = session.id
 
-        # New sessions start with a blank plan — inject a hint so the user
-        # knows previous session todos are not restored.
-        self.agent.context.add_system(
-            "<!-- NEW_SESSION_HINT -->\n"
-            "This is a new session with a blank plan. Previous session todos "
-            "are not automatically restored. Use `/resume <session_id>` to "
-            "recover a previous session's plan if needed.\n"
-        )
+        # Restore tasks from project .cdh/ if available
+        self.agent.load_todos_from_project()
+
         self._send_available_commands()
 
         return {
@@ -1680,8 +1522,7 @@ class CDHACPAdapter:
         self.agent._cancelled = False
         self._subagent_fwd_count = {}
         self._subagent_fwd_bytes = {}
-        self._subagent_tool_calls = {}
-        info_log(
+        debug_log(
             "[ACP-PROMPT] entering chat_stream loop; agent._cancelled reset to "
             "False; session=%s", session_id,
         )
@@ -1970,26 +1811,14 @@ class CDHACPAdapter:
                         "text": event.subagent_thinking_text,
                     })
                 elif event.type == StreamEventType.SUBAGENT_END:
-                    chunk_count = self._subagent_fwd_count.pop(event.subagent_id, None)
-                    byte_count = self._subagent_fwd_bytes.pop(event.subagent_id, None)
                     info_log(
                         "[ACP-SUBagent] SUBAGENT_END id=%s type=%s status=%s "
-                        "err=%r chunk_count=%s",
+                        "err=%r total_chunks=%d total_bytes=%d",
                         event.subagent_id, event.subagent_type,
                         event.subagent_status, (event.subagent_error or "")[:100],
-                        chunk_count,
+                        self._subagent_fwd_count.pop(event.subagent_id, 0),
+                        self._subagent_fwd_bytes.pop(event.subagent_id, 0),
                     )
-                    # If there's no active subagent for this id, the engine
-                    # rejected a nested Spawn (depth exceeded). Drop the
-                    # orphan end event so the TUI doesn't get a stale
-                    # subagent_end without a matching subagent_start.
-                    if chunk_count is None:
-                        debug_log(
-                            "[ACP-SUBagent] DROP orphan SUBAGENT_END id=%s "
-                            "(no matching start — likely nested Spawn rejection)",
-                            event.subagent_id,
-                        )
-                        continue
                     self.send_session_update({
                         "sessionUpdate": "subagent_end",
                         "subagentId": event.subagent_id,
@@ -1997,10 +1826,6 @@ class CDHACPAdapter:
                         "status": event.subagent_status,
                         "error": event.subagent_error,
                     })
-                elif event.type == StreamEventType.SUBAGENT_TOOL_CALL:
-                    self._handle_subagent_tool_call(event)
-                elif event.type == StreamEventType.SUBAGENT_TOOL_RESULT:
-                    self._handle_subagent_tool_result(event)
                 elif event.type == StreamEventType.PLAN:
                     self.send_session_update({
                         "sessionUpdate": "plan",
@@ -2193,8 +2018,6 @@ class CDHACPAdapter:
                               "content": result_str, "is_error": is_error}],
                             name=tid,
                         )
-                        # Sync plan after approval — the tool may have mutated todos
-                        self._emit_plan_update_to_tui()
                     verb = "Approved" if approved else "Rejected"
                     self.send_session_update({
                         "sessionUpdate": "agent_message_chunk",
@@ -2239,9 +2062,6 @@ class CDHACPAdapter:
             self.agent.save_todos_to_project()
         except Exception:
             debug_log("Failed to save tasks to .cdh at turn end", exc_info=True)
-
-        # Sync plan to TUI so sidebar shows final todo state
-        self._emit_plan_update_to_tui()
 
         # Send context usage stats to TUI sidebar
         ctx = self.agent.context
@@ -2355,16 +2175,6 @@ class CDHACPAdapter:
             self._send_available_commands()
         return {"modeId": mode_id}
 
-    async def session_clear_todos(self, session_id: str):
-        """Clear all todos in the current session."""
-        if self.agent:
-            tm = getattr(self.agent, "_todo_manager", None)
-            if tm:
-                tm.clear_todos()
-            self.agent.save_todos_to_project()
-            self._emit_plan_update_to_tui()
-        return {"cleared": True}
-
     # ── Terminal RPC stubs ──────────────────────────────────────────
     async def terminal_create(
         self, session_id: str, terminal_id: str, command: str, args: list[str] | None = None,
@@ -2396,7 +2206,6 @@ class JSONRPCServer:
             "session/cancel": self._handle_session_cancel,
             "session/save": self._handle_session_save,
             "session/set_mode": self._handle_session_set_mode,
-            "session/clear_todos": self._handle_session_clear_todos,
             "session/ask_user_answer": self._handle_ask_user_answer,
             "terminal/create": self._handle_terminal_create,
             "terminal/kill": self._handle_terminal_kill,
@@ -2469,11 +2278,6 @@ class JSONRPCServer:
         return await self.adapter.session_set_mode(
             params.get("sessionId"),
             params.get("modeId"),
-        )
-
-    async def _handle_session_clear_todos(self, params: dict):
-        return await self.adapter.session_clear_todos(
-            params.get("sessionId"),
         )
 
     async def _handle_terminal_create(self, params: dict):
@@ -2572,7 +2376,7 @@ async def _main():
                         # session/prompt request resolves and the turn ends
                         # cleanly — otherwise the TUI hangs forever waiting
                         # for a response that never comes.
-                        info_log(
+                        debug_log(
                             "[ACP-CANCEL] _on_prompt_done CancelledError raised; "
                             "req_id=%s subagent_fwd=%s",
                             req.get("id"), dict(adapter._subagent_fwd_count),
@@ -2599,18 +2403,18 @@ async def _main():
                             debug_log("_on_prompt_done send failed: %s", e)
                 prompt_task.add_done_callback(_on_prompt_done)
             elif method == "session/cancel":
-                info_log(
+                debug_log(
                     "[ACP-CANCEL] received session/cancel; prompt_task=%s done=%s",
                     "exists" if prompt_task else "none",
                     prompt_task.done() if prompt_task else "n/a",
                 )
                 if prompt_task and not prompt_task.done():
                     adapter.cancel_prompt()
-                    info_log("[ACP-CANCEL] calling prompt_task.cancel() now")
+                    debug_log("[ACP-CANCEL] calling prompt_task.cancel() now")
                     prompt_task.cancel()
-                    info_log("[ACP-CANCEL] prompt_task.cancel() returned")
+                    debug_log("[ACP-CANCEL] prompt_task.cancel() returned")
                 else:
-                    info_log("[ACP-CANCEL] no in-flight prompt_task to cancel")
+                    debug_log("[ACP-CANCEL] no in-flight prompt_task to cancel")
                 # Notification (no id) — nothing to respond with
             else:
                 response = await server.handle_request(req)

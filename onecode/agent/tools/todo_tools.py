@@ -188,3 +188,20 @@ class TodoStopTool(Tool):
         if result.get("deleted"):
             return ToolResult(name="TodoStop", output={"success": True, "stopped": True, "taskId": todo_id})
         return ToolResult(name="TodoStop", output={"success": True, "stopped": True, "taskId": todo_id})
+
+
+class TodoClearTool(Tool):
+    def __init__(self, todo_manager):
+        self._tm = todo_manager
+
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="TodoClear",
+            description="Clear all todos. Resets the entire plan — all pending, in-progress, and completed todos are removed and the plan starts fresh.",
+            input_schema={"type": "object", "properties": {}, "required": []},
+        )
+
+    def run(self, tool_input: dict[str, Any]) -> ToolResult:
+        count = len(self._tm.list_todos())
+        self._tm.clear_todos()
+        return ToolResult(name="TodoClear", output={"cleared": count})

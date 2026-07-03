@@ -61,6 +61,16 @@ class CdhProjectLoader:
                 return candidate
         return None
 
+    @staticmethod
+    def find_cdh_dir_for_todos(workspace_root: Path) -> Optional[Path]:
+        """Find ``.cdh/`` strictly at *workspace_root*, without walking up.
+
+        Used for todo persistence so sub-projects never accidentally load
+        or write to a parent project's ``.cdh/todos.json``.
+        """
+        candidate = workspace_root.resolve() / CdhProjectLoader.CDH_DIRNAME
+        return candidate if candidate.is_dir() else None
+
     # ── file readers ───────────────────────────────────────────
 
     @staticmethod
@@ -191,7 +201,6 @@ class CdhProjectLoader:
 
         config = CdhProjectLoader.load_project_config(cdh_dir)
         state = CdhProjectLoader.load_project_state(cdh_dir)
-        skill = CdhProjectLoader.get_skill_content(cdh_dir)
 
         parts = ["## Project State (.cdh)"]
         name = config.get("name", cdh_dir.parent.name)
@@ -207,8 +216,6 @@ class CdhProjectLoader:
             parts.append(f"- Config: {json.dumps(config, ensure_ascii=False)}")
         if state:
             parts.append(f"- State: {json.dumps(state, ensure_ascii=False)}")
-        if skill:
-            parts.append(f"\n--- .cdh/SKILL.md ---\n{skill}")
 
         parts.append(
             "\n**Important**: Work directly in the project root directory shown above. "

@@ -473,6 +473,28 @@ def _resolve_indexed_name(conversation, raw, items, sub_label):
     return None
 
 
+# ── clear-todos ──────────────────────────────────────────────────────────
+
+
+async def _clear_todos(conversation: "Conversation", parameters: str) -> None:
+    """Clear all todos via the agent's session/clear_todos RPC."""
+    agent = conversation.agent
+    if agent is None:
+        conversation.notify("No active agent session", title="/clear-todos", severity="error")
+        return
+    if not hasattr(agent, "acp_session_clear_todos"):
+        conversation.notify("Agent does not support clear-todos", title="/clear-todos", severity="error")
+        return
+    try:
+        result = await agent.acp_session_clear_todos()
+        if result and result.get("cleared"):
+            conversation.notify("All todos cleared", title="/clear-todos")
+        else:
+            conversation.notify("Failed to clear todos", title="/clear-todos", severity="error")
+    except Exception as e:
+        conversation.notify(f"Failed to clear todos: {e}", title="/clear-todos", severity="error")
+
+
 # ── registration ──────────────────────────────────────────────────────
 
 
@@ -518,4 +540,10 @@ def register_commands() -> None:
         "Manage MCP servers: list, add, enable, disable, remove (accepts name or list number)",
         _mcp,
         "list|add|enable|disable|remove [name|n]",
+    )
+    platform_commands.register(
+        "clear-todos",
+        "Clear all plan todos — starts a fresh blank plan",
+        _clear_todos,
+        "(no args)",
     )
