@@ -144,6 +144,13 @@ def ensure_dirs():
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
 
+    # One-time migration from legacy ~/.cdh/ to ~/.onecode/
+    try:
+        from onecode.migrate import migrate_legacy_cdh_to_onecode
+        migrate_legacy_cdh_to_onecode()
+    except Exception:
+        pass
+
 
 def load_config() -> GlobalConfig:
     ensure_dirs()
