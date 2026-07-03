@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.widget import Widget
 from textual import containers
 from textual import widgets
@@ -9,6 +10,9 @@ from textual.message import Message
 
 class SideBarCollapsible(widgets.Collapsible):
     BINDING_GROUP_TITLE = "Sidebar collapsible"
+    BINDINGS = [
+        Binding("down", "focus_content", "Focus content", show=False),
+    ]
     HELP = """\
 ## Sidebar
 
@@ -19,6 +23,12 @@ The Sidebar contains additonal information associated with the conversation.
 - **tab / shift+tab** Navigate sections
 - **enter** expand or collapse secions
 """
+
+    def action_focus_content(self) -> None:
+        """Move focus into the content area when expanded."""
+        if self.collapsed:
+            return
+        self.screen.focus_next()
 
 
 class SideBar(containers.Vertical):
