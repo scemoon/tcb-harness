@@ -28,12 +28,12 @@ def ensure_cloud_spec_skill_installed() -> str | None:
     or updates if the repo version is newer.
     Returns error message if installation fails, None on success.
     """
-    from onecode.skills.loader import USER_SKILLS_DIR
+    from cdh.cdh_skill_manager import CDH_PLATFORM_SKILLS_DIR
 
     if not CLOUD_SPEC_SKILL_PATH.exists():
         return None
 
-    skill_dest = USER_SKILLS_DIR / "cloud-spec-skill"
+    skill_dest = CDH_PLATFORM_SKILLS_DIR / "cloud-spec-skill"
     dest_skills_md = skill_dest / "SKILL.md"
 
     if skill_dest.exists() and dest_skills_md.exists():

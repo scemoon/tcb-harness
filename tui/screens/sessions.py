@@ -12,7 +12,7 @@ from textual import containers
 from textual import on
 
 
-from onecode.config import CLOUD_DEV_HARNESS_DIR
+from onecode.config import ONECODE_DIR
 
 from tui.app import A2TUIApp
 from tui.db import DB
@@ -92,7 +92,7 @@ class SessionsScreen(ModalScreen[str]):
         await db.session_delete(session_pk)
 
         if agent_session_id:
-            session_file = CLOUD_DEV_HARNESS_DIR / "sessions" / f"{agent_session_id}.json"
+            session_file = ONECODE_DIR / "sessions" / f"{agent_session_id}.json"
             if session_file.exists():
                 session_file.unlink()
 

@@ -1142,7 +1142,7 @@ class A2TUIApp(App, inherit_bindings=False):
     @work
     async def action_projects(self) -> None:
         from pathlib import Path
-        from onecode.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
+        from onecode.config import load_config, save_config
         from onecode.config_screen import EditFieldScreen
         import yaml
 
@@ -1150,7 +1150,7 @@ class A2TUIApp(App, inherit_bindings=False):
         if result is None:
             cfg = load_config()
             if cfg.current_project:
-                projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+                projects_dir = Path.home() / ".cdh" / "projects"
                 pf = projects_dir / f"{cfg.current_project}.yaml"
                 if not pf.exists():
                     cfg.current_project = None
@@ -1176,7 +1176,7 @@ class A2TUIApp(App, inherit_bindings=False):
                 from cdh.scaffold import scaffold_dlc_project
                 scaffold_dlc_project(project_path, name)
                 CdhProjectLoader.init_project(project_path, name)
-                projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+                projects_dir = Path.home() / ".cdh" / "projects"
                 projects_dir.mkdir(parents=True, exist_ok=True)
                 proj_data = {"name": name, "path": str(project_path), "description": ""}
                 (projects_dir / f"{name}.yaml").write_text(yaml.dump(proj_data))
@@ -1191,7 +1191,7 @@ class A2TUIApp(App, inherit_bindings=False):
 
             project_name = result if isinstance(result, str) else getattr(result, 'name', None)
             if project_name:
-                projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+                projects_dir = Path.home() / ".cdh" / "projects"
                 project_path = None
                 for ext in ["yaml", "yml", "json"]:
                     pf = projects_dir / f"{project_name}.{ext}"

@@ -7,7 +7,6 @@ from textual import getters
 from tui.app import A2TUIApp
 from tui.widgets.grid_select import GridSelect
 from tui.widgets.project_summary import ProjectSummary
-from onecode.config import CLOUD_DEV_HARNESS_DIR
 
 
 def _read_project_path(pf: Path) -> str:
@@ -47,7 +46,7 @@ class ProjectGridSelect(GridSelect):
         return True
 
     def compose(self) -> ComposeResult:
-        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir = Path.home() / ".cdh" / "projects"
         projects_dir.mkdir(parents=True, exist_ok=True)
         project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
         for pf in sorted(project_files):
@@ -55,7 +54,7 @@ class ProjectGridSelect(GridSelect):
 
     async def reload(self) -> None:
         await self.remove_children()
-        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir = Path.home() / ".cdh" / "projects"
         projects_dir.mkdir(parents=True, exist_ok=True)
         project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
         for pf in sorted(project_files):

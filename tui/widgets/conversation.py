@@ -2510,8 +2510,7 @@ class Conversation(containers.Vertical):
 
         if sub_cmd == "list":
             from pathlib import Path
-            from onecode.config import CLOUD_DEV_HARNESS_DIR
-            projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+            projects_dir = Path.home() / ".cdh" / "projects"
             if not projects_dir.exists():
                 self.notify("No projects found", title="/project list")
                 return True
@@ -2529,8 +2528,8 @@ class Conversation(containers.Vertical):
                 self.notify("Project name required", title="/project load", severity="error")
                 return True
             from pathlib import Path
-            from onecode.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
-            projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+            from onecode.config import load_config, save_config
+            projects_dir = Path.home() / ".cdh" / "projects"
             project_file = None
             for ext in ["yaml", "yml", "json"]:
                 pf = projects_dir / f"{name}.{ext}"
@@ -2557,11 +2556,11 @@ class Conversation(containers.Vertical):
                 self.notify("Usage: /project new <name> [path]", title="/project new", severity="error")
                 return True
             from pathlib import Path
-            from onecode.config import load_config, save_config, CLOUD_DEV_HARNESS_DIR
+            from onecode.config import load_config, save_config
             from onecode.agent.cdh_loader import CdhProjectLoader
             from cdh.scaffold import scaffold_dlc_project
             import yaml
-            projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+            projects_dir = Path.home() / ".cdh" / "projects"
             projects_dir.mkdir(parents=True, exist_ok=True)
             project_path = path or str(Path.cwd())
             ws = Path(project_path).expanduser().resolve()

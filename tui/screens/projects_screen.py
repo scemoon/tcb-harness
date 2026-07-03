@@ -10,8 +10,6 @@ from textual import containers
 from textual import on
 
 
-from onecode.config import CLOUD_DEV_HARNESS_DIR
-
 from tui.app import A2TUIApp
 from tui.widgets.grid_select import GridSelect
 from tui.widgets.project_grid_select import ProjectGridSelect
@@ -28,7 +26,7 @@ def _project_db_path(name: str):
     for *name* across all supported extensions, or ``None`` if the
     project is not registered yet.
     """
-    projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+    projects_dir = Path.home() / ".cdh" / "projects"
     for ext in ("yaml", "yml", "json"):
         pf = projects_dir / f"{name}.{ext}"
         if pf.exists():
@@ -87,7 +85,7 @@ class ProjectsScreen(ModalScreen[str]):
         project_name = widget.id
         if project_name is None:
             return
-        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir = Path.home() / ".cdh" / "projects"
         deleted = False
         for ext in ["yaml", "yml", "json"]:
             pf = projects_dir / f"{project_name}.{ext}"
@@ -173,7 +171,7 @@ class ProjectsScreen(ModalScreen[str]):
                 severity="error",
             )
             return
-        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir = Path.home() / ".cdh" / "projects"
         projects_dir.mkdir(parents=True, exist_ok=True)
         proj_file = projects_dir / f"{name}.yaml"
         CdhProjectLoader.init_project(target, name)
@@ -251,7 +249,7 @@ class ProjectsScreen(ModalScreen[str]):
                 self.notify(str(e), severity="error")
         CdhProjectLoader.init_project(target, name)
         import yaml
-        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir = Path.home() / ".cdh" / "projects"
         projects_dir.mkdir(parents=True, exist_ok=True)
         proj_file = projects_dir / f"{name}.yaml"
         proj_data = {"name": name, "path": str(target), "description": ""}

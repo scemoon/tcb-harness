@@ -9,7 +9,7 @@ from textual.reactive import var
 from textual.widget import Widget
 from textual.widgets import Button, Label, Static
 
-from onecode.config import CLOUD_DEV_HARNESS_DIR, load_config, save_config
+from onecode.config import load_config, save_config
 from onecode.agent.cdh_loader import CdhProjectLoader
 from onecode.config_screen import EditFieldScreen
 
@@ -162,7 +162,7 @@ class ProjectsApp(App):
         self._refresh()
 
     def _refresh(self) -> None:
-        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir = Path.home() / ".cdh" / "projects"
         projects_dir.mkdir(parents=True, exist_ok=True)
         pf_list = sorted(
             list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
@@ -226,7 +226,7 @@ class ProjectsApp(App):
         except Exception:
             ws = Path.cwd().resolve()
         name = ws.name
-        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir = Path.home() / ".cdh" / "projects"
         projects_dir.mkdir(parents=True, exist_ok=True)
         proj_file = projects_dir / f"{name}.yaml"
         if proj_file.exists():
@@ -273,7 +273,7 @@ class ProjectsApp(App):
             self.notify(f".cdh already exists at {existing}", severity="warning")
             return
         name = target.name
-        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir = Path.home() / ".cdh" / "projects"
         projects_dir.mkdir(parents=True, exist_ok=True)
         proj_file = projects_dir / f"{name}.yaml"
         if proj_file.exists():
@@ -301,7 +301,7 @@ class ProjectsApp(App):
             self.notify("No project selected", severity="warning")
             return
         name = item._name
-        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir = Path.home() / ".cdh" / "projects"
         for ext in ["yaml", "yml", "json"]:
             pf = projects_dir / f"{name}.{ext}"
             if pf.exists():
@@ -332,7 +332,7 @@ class ProjectsApp(App):
             self.notify("No project selected", severity="warning")
             return
         name = item._name
-        projects_dir = CLOUD_DEV_HARNESS_DIR / "projects"
+        projects_dir = Path.home() / ".cdh" / "projects"
         for ext in ["yaml", "yml", "json"]:
             pf = projects_dir / f"{name}.{ext}"
             if pf.exists():
