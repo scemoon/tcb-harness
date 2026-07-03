@@ -6,15 +6,18 @@ Read once per session; behavior is enforced by the agent runtime.
 ## Project Overview
 
 - **Name**: cloud-dev-harness (CDH)
-- **Type**: monorepo — AI-driven dev tooling (Python backend + Python TUI + npm)
+- **Type**: monorepo — multi-engine AI agent integration framework
 - **Python**: >= 3.14.2
-- **Top-level layout**:
-  - `onecode/` — backend: AgentEngine, ACP adapter, tools, skills loader
-  - `tui/` — terminal UI (Textual)
-  - `cdh/` — CLI shim
-  - `npm/` — npm-registry shim package
-  - `ai-dlc-skill/` — AI-DLC methodology skill resource repo
+- **Architecture layers**:
+  - **cdh** (`cdh/`) — **Multi-engine integration platform**: launcher, project registry, platform-level skill/MCP/session management, TUI (vendored from A2TUI). Global state root: `~/.cdh/`
+  - **onecode** (`onecode/`) — **Independent agent engine** (registered as a cdh pluggable engine). Owns its own private state root: `~/.onecode/`
+  - **tui** (`tui/`) — **Terminal UI (vendored A2TUI), defaults to cdh**. State/log: `~/.cdh/state/tui/`, `~/.cdh/logs/`
+  - **opencode / claude / cursor / vtcode / …** — **Independent agent engines** with their own global state directories; registered in `tui/data/agents/*.toml`
+  - **npm/** — npm-registry shim package
+  - **ai-dlc-skill/** — AI-DLC methodology skill resource repo (source of truth; runtime install → `~/.cdh/skills/ai-dlc-skill/`)
   - `scripts/`, `tests/`, `dist/`, `cloud_dev_harness.egg-info/` — tooling & build
+
+**Key principle**: cdh owns the platform (shared skill pool, shared MCP pool, project registry, session aggregator). Each engine (onecode, opencode, claude…) manages its own private state (`~/.onecode/`, `~/.config/opencode/`, `~/.claude/` …) — no engine hardcodes `~/.cdh/` paths.
 
 ## Quality Gates
 
@@ -35,7 +38,7 @@ Hard thresholds the agent must respect and the user will gate on:
 - All public functions must have type hints
 - Line length: 100 (ruff default for this project)
 
-## FR Namespaces (AI-DLC)
+## 目标项目 (AI-DLC)
 
 Work is partitioned by component prefix. Place new code in the matching directory:
 
@@ -50,19 +53,25 @@ Work is partitioned by component prefix. Place new code in the matching director
 | TTA | TikTok Mini | `apps/tta/` |
 | INT | Contracts | `contracts/`, `packages/shared/` |
 
-Reference skill: `.opencode/skills/ai-dlc-skill/` (full AI-DLC methodology).
+> **注**: 以上是 AI-DLC skill 期望的**目标 monorepo 布局**，与 cdh 工具自身的仓库结构不同。FR 命名空间仅在 AI-DLC 生命周期中使用。
+
+Reference skill: `~/.cdh/skills/ai-dlc-skill/SKILL.md` (full AI-DLC methodology; installed by cdh platform bootstrap).
 
 ## File / Path Hygiene
 
 **Never read, write, or modify** any of these (they're local-only / secrets / build artifacts):
 
-- `.cdh/` — runtime state (managed by CLI; never hand-edit)
+- `.cdh/` — project-level runtime state (managed by CLI; never hand-edit)
 - `.opencode/`, `.claude/`, `.agents/` — tool configs (owned by user)
 - `.qwen/`, `.idea/` — IDE / tool caches
 - `dist/`, `*.egg-info/`, `__pycache__/`, `build/`, `.venv/`
 - `npm/npm_pkg/*` — npm build output
 - `.python-version`, `uv.lock` — Python toolchain pinning (user-managed)
 - `.clinerules` — legacy Cline config (kept for reference; superseded by this file)
+
+**Global state directories** (managed at runtime, do not hand-edit):
+- `~/.cdh/` — cdh platform global state (projects/, skills/, mcps/, state/, logs/)
+- `~/.onecode/` — onecode engine private state (sessions, traces, memory, mcps, skills, config)
 
 ## Forbidden Actions
 
@@ -90,7 +99,7 @@ Reference skill: `.opencode/skills/ai-dlc-skill/` (full AI-DLC methodology).
 
 ## Where to Find More
 
-- **AI-DLC methodology**: `.opencode/skills/ai-dlc-skill/SKILL.md` (load via `Skill` tool)
+- **AI-DLC methodology**: `~/.cdh/skills/ai-dlc-skill/SKILL.md` (load via `Skill` tool; installed by cdh bootstrap)
 - **Human-readable README**: `README.md`
 - **Architecture / practices**: `docs/` if present, or ask the user
 - **Legacy Cline rules**: `.clinerules` (some overlap; this file supersedes)
