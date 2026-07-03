@@ -8,7 +8,6 @@ cdh injects platform skills into engines at runtime via prompt or env var.
 
 from __future__ import annotations
 
-import json
 import shutil
 from pathlib import Path
 from typing import Optional

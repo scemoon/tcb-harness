@@ -2,21 +2,27 @@
 # onecode/export.sh — Export AI-DLC rules to onecode format
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# ai-dlc-skill root: onecode/.. → cross-tool/.. → ai-dlc-skill
-SKILL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-# project root: ai-dlc-skill → skills → .opencode → project
-PROJECT_ROOT="$(cd "$SKILL_DIR/.." && pwd)"
+# Project root: first arg or current working directory
+PROJECT_ROOT="${1:-$PWD}"
+# Skill dir: CDH platform skill pool or AI_DLC_SKILL_DIR env var
+SKILL_DIR="${AI_DLC_SKILL_DIR:-$HOME/.cdh/skills/ai-dlc-skill}"
 
-echo "  Exporting onecode configs..."
+if [ ! -d "$SKILL_DIR" ]; then
+  echo "  ✗ ai-dlc-skill not found at $SKILL_DIR" >&2
+  echo "  Run: cdh skill install ai-dlc-skill" >&2
+  exit 1
+fi
+
+echo "  Exporting onecode configs for project: $(basename "$PROJECT_ROOT")"
 
 CDH_DIR="$PROJECT_ROOT/.cdh"
+CROSS_TOOL_DIR="$SKILL_DIR/cross-tool/onecode"
 
 # 1. Generate .cdh/config.yaml if not exists
 if [ ! -f "$CDH_DIR/config.yaml" ]; then
   mkdir -p "$CDH_DIR"
   sed "s/{{project_name}}/$(basename "$PROJECT_ROOT")/g; s/{{cloud_provider}}/tcb/g; s/{{current_phase}}/understand/g; s/{{compute_mode}}/cloudbase-functions/g" \
-    "$SCRIPT_DIR/config.yaml.tpl" > "$CDH_DIR/config.yaml"
+    "$CROSS_TOOL_DIR/config.yaml.tpl" > "$CDH_DIR/config.yaml"
   echo "  ✓ $CDH_DIR/config.yaml created"
 else
   echo "  - $CDH_DIR/config.yaml exists, skipping"
@@ -43,6 +49,6 @@ cp "$SKILL_DIR/SKILL.md" "$CDH_DIR/SKILL.md"
 echo "  ✓ $CDH_DIR/SKILL.md updated"
 
 # 4. Generate component skills into apps/*/.skill/
-bash "$SCRIPT_DIR/export-skills.sh"
+bash "$CROSS_TOOL_DIR/export-skills.sh" "$PROJECT_ROOT" "$SKILL_DIR"
 
 echo "  onecode export complete."

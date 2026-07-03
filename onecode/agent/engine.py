@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import re
-import time
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
@@ -803,7 +802,6 @@ class AgentEngine:
             create_agent,
             PLAN_INSTRUCTIONS,
             REACT_CYCLE,
-            TOOL_DESCRIPTIONS,
             filter_tool_descriptions,
         )
         self.current_agent = create_agent(agent_type)
@@ -867,7 +865,7 @@ class AgentEngine:
         self._perm_store.apply_to(self.current_agent)
 
     def get_available_tools(self) -> str:
-        from onecode.agent.agents.types import TOOL_DESCRIPTIONS, filter_tool_descriptions
+        from onecode.agent.agents.types import filter_tool_descriptions
         return filter_tool_descriptions(
             allowlist=self.current_agent.tools or None,
             denylist=self.current_agent.disallowed_tools or None,
@@ -2321,7 +2319,6 @@ class AgentEngine:
         if self.current_agent.permission_task == AgentPermission.DENY:
             return {"success": False, "error": "Subagent denied"}
         import asyncio
-        import concurrent.futures
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():

@@ -88,7 +88,6 @@ from onecode.models.registry import ModelRegistry
 from onecode.models.messages import (
     StreamEventType,
     ToolCategory,
-    AgentMessage,
     TextBlock,
     ThinkBlock,
     ToolCall as MsgToolCall,
@@ -97,14 +96,8 @@ from onecode.models.messages import (
     LifecycleStatus,
     get_tool_category,
 )
+import onecode.models.providers  # noqa: F401  trigger ProviderRegistry.register()
 
-from onecode.models.providers.minimaxi_provider import MiniMaxiProvider
-from onecode.models.providers.minimax_provider import MiniMaxProvider
-from onecode.models.providers.anthropic_provider import AnthropicProvider
-from onecode.models.providers.openai_provider import OpenAIProvider
-from onecode.models.providers.deepseek_provider import DeepSeekProvider
-from onecode.models.providers.glm_provider import GLMProvider
-from onecode.models.providers.ollama_provider import OllamaProvider
 
 
 _CATEGORY_TO_ACP_KIND: dict[str, str] = {
@@ -2214,7 +2207,7 @@ class CDHACPAdapter:
             self._thought_chunker.flush()
             self.send_session_update({
                 "sessionUpdate": "agent_message_chunk",
-                "content": {"type": "text", "text": f"Error: internal error"},
+                "content": {"type": "text", "text": "Error: internal error"},
             })
             try:
                 self.agent.save_session()

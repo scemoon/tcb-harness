@@ -27,13 +27,12 @@ def _build_screen(home_dot_cdh: Path):
 
     The screen is created without ``__init__`` so the textual
     ModalScreen base is bypassed; we only need the methods under test.
-    Also patches the ``CLOUD_DEV_HARNESS_DIR`` binding inside the
-    projects_screen module so writes land in the test sandbox.
+    The projects dir is resolved at runtime via ``Path.home()``, so
+    the caller must patch ``Path.home`` via monkeypatch (see
+    ``sandbox`` fixture).
     """
     from tui.screens import projects_screen
     from tui.widgets.project_grid_select import ProjectGridSelect
-
-    projects_screen.CLOUD_DEV_HARNESS_DIR = home_dot_cdh
 
     screen = projects_screen.ProjectsScreen.__new__(projects_screen.ProjectsScreen)
     screen.app = MagicMock()
@@ -53,7 +52,6 @@ def _build_grid(home_dot_cdh: Path):
     """Return a ProjectGridSelect instance with a sandboxed projects dir."""
     from tui.widgets import project_grid_select
 
-    project_grid_select.CLOUD_DEV_HARNESS_DIR = home_dot_cdh
     return project_grid_select.ProjectGridSelect.__new__(
         project_grid_select.ProjectGridSelect
     )
@@ -62,9 +60,12 @@ def _build_grid(home_dot_cdh: Path):
 @pytest.fixture
 def sandbox(monkeypatch, tmp_path):
     """Per-test sandbox with an isolated ``~/.cdh/projects`` directory."""
-    home_dot_cdh = tmp_path / "home" / ".cdh"
+    test_home = tmp_path / "home"
+    test_home.mkdir(parents=True)
+    home_dot_cdh = test_home / ".cdh"
     home_dot_cdh.mkdir(parents=True)
     (home_dot_cdh / "projects").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(Path, "home", lambda: test_home)
     return home_dot_cdh
 
 

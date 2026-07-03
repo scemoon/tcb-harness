@@ -42,7 +42,6 @@ class MCPTool(Tool):
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                import threading
                 future = asyncio.run_coroutine_threadsafe(
                     self._mcp.call_tool(server, tool_name, args), loop
                 )
@@ -104,7 +103,6 @@ class MCPResourcesTool(Tool):
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                import threading
                 if action == "list":
                     future = asyncio.run_coroutine_threadsafe(
                         client._send_request("resources/list", {}), loop

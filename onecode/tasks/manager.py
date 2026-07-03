@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -16,8 +16,6 @@ from onecode.tasks.models import (
     TaskChecklistState,
     TaskGateRecord,
     TaskToolCallSummary,
-    TodoItem,
-    TodoStatus,
 )
 
 
@@ -148,7 +146,6 @@ class TaskManager:
         return [t for t in self._tasks.values() if t.status == status]
 
     def add_todo_to_task(self, task_id: str, content: str, status: str = "pending") -> Optional["TaskChecklistItem"]:
-        from onecode.tasks.models import TaskChecklistItem
         task = self._tasks.get(task_id)
         if not task:
             return None

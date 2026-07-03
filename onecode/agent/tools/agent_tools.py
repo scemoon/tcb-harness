@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from onecode.agent.tools.protocol import ToolResult
@@ -118,7 +117,6 @@ class TaskTool(Tool):
                 is_error=True,
             )
         import asyncio
-        import concurrent.futures
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():

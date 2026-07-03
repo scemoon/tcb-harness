@@ -9,12 +9,11 @@ from typing import Optional
 from sqlalchemy import (
     Column,
     String,
-    Text,
     DateTime,
     JSON,
     create_engine,
 )
-from sqlalchemy.orm import declarative_base, Session as SASession, sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 from onecode.config import ONECODE_DIR
 

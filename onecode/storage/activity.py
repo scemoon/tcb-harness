@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import Column, String, Text, DateTime, JSON, create_engine
+from sqlalchemy import Column, String, DateTime, JSON, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from onecode.config import ONECODE_DIR

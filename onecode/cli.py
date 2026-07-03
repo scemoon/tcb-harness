@@ -2,9 +2,8 @@ import click
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Optional
 
-from onecode.config import ensure_dirs, load_config, save_config
+from onecode.config import load_config, save_config
 
 LOG_DIR = Path.home() / ".onecode" / "logs"
 LOG_FILE = LOG_DIR / "onecode.log"
@@ -619,7 +618,7 @@ def codebase():
 def codebase_index(force: bool, path: str):
     """Index project files for codebase search."""
     import asyncio
-    from onecode.codebase import CodebaseEngine, CodebaseConfig
+    from onecode.codebase import CodebaseEngine
 
     project_dir = Path(path).resolve()
     if not project_dir.is_dir():

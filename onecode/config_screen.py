@@ -7,7 +7,7 @@ from textual.containers import Horizontal, Vertical
 from textual.reactive import var
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Button, Input, Label, Select, Static
+from textual.widgets import Button, Input, Label, Static
 
 from onecode.config import GlobalConfig, load_config, resolve_env, save_config
 

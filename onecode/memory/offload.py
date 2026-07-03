@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -66,7 +65,6 @@ class ContextOffloader:
 
     def cleanup_old_refs(self, max_age_hours: int = 24) -> int:
         import time
-        from datetime import datetime, timezone
         removed = 0
         for ref_file in self.refs_dir.iterdir():
             if ref_file.is_file():

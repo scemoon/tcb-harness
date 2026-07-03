@@ -5,7 +5,6 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
 
 from onecode.config import ONECODE_DIR

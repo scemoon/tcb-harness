@@ -2,9 +2,13 @@
 # export-skills.sh — Generate per-component .skill/SKILL.md from components/*.md
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PROJECT_ROOT="$(cd "$SKILL_DIR/.." && pwd)"
+PROJECT_ROOT="${1:-$PWD}"
+SKILL_DIR="${2:-${AI_DLC_SKILL_DIR:-$HOME/.cdh/skills/ai-dlc-skill}}"
+
+if [ ! -d "$SKILL_DIR" ]; then
+  echo "  ✗ ai-dlc-skill not found at $SKILL_DIR" >&2
+  exit 1
+fi
 
 echo "Generating component skills in $PROJECT_ROOT/apps/*/.skill/"
 

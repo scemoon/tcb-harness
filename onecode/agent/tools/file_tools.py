@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from onecode.agent.tools.file_ops import FileOps
 from onecode.agent.tools.protocol import ToolResult

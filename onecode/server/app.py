@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, Response

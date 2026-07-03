@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy import Column, String, Text, Integer, Float, create_engine, Index
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 from onecode.codebase.chunker import CodeChunk
 

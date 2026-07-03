@@ -5,9 +5,7 @@ import click
 
 from cdh.scaffold import (
     COMPONENTS,
-    COMPONENT_BY_ID,
     CROSS_CUTTING,
-    CROSS_CUTTING_BY_ID,
     add_component,
     add_cross_cutting,
     init_dlc_project,
