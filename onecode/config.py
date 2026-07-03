@@ -149,6 +149,12 @@ def load_config() -> GlobalConfig:
     ensure_dirs()
     if not GLOBAL_CONFIG_PATH.exists():
         _write_default_config()
+    # Bootstrap ai-dlc-skill from source into cdh platform pool
+    try:
+        from onecode.skills.bootstrap import ensure_ai_dlc_skill
+        ensure_ai_dlc_skill()
+    except Exception:
+        pass
     raw = yaml.safe_load(GLOBAL_CONFIG_PATH.read_text()) or {}
     return _dict_to_dataclass(GlobalConfig, raw)
 
