@@ -21,8 +21,8 @@ class ContextOffloader:
         refs_dir: Optional[Path] = None,
         config: Optional[OffloadConfig] = None,
     ):
-        from onecode.config import CLOUD_DEV_HARNESS_DIR
-        self.refs_dir = refs_dir or (CLOUD_DEV_HARNESS_DIR / "memory" / "refs")
+        from onecode.config import ONECODE_DIR
+        self.refs_dir = refs_dir or (ONECODE_DIR / "memory" / "refs")
         self.refs_dir.mkdir(parents=True, exist_ok=True)
         self.config = config or OffloadConfig()
         self._offloaded_refs: dict[str, Path] = {}

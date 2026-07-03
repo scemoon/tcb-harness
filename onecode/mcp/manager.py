@@ -9,7 +9,7 @@ from typing import Any, Optional
 import httpx
 import yaml
 
-from onecode.config import CLOUD_DEV_HARNESS_DIR
+from onecode.config import ONECODE_DIR
 from onecode.mcp.client import MCPClient, MCPTool
 
 logger = logging.getLogger("onecode.mcp")
@@ -83,7 +83,7 @@ class MCPSSEClient:
 
 class MCPManager:
     def __init__(self):
-        self.config_dir = CLOUD_DEV_HARNESS_DIR / "mcps"
+        self.config_dir = ONECODE_DIR / "mcps"
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.config_path = self.config_dir / "mcps.yaml"
         self._data: dict = {}

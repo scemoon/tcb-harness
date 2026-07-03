@@ -1415,7 +1415,7 @@ class AgentEngine:
             # Log the raw model response so developers can verify the
             # model is actually emitting ``<thinking>`` markers (and not
             # bleeding planning prose into the visible answer).  Goes
-            # to the onecode root logger → ~/.cdh/logs/cdh.log when
+            # to the onecode root logger → ~/.onecode/logs/onecode.log when
             # ``setup_logging(DEBUG)`` is in effect.
             logger.debug(
                 "RAW_RESPONSE turn=%d text_len=%d first_200=%r "

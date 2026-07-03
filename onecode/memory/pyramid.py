@@ -69,8 +69,8 @@ class MemoryEntry:
 
 class MemoryPyramid:
     def __init__(self, storage_path: Optional[Path] = None):
-        from onecode.config import CLOUD_DEV_HARNESS_DIR
-        self.storage_path = storage_path or (CLOUD_DEV_HARNESS_DIR / "memory")
+        from onecode.config import ONECODE_DIR
+        self.storage_path = storage_path or (ONECODE_DIR / "memory")
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self._layers = {layer: [] for layer in MemoryLayer}
         self._load_index()

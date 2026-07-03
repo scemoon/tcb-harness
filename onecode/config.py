@@ -6,8 +6,8 @@ from typing import Any, Optional
 import yaml
 
 
-CLOUD_DEV_HARNESS_DIR = Path.home() / ".cdh"
-GLOBAL_CONFIG_PATH = CLOUD_DEV_HARNESS_DIR / "onecode.config.yaml"
+ONECODE_DIR = Path.home() / ".onecode"
+GLOBAL_CONFIG_PATH = ONECODE_DIR / "onecode.config.yaml"
 
 
 @dataclass
@@ -22,7 +22,7 @@ class ObservabilityConfig:
     trace_enabled: bool = True
     trace_exporter: str = "file"
     otlp_endpoint: str = "http://localhost:4317"
-    trace_dir: str = "~/.cdh/traces"
+    trace_dir: str = "~/.onecode/traces"
 
 
 @dataclass
@@ -133,13 +133,13 @@ def _dict_to_dataclass(cls, data: dict):
 
 def ensure_dirs():
     dirs = [
-        CLOUD_DEV_HARNESS_DIR,
-        CLOUD_DEV_HARNESS_DIR / "sessions",
-        CLOUD_DEV_HARNESS_DIR / "skills",
-        CLOUD_DEV_HARNESS_DIR / "mcps",
-        CLOUD_DEV_HARNESS_DIR / "traces",
-        CLOUD_DEV_HARNESS_DIR / "logs",
-        CLOUD_DEV_HARNESS_DIR / "models",
+        ONECODE_DIR,
+        ONECODE_DIR / "sessions",
+        ONECODE_DIR / "skills",
+        ONECODE_DIR / "mcps",
+        ONECODE_DIR / "traces",
+        ONECODE_DIR / "logs",
+        ONECODE_DIR / "models",
     ]
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
@@ -201,7 +201,7 @@ def _write_default_config():
             "trace_enabled": True,
             "trace_exporter": "file",
             "otlp_endpoint": "http://localhost:4317",
-            "trace_dir": "~/.cdh/traces",
+            "trace_dir": "~/.onecode/traces",
         },
         "attachments": {
             "max_size_mb": 10,

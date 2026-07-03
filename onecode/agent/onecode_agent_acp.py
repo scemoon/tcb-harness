@@ -58,16 +58,16 @@ def info_log(*args, **kwargs):
         print("[onecode]", *args, file=sys.stderr, flush=True)
 
 
-_CRASH_LOG_DIR = Path.home() / ".cdh" / "logs"
+_CRASH_LOG_DIR = Path.home() / ".onecode" / "logs"
 
 
 def _dump_crash(context: str) -> None:
-    """Write traceback to ``~/.cdh/logs/cdh_crash.log`` so it survives subprocess exit."""
+    """Write traceback to ``~/.onecode/logs/onecode_crash.log`` so it survives subprocess exit."""
     import os
     import traceback
     now = __import__("datetime").datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     _CRASH_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    path = _CRASH_LOG_DIR / "cdh_crash.log"
+    path = _CRASH_LOG_DIR / "onecode_crash.log"
     try:
         lines = [f"=== crash at {now} context={context} ===\n"]
         for tb_line in traceback.format_exc().splitlines(True):
@@ -2627,7 +2627,7 @@ def main():
     # subprocess never called ``setup_logging`` (only the ``cli`` command
     # path did), so every ``logger.debug(...)`` / ``debug_log(...)`` call
     # in the engine/provider/ACP layers was silently dropped and
-    # ``~/.cdh/logs/cdh.log`` stayed empty during live reproductions.
+    # ``~/.onecode/logs/onecode.log`` stayed empty during live reproductions.
     # Honour the same ``CDH_LOG_LEVEL`` env var as the CLI so users can
     # turn on DEBUG diagnostics without code changes.
     import os

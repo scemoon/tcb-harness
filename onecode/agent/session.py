@@ -72,8 +72,8 @@ class AgentSession:
             self._data.id = session_id
 
     def _default_storage_path(self) -> Path:
-        from onecode.config import CLOUD_DEV_HARNESS_DIR
-        return CLOUD_DEV_HARNESS_DIR / "sessions"
+        from onecode.config import ONECODE_DIR
+        return ONECODE_DIR / "sessions"
 
     @property
     def id(self) -> str:

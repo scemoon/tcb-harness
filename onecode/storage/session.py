@@ -16,7 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, Session as SASession, sessionmaker
 
-from onecode.config import CLOUD_DEV_HARNESS_DIR
+from onecode.config import ONECODE_DIR
 
 Base = declarative_base()
 
@@ -43,7 +43,7 @@ class SessionRecord(Base):
 class SessionStore:
     def __init__(self, db_path: Optional[Path] = None):
         if db_path is None:
-            db_path = CLOUD_DEV_HARNESS_DIR / "sessions" / "cdh.db"
+            db_path = ONECODE_DIR / "sessions" / "cdh.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(f"sqlite:///{db_path}")
         Base.metadata.create_all(self.engine)

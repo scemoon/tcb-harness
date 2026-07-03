@@ -9,10 +9,10 @@ import yaml
 from onecode.skills.frontmatter import parse_frontmatter
 from onecode.skills.model import Skill
 
-from onecode.config import CLOUD_DEV_HARNESS_DIR
+from onecode.config import ONECODE_DIR
 
 
-USER_SKILLS_DIR = CLOUD_DEV_HARNESS_DIR / "skills"
+USER_SKILLS_DIR = ONECODE_DIR / "skills"
 
 
 class SkillLoader:

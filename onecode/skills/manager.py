@@ -5,12 +5,12 @@ from typing import Optional
 
 import yaml
 
-from onecode.config import CLOUD_DEV_HARNESS_DIR
+from onecode.config import ONECODE_DIR
 
 
 class SkillManager:
     def __init__(self):
-        self.skills_dir = CLOUD_DEV_HARNESS_DIR / "skills"
+        self.skills_dir = ONECODE_DIR / "skills"
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         self._skills: dict[str, dict] = {}
 

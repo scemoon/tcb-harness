@@ -25,8 +25,8 @@ class SnapshotInfo:
 
 class SnapshotManager:
     def __init__(self, base_path: Optional[Path] = None):
-        from onecode.config import CLOUD_DEV_HARNESS_DIR
-        self.base_path = base_path or (CLOUD_DEV_HARNESS_DIR / "snapshots")
+        from onecode.config import ONECODE_DIR
+        self.base_path = base_path or (ONECODE_DIR / "snapshots")
         self.base_path.mkdir(parents=True, exist_ok=True)
 
     def create(

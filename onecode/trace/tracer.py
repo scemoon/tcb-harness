@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from onecode.config import CLOUD_DEV_HARNESS_DIR
+from onecode.config import ONECODE_DIR
 
 
 class Span:
@@ -55,7 +55,7 @@ class Tracer:
         self.recording: bool = False
         self.spans: list[Span] = []
         self.stack: list[str] = []
-        self.trace_dir = CLOUD_DEV_HARNESS_DIR / "traces"
+        self.trace_dir = ONECODE_DIR / "traces"
         self.trace_dir.mkdir(parents=True, exist_ok=True)
         self._otlp_endpoint: Optional[str] = None
 

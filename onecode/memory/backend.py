@@ -11,7 +11,7 @@ from typing import Optional
 from sqlalchemy import Column, String, Text, DateTime, JSON, create_engine, Index
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
-from onecode.config import CLOUD_DEV_HARNESS_DIR
+from onecode.config import ONECODE_DIR
 
 
 Base = declarative_base()
@@ -47,7 +47,7 @@ class RefRecord(Base):
 class MemoryBackend:
     def __init__(self, db_path: Optional[Path] = None):
         if db_path is None:
-            db_path = CLOUD_DEV_HARNESS_DIR / "memory" / "memory.db"
+            db_path = ONECODE_DIR / "memory" / "memory.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
         Base.metadata.create_all(self.engine)

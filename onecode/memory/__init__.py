@@ -40,8 +40,8 @@ class AgentMemory:
     """
 
     def __init__(self, storage_path=None):
-        from onecode.config import CLOUD_DEV_HARNESS_DIR
-        self.storage_path = storage_path or (CLOUD_DEV_HARNESS_DIR / "memory")
+        from onecode.config import ONECODE_DIR
+        self.storage_path = storage_path or (ONECODE_DIR / "memory")
         self.backend = MemoryBackend(self.storage_path / "memory.db")
         self.pyramid = MemoryPyramid(self.storage_path)
         self.symbolic = SymbolicMemory()
