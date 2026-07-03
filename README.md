@@ -242,9 +242,7 @@ Environment variables are interpolated with `${VAR}` syntax in config values.
 │   ├── run.js           # Shared logic (Python version check, install, spawn)
 │   ├── package.json     # npm package metadata
 │   └── build-package.sh # Build/publish script
-├── .opencode/              # opencode integration
-│   ├── skills/ai-dlc-skill → ../../ai-dlc-skill   # Skill symlink
-│   └── package.json       # @opencode-ai/plugin dependency
+├── .opencode/              # opencode integration (deleted ai-dlc-skill; moved to cdh platform)
 ├── scripts/                # CI/Dev utilities
 │   └── check_tui_no_print.py  # AST-based guard against bare print() in TUI code
 ├── tests/                  # pytest test suite (14 files)
@@ -324,24 +322,27 @@ The `lsp` tool supports:
 
 Skills are markdown-based instruction sets with YAML frontmatter, injected into the agent's system prompt at startup.
 
-### Multi-CLI Discovery Architecture
+### Platform Discovery Architecture
 
-CDH uses a **symlink-based broadcast** + **plugin bridge** approach to make skills work uniformly across all CLIs:
+CDH uses a **layered discovery** approach: the cdh platform owns the shared skill pool, while each engine discovers its own skills independently.
 
 ```
-ai-dlc-skill/SKILL.md  ←  single source of truth (YAML frontmatter + markdown body)
+ai-dlc-skill/SKILL.md  ←  single source of truth (repository root)
          │
-         ├── .opencode/skills/ai-dlc-skill → ../..        (opencode auto-load)
-         ├── .claude/skills/ai-dlc-skill   → ../..        (Claude Code auto-load)
-         ├── .agents/skills/ai-dlc-skill   → ../..        (OpenAI Codex / Cursor / Continue.dev)
-         └── onecode/builtin_skills/ai-dlc    → ../../ai-dlc-skill  (onecode built-in)
+         ├── cdh bootstrap → ~/.cdh/skills/ai-dlc-skill/   (cdh platform pool)
+         ├── cross-tool/opencode/export.sh                  (symlink to opencode's dir)
+         ├── cross-tool/claude/export.sh                    (symlink to Claude Code's dir)
+         └── cross-tool/cursor/export.sh                    (symlink to Cursor's dir)
 ```
 
 ### Discovery Paths
 
-CDH searches for skills in:
-- `~/.onecode/skills/<name>/SKILL.md` — User skills
-- `builtin_skills/` — Skills bundled with CDH (ai-dlc, git, shell)
+**cdh platform** (shared pool, injected to all engines at runtime):
+- `~/.cdh/skills/<name>/SKILL.md` — Platform-level skills installed by `cdh skill install`
+
+**Engine-specific** (managed by each engine independently):
+- `~/.onecode/skills/<name>/SKILL.md` — onecode user skills (engine-private)
+- `builtin_skills/` — Skills bundled with onecode (git, shell)
 - `.opencode/skills/<name>/SKILL.md` — OpenCode compatible
 - `.claude/skills/<name>/SKILL.md` — Claude Code compatible
 - `.agents/skills/<name>/SKILL.md` — Agent protocol compatible (OpenAI Codex, Cursor, Continue.dev)
@@ -365,7 +366,7 @@ The **adaptive flow** (`core/adaptive-flow.md`) automatically selects phases bas
 - L4 full-stack + deploy → Understand → Plan → Verify → Deliver
 - L5 architecture refactoring → Plan → Verify
 
-When you run `cdh`, `opencode`, `claude`, or `openai codex` in this repo, the agent automatically loads ai-dlc-skill and follows the adaptive workflow — no manual activation needed.
+When you run `cdh`, cdh platform bootstrap automatically installs and syncs ai-dlc-skill to `~/.cdh/skills/ai-dlc-skill/` and injects it into the active engine (onecode / opencode / claude / cursor …) — no manual activation needed. Each engine may also discover the skill independently via its own `export.sh` in `ai-dlc-skill/cross-tool/`.
 
 ### Skill Frontmatter
 
