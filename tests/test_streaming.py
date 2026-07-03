@@ -206,6 +206,43 @@ class TestBuildToolCallContent:
         assert "```bash" in text
         assert "$ ls -la" in text
 
+    def test_list_is_header_only(self):
+        from onecode.agent.onecode_agent_acp import _build_tool_call_content
+
+        result = _build_tool_call_content("List", {"path": "/tmp"})
+        assert result == []
+
+    def test_grep_emits_pattern_block(self):
+        from onecode.agent.onecode_agent_acp import _build_tool_call_content
+
+        result = _build_tool_call_content("Grep", {"pattern": "def run"})
+        assert len(result) == 1
+        text = result[0]["content"]["text"]
+        assert "🔍 Pattern" in text
+        assert "def run" in text
+        assert "📁 Filter" not in text
+
+    def test_grep_with_include_shows_filter(self):
+        from onecode.agent.onecode_agent_acp import _build_tool_call_content
+
+        result = _build_tool_call_content(
+            "Grep", {"pattern": "TODO", "include": "*.py"}
+        )
+        assert len(result) == 1
+        text = result[0]["content"]["text"]
+        assert "🔍 Pattern" in text
+        assert "TODO" in text
+        assert "📁 Filter" in text
+        assert "*.py" in text
+
+    def test_grep_empty_pattern_falls_back_to_json(self):
+        from onecode.agent.onecode_agent_acp import _build_tool_call_content
+
+        result = _build_tool_call_content("Grep", {"pattern": ""})
+        assert len(result) == 1
+        text = result[0]["content"]["text"]
+        assert "```json" in text
+
     def test_unknown_tool_falls_back_to_json(self):
         from onecode.agent.onecode_agent_acp import _build_tool_call_content
 
@@ -441,3 +478,36 @@ class TestStreamingWatchdog:
             and "after-flush text" in u["content"]["text"]
             for u in updates
         )
+
+
+class TestBashOutputFormat:
+    """_format_bash_output produces a single fenced code block with bash lang."""
+
+    def test_stdout_only(self):
+        from onecode.agent.tools.bash_tool import BashTool
+
+        out = BashTool._format_bash_output("hello\nworld", "", "", False)
+        assert out.startswith("```bash\n")
+        assert out.endswith("\n```")
+        assert "hello" in out
+        assert "world" in out
+
+    def test_stderr_only(self):
+        from onecode.agent.tools.bash_tool import BashTool
+
+        out = BashTool._format_bash_output("", "warn: oops", "", False)
+        assert out.startswith("```bash\n")
+        assert "[stderr]" in out
+        assert "warn: oops" in out
+
+    def test_error_only(self):
+        from onecode.agent.tools.bash_tool import BashTool
+
+        out = BashTool._format_bash_output("", "", "boom", True)
+        assert "[error] boom" in out
+
+    def test_no_output_marker(self):
+        from onecode.agent.tools.bash_tool import BashTool
+
+        assert BashTool._format_bash_output("", "", "", False) == "(no output)"
+        assert BashTool._format_bash_output("", "", "", True) == "(failed with no output)"

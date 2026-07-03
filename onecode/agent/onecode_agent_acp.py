@@ -386,6 +386,18 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
                 },
             }]
 
+    if name == "Grep":
+        pattern = str(arguments.get("pattern", ""))
+        include = arguments.get("include")
+        if pattern:
+            text = f"🔍 Pattern: `{pattern}`"
+            if include:
+                text += f"\n📁 Filter: `{include}`"
+            return [{
+                "type": "content",
+                "content": {"type": "text", "text": text},
+            }]
+
     if name == "ApplyPatch":
         patch = str(arguments.get("patch", ""))
         if patch:
@@ -1251,7 +1263,10 @@ class CDHACPAdapter:
         self._emit_plan_update_to_tui()
 
         if not loaded:
-            return {"modes": _DEFAULT_MODES}
+            return {
+                "modes": _DEFAULT_MODES,
+                "error": f"Session {session_id} not found at {self.agent._session.storage_path}",
+            }
 
         # Walk the in-memory context (preserves list-of-blocks structure)
         # instead of the raw _session.messages dicts, which only carry
@@ -1783,6 +1798,10 @@ class CDHACPAdapter:
                                 pattern = str(event.tool_args.get("pattern", ""))
                                 if pattern:
                                     title = f"Glob: {pattern}"
+                            elif event.tool_name == "Grep":
+                                pattern = str(event.tool_args.get("pattern", ""))
+                                if pattern:
+                                    title = f"Grep: {pattern}"
                             content = _build_tool_call_content(
                                 event.tool_name, event.tool_args
                             )
@@ -1827,6 +1846,11 @@ class CDHACPAdapter:
                         event.result_content or "", tname,
                     )
 
+                    # For edit/write tools the diff/code block + header ✔ status is
+                    # sufficient — skip the redundant "✓ /path" result text.
+                    if display_text and self.tool_calls.get(event.tool_id, {}).get("kind") == "edit":
+                        display_text = ""
+
                     # Update title with path/subject from result if not already set
                     if event.result_content and event.tool_id in self.tool_calls:
                         try:
@@ -1856,14 +1880,14 @@ class CDHACPAdapter:
                     # Wrap multi-line results in a fenced code block so they
                     # display as a code block rather than a raw paragraph.
                     # For Read results, detect language from the file path.
-                    # For Bash/Glob, use bash-style fence.
+                    # For Bash/Glob/Grep/List, use bash-style fence.
                     # Skip if already contains a code fence to avoid nesting.
                     if display_text and "\n" in display_text and "```" not in display_text:
                         lang = ""
                         tool_info = self.tool_calls.get(event.tool_id, {})
                         tname = tool_info.get("_tool_name", "")
                         targs = tool_info.get("_tool_args", {})
-                        if tname in ("Bash", "Glob"):
+                        if tname in ("Bash", "Glob", "Grep", "List"):
                             lang = "bash"
                         elif tname == "Read" and isinstance(targs, dict):
                             path = str(targs.get("path", ""))

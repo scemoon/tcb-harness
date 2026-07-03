@@ -95,17 +95,17 @@ class BashTool(Tool):
 
         Stderr is rendered first when present so failures are visible,
         the underlying ``error`` string is included for non-zero exits /
-        transport failures, and both streams are fenced so the TUI
-        renders them as code blocks.
+        transport failures, and the result is fenced so the TUI renders
+        it as a code block with bash syntax highlighting.
         """
         parts: list[str] = []
         if error.strip():
             parts.append(f"[error] {error.strip()}")
         if stderr.strip():
-            parts.append(f"```\n[stderr]\n{stderr.rstrip()}\n```")
+            parts.append(f"[stderr]\n{stderr.rstrip()}")
         if stdout.strip():
-            parts.append(f"```\n{stdout.rstrip()}\n```")
+            parts.append(stdout.rstrip())
         if not parts:
             return "(no output)" if not is_error else "(failed with no output)"
-        return "\n\n".join(parts)
+        return "```bash\n" + "\n\n".join(parts) + "\n```"
 
