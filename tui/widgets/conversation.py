@@ -183,7 +183,12 @@ class Cursor(Static):
         self.blink_timer = self.set_interval(0.5, self._update_blink, pause=True)
 
     def _update_blink(self) -> None:
-        if self.query_ancestor(Window).has_focus and self.screen.is_active:
+        try:
+            window = self.query_ancestor(Window)
+        except NoMatches:
+            self.blink = True
+            return
+        if window.has_focus and self.screen.is_active:
             self.blink = not self.blink
         else:
             self.blink = False
@@ -1201,12 +1206,10 @@ class Conversation(containers.Vertical):
                         )
 
                 case "subagent_tool_call":
-                    # Defer mounting: ToolCall widgets must mount INSIDE the
-                    # SubAgent (after it is mounted below), so stash them.
                     sa = created_subagents.get(entry["id"])
                     if sa is not None:
-                        sa._pending_tool_calls.append(
-                            (entry["tool_id"], entry["tool_call"])
+                        await sa.add_or_update_tool_call(
+                            entry["tool_id"], entry["tool_call"]
                         )
 
                 case "ask_user":
@@ -1221,12 +1224,6 @@ class Conversation(containers.Vertical):
 
         if widgets:
             await self.contents.mount(*widgets)
-        # Mount deferred subagent tool cards now that their SubAgent parents
-        # are mounted and composed.
-        for sa in created_subagents.values():
-            for tool_id, tc in sa._pending_tool_calls:
-                await sa.add_or_update_tool_call(tool_id, tc)
-            sa._pending_tool_calls.clear()
         self._replay_buffer.clear()
         self._complete_thought()
         self.window.scroll_end_if_following(animate=False)

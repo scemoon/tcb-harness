@@ -6,7 +6,7 @@ from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Grid, VerticalGroup, VerticalScroll
+from textual.containers import Grid, Vertical, VerticalGroup, VerticalScroll
 from textual.css.query import NoMatches
 from textual.geometry import Offset, Region, Spacing
 from textual.layouts.vertical import WidgetPlacement
@@ -19,13 +19,17 @@ from tui.menus import MenuItem
 from tui.protocol import ExpandProtocol, MenuProtocol
 from tui.widgets.agent_response import AgentResponse
 from tui.widgets.agent_thought import AgentThought
-from tui.widgets.conversation import Cursor, CursorContainer
+from tui.widgets.conversation import Cursor
 from tui.widgets.menu import Menu
 from tui.widgets.subagent import SubAgent
 from tui.widgets.tool_call import ToolCall as ToolCallWidget
 
 _sa_logger = logging.getLogger("tui.widgets.subagent_screen")
 
+_TODO_TOOLS: frozenset[str] = frozenset({
+    "TodoCreate", "TodoGet", "TodoList", "TodoUpdate",
+    "TodoOutput", "TodoStop", "TodoClear",
+})
 
 _SELECTABLE_BLOCK_TYPES: tuple[type[Widget], ...] = (
     AgentResponse,
@@ -36,6 +40,10 @@ _SELECTABLE_BLOCK_TYPES: tuple[type[Widget], ...] = (
 
 def _is_selectable(child: Widget) -> bool:
     return isinstance(child, _SELECTABLE_BLOCK_TYPES)
+
+
+class SubAgentCursorContainer(Vertical):
+    """Cursor container without full-height ▌ rendering — only Cursor border-left highlights blocks."""
 
 
 class SubAgentScreen(Screen):
@@ -92,7 +100,6 @@ class SubAgentScreen(Screen):
     #cursor-container {
         width: 1;
         height: auto;
-        color: $foreground 7%;
 
         &> Cursor {
             height: 0;
@@ -194,9 +201,7 @@ class SubAgentScreen(Screen):
     def __init__(self, subagent: SubAgent) -> None:
         super().__init__()
         self.subagent = subagent
-        self._events_idx: int = 0
-        self._sync_pending = False
-        self._post_lock = asyncio.Lock()
+        self._event_lock = asyncio.Lock()
         self._current_response: AgentResponse | None = None
         self._current_thought: AgentThought | None = None
         self._auto_follow = True
@@ -205,7 +210,7 @@ class SubAgentScreen(Screen):
         yield Header(show_clock=False)
         with VerticalScroll(id="scroll"):
             with Grid(id="content-grid"):
-                with CursorContainer(id="cursor-container"):
+                with SubAgentCursorContainer(id="cursor-container"):
                     yield Cursor()
                 with VerticalGroup(id="content-wrap"):
                     yield self.Content(id="content")
@@ -221,62 +226,79 @@ class SubAgentScreen(Screen):
     # ── Lifecycle ──
 
     async def on_mount(self) -> None:
-        self.subagent._update_callbacks.append(self._on_subagent_update)
-        await self._sync_ui()
+        # Subscribe first so we don't miss events during replay
+        self.subagent._screen_handler = self._on_event
+        # Replay all existing events with yields so the UI can render progressively
+        await self._replay_all()
         try:
             self.query_one("#scroll", VerticalScroll).focus()
         except Exception:
             pass
 
     def on_unmount(self) -> None:
+        self.subagent._screen_handler = None
         self._current_response = None
         self._current_thought = None
-        try:
-            self.subagent._update_callbacks.remove(self._on_subagent_update)
-        except ValueError:
-            pass
 
     # ── Event processing ──
 
-    def _on_subagent_update(self) -> None:
-        if self._sync_pending:
-            return
-        self._sync_pending = True
-        self.run_worker(self._sync_ui(), exit_on_error=False)
+    async def _replay_all(self) -> None:
+        """Process every event already in ``subagent._events``.
 
-    async def _sync_ui(self) -> None:
+        Each event is followed by ``await asyncio.sleep(0)`` so the layout
+        can settle between mounts – this avoids a long blocking stall
+        before the screen becomes visible.
+        """
         try:
-            async with self._post_lock:
-                container = self.query_one("#content", VerticalGroup)
-                while self._events_idx < len(self.subagent._events):
-                    entry = self.subagent._events[self._events_idx]
-                    self._events_idx += 1
-                    if entry[0] == "thinking":
-                        await self._handle_thinking(container, entry[1])
-                    elif entry[0] == "text":
-                        self._complete_current_thought()
-                        await self._handle_text(container, entry[1])
-                    elif entry[0] == "tool":
-                        self._complete_current_thought()
-                        await self._handle_tool(container, entry[1])
+            container = self.query_one("#content", VerticalGroup)
+            for event_type, data in self.subagent._events:
+                await self._handle_one(container, event_type, data)
+                await asyncio.sleep(0)
+            self._post_process()
+        except Exception:
+            _sa_logger.exception("_replay_all failed")
 
-            # If subagent is done, complete any lingering active thought
+    async def _on_event(self, event_type: str, data) -> None:
+        """Handle a single real-time event from the SubAgent.
+
+        Called via ``run_worker`` inside ``SubAgent.*`` methods.
+        The lock serialises concurrently-scheduled workers.
+        """
+        async with self._event_lock:
+            try:
+                container = self.query_one("#content", VerticalGroup)
+                await self._handle_one(container, event_type, data)
+                self._post_process()
+            except Exception:
+                _sa_logger.exception("_on_event failed")
+
+    async def _handle_one(self, container: VerticalGroup, event_type: str, data) -> None:
+        """Dispatch a single event to the appropriate handler."""
+        if event_type == "thinking":
+            await self._handle_thinking(container, data)
+        elif event_type == "text":
+            self._complete_current_thought()
+            await self._handle_text(container, data)
+        elif event_type == "tool":
+            self._complete_current_thought()
+            await self._handle_tool(container, data)
+        elif event_type == "complete":
+            self._complete_current_thought()
+
+    def _post_process(self) -> None:
+        """Common work after every event – title, footer, cursor, scroll."""
+        try:
             if self._current_thought is not None and not self._current_thought._completed:
                 if self.subagent._status in ("completed", "failed"):
                     self._current_thought.mark_completed()
                     self._current_thought = None
-
             self._update_title()
             self._update_footer()
             self._refresh_block_cursor()
             if self._auto_follow:
                 self.call_after_refresh(self._scroll_to_end)
         except Exception:
-            _sa_logger.exception("_sync_ui failed")
-        finally:
-            self._sync_pending = False
-            if self._events_idx < len(self.subagent._events):
-                self._on_subagent_update()
+            _sa_logger.exception("_post_process failed")
 
     async def _handle_thinking(self, container: VerticalGroup, fragment: str) -> None:
         if self._current_thought is None:
@@ -295,6 +317,12 @@ class SubAgentScreen(Screen):
         tool_id, tc = data
         self._current_response = None
 
+        # Skip todo tool calls — not relevant in subagent view
+        title = tc.get("title", "") if isinstance(tc, dict) else ""
+        tool_name = title.split(":")[0] if ":" in title else title
+        if tool_name in _TODO_TOOLS:
+            return
+
         scr_id = f"scr-{tool_id}"
         try:
             existing: ToolCallWidget = container.get_child_by_id(scr_id)  # type: ignore[assignment]
@@ -311,7 +339,7 @@ class SubAgentScreen(Screen):
 
     def _scroll_to_end(self) -> None:
         try:
-            self.query_one("#scroll", VerticalScroll).scroll_end(animate=False)
+            self.query_one("#scroll", VerticalScroll).scroll_end(animate=True)
         except Exception:
             pass
 
@@ -533,7 +561,7 @@ class SubAgentScreen(Screen):
     def action_scroll_end(self) -> None:
         self._auto_follow = True
         if w := self._scroll_widget():
-            w.scroll_end(animate=False)
+            w.scroll_end(animate=True)
 
     # ── Scroll tracking ──
 

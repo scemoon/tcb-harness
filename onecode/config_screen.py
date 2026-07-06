@@ -158,6 +158,11 @@ class EditFieldScreen(ModalScreen[str]):
                 yield Button("Cancel", id="edit-cancel")
                 yield Button("Save", id="edit-save")
 
+    def on_mount(self) -> None:
+        inp = self.query_one("#edit-input", Input)
+        inp.selection_color = "#000"
+        inp.selection_background = "#fff"
+
     @on(Button.Pressed, "#edit-save")
     def on_save(self) -> None:
         value = self.query_one("#edit-input", Input).value.strip()

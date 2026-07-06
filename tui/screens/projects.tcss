@@ -28,6 +28,10 @@ ProjectsScreen {
 
     #actions Button {
         margin: 0 1;
+        &:focus {
+            color: $text;
+            background-tint: $primary 20%;
+        }
     }
 
 
@@ -68,7 +72,7 @@ ProjectsScreen {
             width: 1fr;
         }
         .path {
-            color: $text-secondary;
+            color: $foreground 70%;
             text-style: italic;
         }
     }

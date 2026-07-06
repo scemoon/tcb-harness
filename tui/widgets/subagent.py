@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from textual import containers
 from textual.app import ComposeResult
 from textual.content import Content
-from textual.css.query import NoMatches
 from textual.reactive import var
-from textual.widgets import Markdown, Static
+from textual.widgets import Static
 
 _sa_logger = logging.getLogger("tui.widgets.subagent")
 
@@ -23,12 +24,7 @@ class SubAgentHeader(Static):
 
 
 class SubAgent(containers.VerticalGroup, can_focus=True):
-    """Sub-agent view — clickable header with expandable inline body.
-
-    Styles aligned with main-agent ToolCall / AgentThought conventions.
-
-    - **Collapsed**: header (arrow + icon + label + status) + preview line.
-    - **Expanded**  : header + body (thinking, text output, tool calls).
+    """Sub-agent view — header + dynamically updated latest line.
 
     Ctrl+N opens the full-screen SubAgentScreen.
     """
@@ -38,12 +34,8 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
     HELP = """
 ## Sub-agent
 
-- **click header** Expand/collapse inline view
 - **ctrl+n** Open full-screen output
-- **up/down** Scroll (if content overflows)
 """
-
-    ALLOW_MAXIMIZE = True
 
     DEFAULT_CSS = """
     SubAgent {
@@ -56,23 +48,10 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
             color: $text-secondary;
             text-style: bold;
             padding: 0 1;
-            &:hover {
-                background: $primary-muted 30%;
-            }
         }
 
         #subagent-latest {
             padding: 0 0 0 2;
-        }
-
-        #subagent-body {
-            display: none;
-            padding: 0 0 0 1;
-        }
-
-        &.-expanded {
-            #subagent-latest { display: none; }
-            #subagent-body  { display: block; }
         }
 
         &.-status-running {
@@ -95,33 +74,6 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
             SubAgentHeader {
                 color: $error;
             }
-        }
-
-        #subagent-thought-content {
-            color: $text-muted;
-            text-style: italic;
-            padding: 0 1 0 2;
-            display: none;
-            margin-bottom: 1;
-        }
-        #subagent-thought-content.-visible {
-            display: block;
-        }
-
-        #subagent-text-content {
-            margin: 0 0 1 0;
-        }
-
-        #subagent-tools {
-            height: auto;
-            layout: vertical;
-        }
-
-        #subagent-footer-hint {
-            color: $text-muted;
-            height: 1;
-            padding: 0 1;
-            margin-top: 1;
         }
     }
     """
@@ -147,46 +99,28 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
         self._status = "running"
         self._error = ""
         self._mounted = False
-        self._expanded = False
         self._spin_timer = None
-        self._update_callbacks: list = []
-        # Tool calls invoked *inside* this subagent, rendered as real ToolCall
-        # cards (same style as the main conversation).
+        # Single handler set by SubAgentScreen for real-time event delivery
+        self._screen_handler: Callable[[str, Any], Coroutine[Any, Any, None]] | None = None
+        # Tool calls invoked *inside* this subagent (tracked for SubAgentScreen)
         self._tool_calls: dict = {}
         self._tool_order: list[str] = []
-        # Tool calls stashed during replay flush (mounted once the SubAgent
-        # itself is mounted). See Conversation._flush_replay_buffer.
-        self._pending_tool_calls: list = []
         # Ordered event queue for chronological rendering (used by SubAgentScreen)
         self._events: list = []
-        # Direct streaming hook for SubAgentScreen (bypasses _notify_update for chunks)
-        self._screen_hook = None
         # Diagnostics counters (for log correlation)
         self._chunk_count_log: int = 0
         self._byte_count_log: int = 0
 
     def compose(self) -> ComposeResult:
         self.set_class(True, f"-status-{self._status}")
-        self.set_class(self._expanded, "-expanded")
         yield SubAgentHeader(self._header_text(), id="subagent-header", markup=False)
         yield Static(self._latest_content, id="subagent-latest")
-        with containers.Vertical(id="subagent-body"):
-            yield Static("", id="subagent-thought-content")
-            yield Markdown("", id="subagent-text-content")
-            yield containers.Vertical(id="subagent-tools")
-            yield Static("[$text-muted]ctrl+n 全屏查看", id="subagent-footer-hint")
 
     def on_mount(self) -> None:
         self._mounted = True
         self.styles.height = "auto"
         self.styles.min_height = 2
         self._start_spinner()
-        # Flush any tool calls that were pending before mount (replay path).
-        if self._pending_tool_calls:
-            pending = list(self._pending_tool_calls)
-            self._pending_tool_calls.clear()
-            for tool_id, tc in pending:
-                self.run_worker(self._mount_tool_call_widget(tool_id, tc))
         self._refresh()
 
     def _start_spinner(self) -> None:
@@ -251,10 +185,9 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
     @property
     def _latest_content(self) -> Content:
         text = (self.latest_line or "").strip()
-        hint = "  [$text-muted] ctrl+n 全屏"
         if text:
-            return Content.assemble(Content(text), Content.from_markup(hint))
-        return Content.from_markup(f"[$text-muted]⏳ 等待输出…{hint}")
+            return Content(text)
+        return Content.from_markup("[$text-muted]⏳ 等待输出…")
 
     def _status_label(self) -> str:
         if self._status == "running":
@@ -275,51 +208,6 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
                 return line
         return ""
 
-    # ── Expand / collapse ──
-
-    def _toggle_expand(self) -> None:
-        self._expanded = not self._expanded
-        self.set_class(self._expanded, "-expanded")
-        self._refresh_header()
-        if self._expanded:
-            self._refresh_full_body()
-        self._refresh_latest()
-
-    def on_click(self, event) -> None:
-        """Click header to toggle expand/collapse."""
-        if getattr(event.widget, "id", None) == "subagent-header":
-            self._toggle_expand()
-            event.stop()
-
-    # ── Inline body content ──
-
-    def _refresh_full_body(self) -> None:
-        """Rebuild the full inline body — thinking, text, tools."""
-        if not self._mounted or not self._expanded:
-            return
-        try:
-            # Thinking
-            thought = self.query_one("#subagent-thought-content", Static)
-            if self._thinking_chunks:
-                thought.display = True
-                raw = "".join(self._thinking_chunks).strip()
-                thought.update(raw)
-            else:
-                thought.display = False
-
-            # Text output (markdown)
-            text_widget = self.query_one("#subagent-text-content", Markdown)
-            full_text = "".join(self._chunks)
-            text_widget.update(full_text)
-
-            # Tool calls — mount any that aren't yet in the DOM
-            for tool_id in self._tool_order:
-                tc = self._tool_calls.get(tool_id)
-                if tc is not None:
-                    self.run_worker(self._mount_tool_call_widget(tool_id, tc))
-        except Exception:
-            _sa_logger.exception("_refresh_full_body failed")
-
     # ── Streaming updates ──
 
     def append_chunk(self, text: str) -> None:
@@ -329,45 +217,17 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
         self._byte_count_log += len(text or "")
         self.latest_line = self._update_latest_line()
         self._refresh_latest()
-        if self._expanded:
-            self.call_after_refresh(self._refresh_full_body)
-        hook = self._screen_hook
-        if hook:
-            self.run_worker(hook(text), exit_on_error=False)
-        else:
-            self._notify_update()
+        if self._screen_handler is not None:
+            self.run_worker(self._screen_handler("text", text), exit_on_error=False)
 
     def append_thinking(self, text: str) -> None:
         self._thinking_chunks.append(text)
         self._events.append(("thinking", text))
-        if self._expanded:
-            self.call_after_refresh(self._refresh_full_body)
-        self._notify_update()
-
-    async def _mount_tool_call_widget(self, tool_id: str, tool_call) -> None:
-        """Mount or update a ToolCall card inside the body."""
-        from tui.widgets.tool_call import ToolCall as ToolCallWidget
-
-        try:
-            tools = self.query_one("#subagent-tools", containers.Vertical)
-        except Exception:
-            return  # body not composed yet
-        tools.display = True
-        try:
-            existing = tools.get_child_by_id(tool_id)
-        except NoMatches:
-            existing = None
-        try:
-            if existing is not None:
-                await existing.update_tool_call(tool_call)
-            else:
-                await tools.mount(ToolCallWidget(tool_call, id=tool_id))
-        except Exception:
-            _sa_logger.exception("mount/update tool call failed %s", tool_id)
+        if self._screen_handler is not None:
+            self.run_worker(self._screen_handler("thinking", text), exit_on_error=False)
 
     async def add_or_update_tool_call(self, tool_id: str, tool_call) -> None:
-        """Track a tool call so the full-screen SubAgentScreen can display it,
-        and mount it as a real ToolCall card inline when expanded."""
+        """Track a tool call so the full-screen SubAgentScreen can display it."""
         self._tool_calls[tool_id] = tool_call
         if tool_id not in self._tool_order:
             self._tool_order.append(tool_id)
@@ -377,9 +237,8 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
         if title:
             self.latest_line = title
             self._refresh_latest()
-        if self._mounted:
-            await self._mount_tool_call_widget(tool_id, tool_call)
-        self._notify_update()
+        if self._screen_handler is not None:
+            self.run_worker(self._screen_handler("tool", (tool_id, tool_call)), exit_on_error=False)
 
     def complete(self, status: str = "completed", error: str = "") -> None:
         _sa_logger.debug(
@@ -399,16 +258,8 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
             self.latest_line = self._update_latest_line()
         self._stop_spinner()
         self._refresh()
-        if self._expanded:
-            self.call_after_refresh(self._refresh_full_body)
-        self._notify_update()
-
-    def _notify_update(self) -> None:
-        for cb in self._update_callbacks:
-            try:
-                cb()
-            except Exception:
-                _sa_logger.warning("subagent update callback failed", exc_info=True)
+        if self._screen_handler is not None:
+            self.run_worker(self._screen_handler("complete", {"status": status, "error": error}), exit_on_error=False)
 
     def _refresh_latest(self) -> None:
         if not self._mounted:

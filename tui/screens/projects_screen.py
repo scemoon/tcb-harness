@@ -1,3 +1,4 @@
+from pathlib import Path
 from time import monotonic
 
 from textual.app import ComposeResult
@@ -59,7 +60,11 @@ class ProjectsScreen(ModalScreen[str]):
 
     @property
     def focus_chain(self) -> list[Widget]:
-        return [self.project_grid_select]
+        return [
+            self.project_grid_select,
+            self.query_one("#new-project", widgets.Button),
+            self.query_one("#init-project", widgets.Button),
+        ]
 
     def action_delete_project(self) -> None:
         now = monotonic()

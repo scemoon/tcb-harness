@@ -192,8 +192,7 @@ class GeneralAgent(AgentConfig):
             permission_read=AgentPermission.ALLOW,
             permission_task=AgentPermission.DENY,
             permission_question=AgentPermission.ALLOW,
-            permission_todowrite=AgentPermission.DENY,
-            disallowed_tools=["Spawn", "Agent", "AskUser", "TodoCreate", "TodoUpdate", "TodoStop", "TodoList", "TodoGet", "TodoOutput", "TodoClear"],
+            disallowed_tools=["Spawn", "Agent", "AskUser", "todowrite"],
         )
 
 
@@ -208,8 +207,7 @@ class ExploreAgent(AgentConfig):
             permission_read=AgentPermission.ALLOW,
             permission_task=AgentPermission.DENY,
             permission_question=AgentPermission.DENY,
-            permission_todowrite=AgentPermission.DENY,
-            disallowed_tools=["Spawn", "Agent", "AskUser", "TodoCreate", "TodoUpdate", "TodoStop", "TodoList", "TodoGet", "TodoOutput", "TodoClear"],
+            disallowed_tools=["Spawn", "Agent", "AskUser", "todowrite"],
             hidden=True,
         )
 
@@ -227,8 +225,7 @@ class ScoutAgent(AgentConfig):
             permission_websearch=AgentPermission.ALLOW,
             permission_task=AgentPermission.DENY,
             permission_question=AgentPermission.DENY,
-            permission_todowrite=AgentPermission.DENY,
-            disallowed_tools=["Spawn", "Agent", "AskUser", "TodoCreate", "TodoUpdate", "TodoStop", "TodoList", "TodoGet", "TodoOutput", "TodoClear"],
+            disallowed_tools=["Spawn", "Agent", "AskUser", "todowrite"],
             hidden=True,
         )
 
