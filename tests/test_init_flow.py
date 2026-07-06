@@ -10,7 +10,6 @@ without launching a full Textual app.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -192,7 +191,6 @@ def test_add_component_file_not_found_caught(sandbox, tmp_path, monkeypatch):
 
     target = tmp_path / "fnf_target"
     target.mkdir()
-    projects_dir = sandbox / "projects"
 
     original_add_component = scaffold.add_component
 
@@ -294,7 +292,6 @@ def test_on_init_path_rejects_db_existing(sandbox, tmp_path):
     """If the project is already in ~/.cdh/projects/, the init path
     handler must reject the input early — no picker should pop up,
     no .cdh/ should be created."""
-    from tui.screens import projects_screen
 
     target = tmp_path / "already_in_db"
     target.mkdir()
@@ -344,9 +341,8 @@ def test_db_check_supports_all_extensions(sandbox):
     )
     (projects_dir / "ymlproj.yml").write_text("name: ymlproj\npath: /y\n")
 
-    screen = _build_screen(sandbox)
+    _screen = _build_screen(sandbox)
     # jsonproj should be detected
-    from pathlib import Path
 
     from tui.screens.projects_screen import _project_db_path
 
@@ -360,7 +356,6 @@ def test_db_check_supports_all_extensions(sandbox):
 
 
 def test_new_project_cancelled_picks_aborts(sandbox, tmp_path, monkeypatch):
-    from tui.screens.projects_screen import ProjectsScreen
 
     target = tmp_path / "new_cancel"
     target.mkdir()
@@ -378,7 +373,6 @@ def test_new_project_cancelled_picks_aborts(sandbox, tmp_path, monkeypatch):
 
 def test_new_project_empty_selection_aborts(sandbox, tmp_path, monkeypatch):
     """New (unlike Init) must reject empty selection — allow_empty=False."""
-    from tui.screens.projects_screen import ProjectsScreen
 
     target = tmp_path / "new_empty"
     target.mkdir()
@@ -433,7 +427,6 @@ def test_grid_select_uses_project_path_field(sandbox):
     in the yaml file's ``path`` field, not the path to the yaml file
     itself."""
     from tui.widgets.project_grid_select import (
-        ProjectGridSelect,
         _read_project_path,
     )
 

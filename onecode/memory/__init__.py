@@ -1,18 +1,9 @@
 """
-CDH Memory - Layered Long-term Memory for AI Agents
+CDH Memory - Long-term Conversation Memory for AI Agents
 
-Based on TencentDB-Agent-Memory architecture:
-- L0: Raw conversation
-- L1: Atomic facts
-- L2: Scenarios
-- L3: Personas
-
-With symbolic short-term memory (Mermaid canvas + context offloading)
+L0: Raw conversation storage with BM25 keyword recall.
 """
-
 from onecode.memory.pyramid import MemoryPyramid, MemoryLayer, MemoryEntry
-from onecode.memory.symbolic import SymbolicMemory, MermaidCanvas, NodeType
-from onecode.memory.offload import ContextOffloader, OffloadConfig, ToolCallExtractor
 from onecode.memory.recall import HybridRecall, BM25, RecallResult
 from onecode.memory.backend import MemoryBackend
 
@@ -20,23 +11,18 @@ __all__ = [
     "MemoryPyramid",
     "MemoryLayer",
     "MemoryEntry",
-    "SymbolicMemory",
-    "MermaidCanvas",
-    "NodeType",
-    "ContextOffloader",
-    "OffloadConfig",
-    "ToolCallExtractor",
     "HybridRecall",
     "BM25",
     "RecallResult",
     "MemoryBackend",
+    "AgentMemory",
 ]
 
 
 class AgentMemory:
     """
-    Unified memory interface combining layered long-term memory
-    with symbolic short-term memory and hybrid recall.
+    Unified memory interface combining persistent L0 conversation storage
+    with BM25 keyword recall for long-term context.
     """
 
     def __init__(self, storage_path=None):
@@ -44,8 +30,6 @@ class AgentMemory:
         self.storage_path = storage_path or (ONECODE_DIR / "memory")
         self.backend = MemoryBackend(self.storage_path / "memory.db")
         self.pyramid = MemoryPyramid(self.storage_path)
-        self.symbolic = SymbolicMemory()
-        self.offloader = ContextOffloader(self.storage_path / "refs")
         self.recall = HybridRecall()
 
     def remember(self, layer: MemoryLayer, content: str, metadata: dict = None, parent_id: str = None) -> MemoryEntry:
@@ -63,33 +47,3 @@ class AgentMemory:
 
     def search_memories(self, query: str, top_k: int = 5) -> list[RecallResult]:
         return self.recall.hybrid_recall(query, top_k)
-
-    def remember_conversation(self, conversation_id: str, messages: list[dict]) -> MemoryEntry:
-        content = "\n".join(f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages)
-        entry = self.remember(MemoryLayer.L0_CONVERSATION, content, {"conversation_id": conversation_id})
-        return entry
-
-    def extract_atoms(self, conversation_id: str, max_atoms: int = 20) -> list[MemoryEntry]:
-        return self.pyramid.extract_atoms_from_conversation(conversation_id, max_atoms)
-
-    def build_scenario(self, name: str, atom_ids: list[str]) -> MemoryEntry:
-        scenario = self.pyramid.build_scenario_from_atoms(atom_ids, name)
-        self.backend.add_entry(scenario.id, MemoryLayer.L2_SCENARIO.value, scenario.content, scenario.metadata)
-        return scenario
-
-    def build_persona(self, name: str, scenario_ids: list[str]) -> MemoryEntry:
-        persona = self.pyramid.build_persona_from_scenarios(scenario_ids, name)
-        self.backend.add_entry(persona.id, MemoryLayer.L3_PERSONA.value, persona.content, persona.metadata)
-        return persona
-
-    def offload_and_symbolize(self, node_id: str, verbose_content: str, task_label: str) -> str:
-        ref_path = self.symbolic.offload_log(node_id, verbose_content)
-        self.backend.save_ref(node_id, verbose_content)
-        self.symbolic.create_result_node(task_label, verbose_content)
-        return ref_path
-
-    def get_canvas(self) -> str:
-        return self.symbolic.get_canvas_markdown()
-
-    def drill_down(self, entry_id: str) -> list[MemoryEntry]:
-        return self.pyramid.drill_down(entry_id)

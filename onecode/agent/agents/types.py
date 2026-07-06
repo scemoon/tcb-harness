@@ -193,7 +193,7 @@ class GeneralAgent(AgentConfig):
             permission_task=AgentPermission.DENY,
             permission_question=AgentPermission.ALLOW,
             permission_todowrite=AgentPermission.DENY,
-            disallowed_tools=["Spawn", "Agent", "AskUser", "TodoCreate", "TodoUpdate", "TodoStop", "TodoList", "TodoGet", "TodoOutput"],
+            disallowed_tools=["Spawn", "Agent", "AskUser", "TodoCreate", "TodoUpdate", "TodoStop", "TodoList", "TodoGet", "TodoOutput", "TodoClear"],
         )
 
 
@@ -209,7 +209,7 @@ class ExploreAgent(AgentConfig):
             permission_task=AgentPermission.DENY,
             permission_question=AgentPermission.DENY,
             permission_todowrite=AgentPermission.DENY,
-            disallowed_tools=["Spawn", "Agent", "AskUser", "TodoCreate", "TodoUpdate", "TodoStop", "TodoList", "TodoGet", "TodoOutput"],
+            disallowed_tools=["Spawn", "Agent", "AskUser", "TodoCreate", "TodoUpdate", "TodoStop", "TodoList", "TodoGet", "TodoOutput", "TodoClear"],
             hidden=True,
         )
 
@@ -228,7 +228,7 @@ class ScoutAgent(AgentConfig):
             permission_task=AgentPermission.DENY,
             permission_question=AgentPermission.DENY,
             permission_todowrite=AgentPermission.DENY,
-            disallowed_tools=["Spawn", "Agent", "AskUser", "TodoCreate", "TodoUpdate", "TodoStop", "TodoList", "TodoGet", "TodoOutput"],
+            disallowed_tools=["Spawn", "Agent", "AskUser", "TodoCreate", "TodoUpdate", "TodoStop", "TodoList", "TodoGet", "TodoOutput", "TodoClear"],
             hidden=True,
         )
 
@@ -407,6 +407,7 @@ Rules:
 - **Spawn**: spawn(agent_type, prompt) - Delegate execution of a complex todo to a specialized subagent (isolated context). Use for multi-file/multi-step work. Then TodoUpdate(status="completed").
 - **Agent**: agent(calls, stop_on_error=True) - Execute a batch of tool calls as an atomic step. Each call includes {name, input}. Halts on first error when stop_on_error is true.
 - **ToolSearch**: tool_search(query) - Search for available tools by keyword.
+- **CodebaseSearch**: codebase_search(query, top_k=5) - Search the indexed codebase for code relevant to a query. Returns code chunks with file paths and line numbers. Use this to find relevant code before making changes.
 - **Skill**: skill(name) - Load skill by name.
 
 ### Communication

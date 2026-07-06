@@ -28,9 +28,9 @@ from tui.widgets.modified_files import ModifiedFiles
 from tui.widgets.plan import Plan
 from tui.widgets.throbber import Throbber
 from tui.widgets.conversation import Conversation
-from tui.widgets.project_directory_tree import ProjectDirectoryTree
 from tui.widgets.side_bar import SideBar
 from tui.widgets.session_tabs import SessionsTabs, SessionLabel
+from tui.screens.diff_screen import DiffScreen
 
 
 class ModeProvider(Provider):
@@ -250,7 +250,7 @@ class MainScreen(Screen, can_focus=False):
             self.app.notify("No diff available", severity="warning")
             return
         full_path = str(project_path / filepath)
-        await self.conversation.post_diff(full_path, before, after or "")
+        self.app.push_screen(DiffScreen(full_path, before, after or ""))
 
     def _get_file_diff_content(
         self, project_path: Path, filepath: str

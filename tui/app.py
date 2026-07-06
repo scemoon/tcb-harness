@@ -22,7 +22,6 @@ from textual.timer import Timer
 from textual.notifications import Notify
 from textual.screen import Screen
 
-import tui
 from tui.db import DB
 from tui.settings import Schema, Settings
 from tui.agent_schema import Agent as AgentData

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from sqlalchemy import Column, String, Text, Integer, Float, create_engine, Index
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from onecode.codebase.chunker import CodeChunk
+from onecode.config import ONECODE_DIR
 
 Base = declarative_base()
 
@@ -29,7 +31,8 @@ class ChunkRecord(Base):
 
 class CodebaseStorage:
     def __init__(self, project_dir: Path):
-        db_dir = project_dir / ".cdh" / "codebase"
+        project_key = hashlib.sha256(str(project_dir.resolve()).encode()).hexdigest()[:16]
+        db_dir = ONECODE_DIR / "codebase" / "indexes" / project_key
         db_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = db_dir / "index.db"
         self.engine = create_engine(f"sqlite:///{self.db_path}", echo=False)

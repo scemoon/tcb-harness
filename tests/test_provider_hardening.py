@@ -30,7 +30,7 @@ from onecode.models.errors import (
     RateLimitError,
     TransientProviderError,
 )
-from onecode.models.provider import ChatResponse, Message, ModelResponse, Provider, ToolUse
+from onecode.models.provider import Message, ModelResponse, Provider, ToolUse
 from onecode.models.providers.minimaxi_provider import MiniMaxiProvider
 
 

@@ -28,7 +28,6 @@ from tui.acp import messages
 from tui.acp.prompt import build as build_prompt
 from tui import messages as tui_messages
 from tui.db import DB
-from tui import paths
 from tui import constants
 from tui.answer import Answer
 
@@ -822,6 +821,9 @@ class Agent(AgentBase):
             response = await session_load_response.wait()
         finally:
             self.post_message(messages.SessionReplay(active=False))
+
+        if error := response.get("error"):
+            logger.warning("Session load error: %s", error)
 
         if (modes := response.get("modes", None)) is not None:
             current_mode = modes["currentModeId"]

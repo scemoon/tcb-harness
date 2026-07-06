@@ -42,7 +42,6 @@ class ApplyPatchTool(Tool):
         results = []
         current_file: str | None = None
         current_content: list[str] = []
-        patch_type = "update"
 
         lines = patch.split("\n")
         i = 0
@@ -60,7 +59,6 @@ class ApplyPatchTool(Tool):
                     results.append(result)
                 current_file = add_match.group(1).strip()
                 current_content = []
-                patch_type = "add"
 
             elif update_match:
                 if current_file and current_content:
@@ -68,7 +66,6 @@ class ApplyPatchTool(Tool):
                     results.append(result)
                 current_file = update_match.group(1).strip()
                 current_content = []
-                patch_type = "update"
 
             elif move_match:
                 target = move_match.group(1).strip()
@@ -76,7 +73,6 @@ class ApplyPatchTool(Tool):
                     result = self._move_file(current_file, target)
                     results.append(result)
                     current_file = target
-                patch_type = "move"
 
             elif delete_match:
                 target = delete_match.group(1).strip()
@@ -84,7 +80,6 @@ class ApplyPatchTool(Tool):
                 results.append(result)
                 current_file = None
                 current_content = []
-                patch_type = "delete"
 
             else:
                 if current_file is not None:

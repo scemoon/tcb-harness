@@ -72,8 +72,23 @@ class AgentSession:
             self._data.id = session_id
 
     def _default_storage_path(self) -> Path:
-        from onecode.config import ONECODE_DIR
-        return ONECODE_DIR / "sessions"
+        cdh_sessions = Path.home() / ".cdh" / "sessions"
+        # One-time self-heal: move sessions incorrectly saved to ~/.onecode/sessions/
+        # back to the cdh platform-level directory (B mapping mode).
+        onecode_sessions = Path.home() / ".onecode" / "sessions"
+        marker = cdh_sessions / ".migrated_from_onecode"
+        if not marker.exists() and onecode_sessions.exists():
+            try:
+                cdh_sessions.mkdir(parents=True, exist_ok=True)
+                for f in list(onecode_sessions.glob("*.json"))[:250]:
+                    dst = cdh_sessions / f.name
+                    if not dst.exists():
+                        import shutil
+                        shutil.move(str(f), str(dst))
+                marker.write_text("migrated", encoding="utf-8")
+            except Exception as e:
+                logger.warning("Failed to migrate onecode sessions to cdh: %s", e)
+        return cdh_sessions
 
     @property
     def id(self) -> str:
@@ -115,7 +130,6 @@ class AgentSession:
         if len(self._data.messages) <= 2:
             return
         system_msgs = [m for m in self._data.messages if m.get("role") == "system"]
-        other_msgs = [m for m in self._data.messages if m.get("role") != "system"]
         self._data.messages = system_msgs + [
             {"role": "system", "content": f"[Previous context summarized]\n{summary}"}
         ]

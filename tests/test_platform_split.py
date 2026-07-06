@@ -304,8 +304,9 @@ class TestMigration:
         target = tmp_path / ".onecode"
         legacy.mkdir()
 
-        # Create onecode-private dirs
-        for d in ["sessions", "logs", "traces", "memory", "mcps", "models"]:
+        # Create onecode-private dirs (sessions is deliberately excluded —
+        # it belongs to cdh platform, see B mapping mode)
+        for d in ["logs", "traces", "memory", "mcps", "models"]:
             (legacy / d).mkdir()
             (legacy / d / "test.txt").write_text(d)
 
@@ -317,12 +318,16 @@ class TestMigration:
         # Create onecode dotfile
         (legacy / "onecode.config.yaml").write_text("key: val")
 
+        # sessions is a cdh platform dir — should NOT migrate
+        (legacy / "sessions").mkdir()
+        (legacy / "sessions" / "session.json").write_text("{}")
+
         result = migrate_legacy_cdh_to_onecode(
             legacy_dir=legacy,
             target_dir=target,
         )
         assert result is not None
-        assert "sessions" in result
+        assert "sessions" not in result
         assert "logs" in result
         assert "traces" in result
         assert "memory" in result
@@ -330,9 +335,13 @@ class TestMigration:
         assert "models" in result
 
         # Verify private dirs moved
-        for d in ["sessions", "logs", "traces", "memory", "mcps", "models"]:
+        for d in ["logs", "traces", "memory", "mcps", "models"]:
             assert (target / d).is_dir()
             assert (target / d / "test.txt").exists()
+
+        # sessions should NOT be moved (cdh platform layer)
+        assert not (target / "sessions").exists()
+        assert (legacy / "sessions").is_dir()  # stays in cdh
 
         # Verify platform dirs remain at legacy
         for d in ["skills", "projects", "state"]:
@@ -356,7 +365,9 @@ class TestMigration:
         target = tmp_path / ".onecode"
         legacy.mkdir()
         target.mkdir()
-        (legacy / "sessions").mkdir()
+        (legacy / "traces").mkdir()
+        (target / "traces").mkdir()
+        (legacy / "sessions").mkdir()  # sessions is cdh — not in _ONECODE_PRIVATE_DIRS
         (target / "sessions").mkdir()
 
         result = migrate_legacy_cdh_to_onecode(
@@ -373,15 +384,15 @@ class TestMigration:
         target = tmp_path / ".onecode"
         legacy.mkdir()
         target.mkdir()  # empty target
-        (legacy / "sessions").mkdir()
-        (legacy / "sessions" / "session.json").write_text("{}")
+        (legacy / "traces").mkdir()
+        (legacy / "traces" / "trace.txt").write_text("trace")
 
         result = migrate_legacy_cdh_to_onecode(
             legacy_dir=legacy,
             target_dir=target,
         )
         assert result is not None
-        assert (target / "sessions" / "session.json").exists()
+        assert (target / "traces" / "trace.txt").exists()
 
     def test_marker_contains_correct_data(self, tmp_path):
         from onecode.migrate import migrate_legacy_cdh_to_onecode
@@ -389,14 +400,16 @@ class TestMigration:
         legacy = tmp_path / ".cdh"
         target = tmp_path / ".onecode"
         legacy.mkdir()
-        (legacy / "sessions").mkdir()
         (legacy / "traces").mkdir()
+        (legacy / "memory").mkdir()
+        (legacy / "sessions").mkdir()  # cdh platform — not migrated
         (legacy / "skills").mkdir()  # platform dir
 
         migrate_legacy_cdh_to_onecode(legacy_dir=legacy, target_dir=target)
 
         marker = json.loads((target / ".migrated_from").read_text())
-        assert sorted(marker["items"]) == ["sessions", "traces"]
+        # sessions is NOT migrated — it belongs to cdh platform
+        assert sorted(marker["items"]) == ["memory", "traces"]
         assert "skills" in marker["preserved_on_legacy"]
 
     def test_no_private_dirs_returns_none(self, tmp_path):
@@ -416,6 +429,62 @@ class TestMigration:
         # No private dirs should have been migrated
         for d in ["sessions", "logs", "traces", "memory", "snapshots", "mcps", "models"]:
             assert not (target / d).exists()
+
+
+# ---------------------------------------------------------------------------
+# Session storage: cdh platform owns sessions, not individual engines
+# ---------------------------------------------------------------------------
+
+
+class TestSessionStorage:
+    def test_get_sessions_returns_cdh_dir(self):
+        """Sessions JSON belongs to cdh platform (~/.cdh/sessions/)."""
+        from tui.paths import get_sessions
+
+        path = get_sessions()
+        assert ".cdh" in str(path)
+        assert "sessions" in str(path)
+        assert ".onecode" not in str(path)
+
+    def test_default_storage_path_is_cdh_sessions(self):
+        """AgentSession._default_storage_path returns ~/.cdh/sessions/."""
+        from onecode.agent.session import AgentSession
+
+        path = AgentSession()._default_storage_path()
+        assert path == Path.home() / ".cdh" / "sessions"
+
+    def test_default_storage_path_self_heals_onecode_sessions(self, tmp_path):
+        """Sessions incorrectly saved to ~/.onecode/sessions/ are moved to cdh."""
+        from unittest.mock import patch
+        from onecode.agent.session import AgentSession
+
+        # Simulate stale onecode sessions
+        fake_cdh = tmp_path / ".cdh" / "sessions"
+        fake_oc = tmp_path / ".onecode" / "sessions"
+        fake_oc.mkdir(parents=True)
+        (fake_oc / "stale.json").write_text('{"id": "stale"}')
+        (fake_oc / "recent.json").write_text('{"id": "recent"}')
+        # Place a file in cdh that conflicts — should NOT be overwritten
+        fake_cdh.mkdir(parents=True)
+        (fake_cdh / "recent.json").write_text('{"id": "recent-cdh"}')
+
+        with patch.object(Path, "home", return_value=tmp_path):
+            path = AgentSession()._default_storage_path()
+
+        assert path == fake_cdh
+        # stale.json was moved
+        assert (fake_cdh / "stale.json").exists()
+        assert not (fake_oc / "stale.json").exists()
+        # recent.json was NOT overwritten (cdh version wins)
+        assert (fake_cdh / "recent.json").read_text() == '{"id": "recent-cdh"}'
+        # Marker exists
+        assert (fake_cdh / ".migrated_from_onecode").exists()
+
+    def test_migrate_excludes_sessions_from_private_dirs(self):
+        """sessions must NOT be in _ONECODE_PRIVATE_DIRS."""
+        from onecode.migrate import _ONECODE_PRIVATE_DIRS
+
+        assert "sessions" not in _ONECODE_PRIVATE_DIRS
 
 
 # ---------------------------------------------------------------------------

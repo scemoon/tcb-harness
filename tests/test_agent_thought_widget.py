@@ -11,9 +11,7 @@ Verifies:
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock
 
-import pytest
 
 
 class TestAgentThoughtMarkdownRendering:
@@ -21,7 +19,6 @@ class TestAgentThoughtMarkdownRendering:
 
     def test_content_uses_markdown_widget(self):
         """The composed content child must be a Markdown widget."""
-        from textual.widgets import Markdown
         from tui.widgets.agent_thought import AgentThought
 
         # Inspect the compose output without mounting (faster than app boot)

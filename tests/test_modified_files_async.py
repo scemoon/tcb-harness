@@ -20,7 +20,6 @@ from types import SimpleNamespace
 
 from textual.app import App, ComposeResult
 from textual.containers import Container
-from textual.widgets import Static
 
 
 # ---------------------------------------------------------------------------

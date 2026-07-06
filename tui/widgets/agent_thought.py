@@ -9,7 +9,6 @@ from textual.reactive import reactive
 from textual.widgets import Markdown, Static
 from textual.widgets.markdown import MarkdownStream
 
-from tui.protocol import ExpandProtocol
 
 
 class AgentThought(Vertical, can_focus=True):

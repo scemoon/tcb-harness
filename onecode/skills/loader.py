@@ -22,40 +22,8 @@ class SkillLoader:
     def _get_search_dirs(self) -> list[tuple[str, Path]]:
         dirs = []
         if USER_SKILLS_DIR.exists():
-            dirs.append(("user", USER_SKILLS_DIR))
-
-        # Built-in skills packaged with onecode
-        builtin_dir = Path(__file__).resolve().parent.parent / "builtin_skills"
-        if builtin_dir.exists():
-            dirs.append(("builtin", builtin_dir))
-
-        search_paths = [
-            (".opencode", ".claude", ".agents"),
-        ]
-        for group in search_paths:
-            for name in group:
-                pattern = f"{name}/skills"
-                for parent in self._walk_up_parents():
-                    candidate = parent / pattern
-                    if candidate.exists():
-                        dirs.append((f"{name}/skills", candidate))
-                        break
-
+            dirs.append(("onecode", USER_SKILLS_DIR))
         return dirs
-
-    def _walk_up_parents(self):
-        current = self._workspace_root.resolve()
-        yield current
-        try:
-            git_root = next(
-                (p for p in current.parents if (p / ".git").exists() or (p / ".hg").exists()),
-                None,
-            )
-            if git_root:
-                yield git_root
-        except StopIteration:
-            pass
-        yield Path.home()
 
     def _discover(self) -> dict[str, Skill]:
         if self._cache is not None:

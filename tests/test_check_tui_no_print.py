@@ -19,7 +19,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "check_tui_no_print.py"

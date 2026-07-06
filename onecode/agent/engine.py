@@ -5,11 +5,12 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
 from dataclasses import dataclass
 from typing import Callable
 
+from onecode.agent.agents.types import AgentPermission
 from onecode.agent.context import ContextManager
 from onecode.agent.permissions_store import PermissionStore
 from onecode.models.provider import ContentBlockType, ProviderRegistry
@@ -477,7 +478,7 @@ class AgentEngine:
         self.context = ContextManager()
         self.file_ops = ToolFactory.create_file_ops(self._project_dir)
         self.shell = ToolFactory.create_shell(self._project_dir)
-        self.current_agent: AgentConfig = BuildAgent()
+        self.current_agent: AgentConfig = BuildAgent()  # noqa: F821
         self.iterations = 0
         self.total_tokens = 0
         self._skills_loaded = False
@@ -506,7 +507,7 @@ class AgentEngine:
         self._config_tool_write = ConfigWriteTool(app_config) if app_config else None
 
         # Codebase engine (lazy init)
-        self._codebase_engine: Optional["CodebaseEngine"] = None
+        self._codebase_engine: Optional["CodebaseEngine"] = None  # noqa: F821
 
         # Tool registry (Clawd-Code pattern)
         self._tool_registry = self._build_tool_registry()
@@ -568,7 +569,7 @@ class AgentEngine:
         self._react_phase: str = "thought"  # "thought" | "action" | "observation"
         self._direct_execution_count: int = 0  # Track direct tool use for routing-decision reminder
 
-    def _build_tool_registry(self) -> ToolRegistry:
+    def _build_tool_registry(self) -> ToolRegistry:  # noqa: F821
         from onecode.agent.tools.registry import ToolRegistry
         from onecode.agent.tools.file_tools import ReadTool, WriteTool, EditTool, InsertTool, UndoEditTool, GlobTool, GrepTool, ListTool
         from onecode.agent.tools.apply_patch_tool import ApplyPatchTool
@@ -916,14 +917,6 @@ class AgentEngine:
         if env_id:
             context_parts.append(f"TCB EnvId: {env_id}")
 
-        agents_md_path = self._workspace / "AGENTS.md"
-        if agents_md_path.exists():
-            try:
-                content = agents_md_path.read_text(encoding="utf-8")
-                context_parts.append(f"\n--- AGENTS.md ---\n{content[:2000]}")
-            except Exception:
-                pass
-
         self.context.add_system("\n".join(context_parts))
 
     def _should_retrieve_codebase(self) -> bool:
@@ -1029,11 +1022,19 @@ class AgentEngine:
         "Spawn": "task",
         "Agent": "task",
         "Skill": "skill",
+        "codebase_search": "read",
     }
 
     def _check_tool_permission(self, name: str, inp: dict) -> str | None:
         """Unified agent-level permission check for all tools."""
         from onecode.agent.agents.types import AgentPermission
+        # Enforce agent allow/deny lists at runtime. This is the runtime
+        # safety net behind filter_tool_descriptions(): even if the LLM
+        # still emits a tool the system prompt hid (e.g. TodoCreate in a
+        # subagent, after context compaction re-introduced the name), the
+        # call is denied here rather than leaking through.
+        if not self.current_agent.tool_allowed(name):
+            return json.dumps({"success": False, "error": f"{name} denied (disallowed for {self.current_agent.name})"})
         perm_key = self._TOOL_NAME_TO_PERM_KEY.get(name)
         if perm_key is None:
             return None
@@ -1075,7 +1076,7 @@ class AgentEngine:
             logger.exception(f"Tool execution error: {e}")
             return {**base, "content": f"Error: {safe_error_msg(e)}", "is_error": True}
 
-    def _format_tool_output(self, result: RegistryToolResult) -> str:
+    def _format_tool_output(self, result: RegistryToolResult) -> str:  # noqa: F821
         import json
         output = result.output
         if isinstance(output, str):
@@ -1156,10 +1157,13 @@ class AgentEngine:
         if (
             isinstance(user_input, str)
             and self._session
+            and self.app.config.memory.enabled
+            and self.app.config.memory.auto_recall
             and not self._disable_retrieval
         ):
             try:
-                results = self._memory.search_memories(user_input, top_k=5)
+                top_k = self.app.config.memory.top_k
+                results = self._memory.search_memories(user_input, top_k=top_k)
                 if results:
                     lines = ["## Relevant past memories"]
                     for r in results:

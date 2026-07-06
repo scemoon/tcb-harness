@@ -266,8 +266,8 @@ Default cloud provider: TCB (Tencent CloudBase).
 
 
 def _detect_dlc_skill(workspace_root: Path) -> bool:
-    from onecode.skills.loader import SkillLoader
-    loader = SkillLoader(workspace_root)
+    from cdh.cdh_skill_loader import CdhSkillLoader
+    loader = CdhSkillLoader()
     return loader.get(SKILL_NAME) is not None
 
 

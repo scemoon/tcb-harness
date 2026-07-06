@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from asyncio import Future
-from typing import Any, Mapping, TYPE_CHECKING
+from typing import Mapping, TYPE_CHECKING
 from textual.message import Message
 
 import rich.repr

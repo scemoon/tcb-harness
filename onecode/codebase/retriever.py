@@ -146,11 +146,23 @@ async def _get_batch_embeddings(texts: list[str], config: CodebaseConfig) -> lis
     provider_name = config.embedding_provider or cfg.default_provider
     pcfg = cfg.providers.get(provider_name)
 
+    MAX_EMBED_CHUNKS = 500
+    if len(texts) > MAX_EMBED_CHUNKS:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Embedding requested on %d chunks (max=%d); truncating to avoid timeout",
+            len(texts), MAX_EMBED_CHUNKS,
+        )
+        texts = texts[:MAX_EMBED_CHUNKS]
+
     if provider_name == "ollama" and pcfg:
         embs = await _ollama_batch_embed(texts, pcfg.endpoint or "http://localhost:11434")
     else:
         embs = []
-        for t in texts:
+        for i, t in enumerate(texts):
+            if i > 0 and i % 16 == 0:
+                import asyncio
+                await asyncio.sleep(0)
             emb = await _get_embedding(t, config)
             embs.append(emb)
 

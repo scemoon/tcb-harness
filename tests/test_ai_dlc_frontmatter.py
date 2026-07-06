@@ -16,8 +16,6 @@ REPO_ROOT = SKILL_DIR.parent
 SYMLINK_TARGETS = {
     SKILL_DIR / ".claude" / "skills" / "ai-dlc-skill",
     SKILL_DIR / ".agents" / "skills" / "ai-dlc-skill",
-    REPO_ROOT / ".opencode" / "skills" / "ai-dlc-skill",
-    REPO_ROOT / "onecode" / "builtin_skills" / "ai-dlc",
 }
 
 

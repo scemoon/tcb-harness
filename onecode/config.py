@@ -1,9 +1,12 @@
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 import yaml
+
+logger = logging.getLogger("onecode.config")
 
 
 ONECODE_DIR = Path.home() / ".onecode"
@@ -87,6 +90,13 @@ class CodebaseConfig:
 
 
 @dataclass
+class MemoryConfig:
+    enabled: bool = True
+    auto_recall: bool = True
+    top_k: int = 5
+
+
+@dataclass
 class GlobalConfig:
     default_mode: str = "build"
     default_provider: str = "minimaxi"
@@ -102,6 +112,7 @@ class GlobalConfig:
     log_level: str = "info"
     session_auto_save: bool = True
     codebase: CodebaseConfig = field(default_factory=CodebaseConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
 
 
 def _dict_to_dataclass(cls, data: dict):
@@ -140,6 +151,8 @@ def ensure_dirs():
         ONECODE_DIR / "traces",
         ONECODE_DIR / "logs",
         ONECODE_DIR / "models",
+        ONECODE_DIR / "codebase" / "indexes",
+        ONECODE_DIR / "memory",
     ]
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
@@ -147,9 +160,11 @@ def ensure_dirs():
     # One-time migration from legacy ~/.cdh/ to ~/.onecode/
     try:
         from onecode.migrate import migrate_legacy_cdh_to_onecode
-        migrate_legacy_cdh_to_onecode()
-    except Exception:
-        pass
+        result = migrate_legacy_cdh_to_onecode()
+        if result:
+            logger.warning("Legacy migration: %s", result)
+    except Exception as exc:
+        logger.warning("Legacy migration failed: %s", exc)
 
 
 def load_config() -> GlobalConfig:
@@ -158,7 +173,8 @@ def load_config() -> GlobalConfig:
         _write_default_config()
     # Bootstrap ai-dlc-skill from source into cdh platform pool
     try:
-        from onecode.skills.bootstrap import ensure_ai_dlc_skill
+        from onecode.skills.bootstrap import ensure_ai_dlc_skill, ensure_onecode_default_skills
+        ensure_onecode_default_skills()
         ensure_ai_dlc_skill()
     except Exception:
         pass

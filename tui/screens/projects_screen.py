@@ -94,7 +94,7 @@ class ProjectsScreen(ModalScreen[str]):
                 deleted = True
                 break
         if not deleted:
-            self.notify(f"Project file not found", severity="error")
+            self.notify("Project file not found", severity="error")
             return
         widget.remove()
         self.notify(f"Deleted project: {project_name}")

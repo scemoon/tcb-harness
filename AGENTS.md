@@ -19,6 +19,8 @@ Read once per session; behavior is enforced by the agent runtime.
 
 **Key principle**: cdh owns the platform (shared skill pool, shared MCP pool, project registry, session aggregator). Each engine (onecode, opencode, claude…) manages its own private state (`~/.onecode/`, `~/.config/opencode/`, `~/.claude/` …) — no engine hardcodes `~/.cdh/` paths.
 
+**Session model (B mapping mode)**: cdh owns the session **index** (`~/.cdh/state/tui/tui.db`) and the session **JSON files** (`~/.cdh/sessions/`). The DB `sessions` table maps each session to its owning engine via the `agent` column. Engines read/write session data through the platform-provided `~/.cdh/sessions/` path — they do not own session storage themselves.
+
 ## Quality Gates
 
 Hard thresholds the agent must respect and the user will gate on:
@@ -26,7 +28,7 @@ Hard thresholds the agent must respect and the user will gate on:
 - Test coverage >= **80%**
 - BDD scenario pass rate = **100%**
 - 0 vulns in dependencies
-- 0 TODO markers in `src/` / `onecode/` / `tui/` / `cdh/`
+- 0 TODO markers in `cdh/` / `onecode/` (excludes vendored code under `tui/` — upstream A2TUI has its own TODOs)
 - Contract backward-compat by default (breaking → human approval)
 - Cross-stack e2e mandatory for multi-component changes
 
@@ -70,8 +72,8 @@ Reference skill: `~/.cdh/skills/ai-dlc-skill/SKILL.md` (full AI-DLC methodology;
 - `.clinerules` — legacy Cline config (kept for reference; superseded by this file)
 
 **Global state directories** (managed at runtime, do not hand-edit):
-- `~/.cdh/` — cdh platform global state (projects/, skills/, mcps/, state/, logs/)
-- `~/.onecode/` — onecode engine private state (sessions, traces, memory, mcps, skills, config)
+- `~/.cdh/` — cdh platform global state (projects/, skills/, mcps/, state/, logs/, sessions/)
+- `~/.onecode/` — onecode engine private state (traces, memory, mcps, skills, config)
 
 ## Forbidden Actions
 

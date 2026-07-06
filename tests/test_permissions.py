@@ -119,7 +119,6 @@ class TestCheckToolPermission:
         return engine
 
     def test_ask_returns_requires_approval(self):
-        from onecode.agent.engine import AgentEngine
         engine = self._make_engine_mock(BuildAgent())
         result = engine._check_tool_permission("Bash", {})
         assert result is not None
@@ -127,7 +126,6 @@ class TestCheckToolPermission:
         assert parsed.get("requires_approval") is True
 
     def test_allow_returns_none(self):
-        from onecode.agent.engine import AgentEngine
         agent = BuildAgent()
         setattr(agent, "permission_bash", AgentPermission.ALLOW)
         engine = self._make_engine_mock(agent)
@@ -135,7 +133,6 @@ class TestCheckToolPermission:
         assert result is None
 
     def test_deny_returns_denied_message(self):
-        from onecode.agent.engine import AgentEngine
         agent = BuildAgent()
         setattr(agent, "permission_bash", AgentPermission.DENY)
         engine = self._make_engine_mock(agent)
@@ -147,7 +144,6 @@ class TestCheckToolPermission:
     def test_setattr_after_allow_always_then_check(self):
         """Simulate the exact flow: user clicks 'Allow always' → setattr
         → next tool call → _check_tool_permission returns None."""
-        from onecode.agent.engine import AgentEngine
 
         # BuildAgent defaults: permission_bash = ASK
         agent = BuildAgent()
@@ -164,7 +160,6 @@ class TestCheckToolPermission:
 
     def test_reject_always_then_check(self):
         """User clicks 'Reject always' → setattr → next call is denied."""
-        from onecode.agent.engine import AgentEngine
 
         agent = BuildAgent()
         setattr(agent, "permission_bash", AgentPermission.DENY)
@@ -178,7 +173,6 @@ class TestCheckToolPermission:
     def test_permission_store_reapply_via_setattr(self):
         """Integration: PermissionStore.set_override → apply_to →
         _check_tool_permission sees ALLOW even after creating a fresh agent."""
-        from onecode.agent.engine import AgentEngine
 
         store = PermissionStore()
         store.set_override("bash", AgentPermission.ALLOW)
@@ -192,9 +186,8 @@ class TestCheckToolPermission:
         assert result is None
 
     def test_unknown_tool_name_returns_none(self):
-        from onecode.agent.engine import AgentEngine
         engine = self._make_engine_mock(BuildAgent())
-        result = engine._check_tool_permission("NonExistentTool", {})
+        engine._check_tool_permission("NonExistentTool", {})
 
     def test_all_tool_names_mapped(self):
         """Every tool in _TOOL_NAME_TO_PERM_KEY maps to a valid attr name."""
@@ -348,7 +341,7 @@ class TestPermStorePersistence:
 class TestContextStatsPersistence:
     """Verify that context usage stats survive save_session → load_session."""
 
-    def _make_engine(self) -> AgentEngine:
+    def _make_engine(self) -> AgentEngine:  # noqa: F821
         from onecode.agent.engine import AgentEngine
         class FakeApp:
             config = type("cfg", (), {"default_provider": "minimaxi", "default_model": "minimax-m1-671b", "max_tokens": 4096, "providers": {}})()

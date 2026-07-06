@@ -12,10 +12,9 @@ from textual import containers
 from textual import on
 
 
-from onecode.config import ONECODE_DIR
-
 from tui.app import A2TUIApp
 from tui.db import DB
+from tui.paths import get_sessions
 from tui.widgets.grid_select import GridSelect
 from tui.widgets.session_grid_select import (
     SessionGridSelect,
@@ -92,7 +91,7 @@ class SessionsScreen(ModalScreen[str]):
         await db.session_delete(session_pk)
 
         if agent_session_id:
-            session_file = ONECODE_DIR / "sessions" / f"{agent_session_id}.json"
+            session_file = get_sessions() / f"{agent_session_id}.json"
             if session_file.exists():
                 session_file.unlink()
 

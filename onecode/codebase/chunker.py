@@ -63,10 +63,6 @@ def detect_language(file_path: str) -> str:
 
 def chunk_file(file_path: Path, strategy: str = "line",
                chunk_lines: int = 50, overlap: int = 10) -> list[CodeChunk]:
-    if strategy == "line":
-        return _chunk_by_lines(file_path, chunk_lines, overlap)
-    if strategy == "ast":
-        return _chunk_by_lines(file_path, chunk_lines, overlap)
     return _chunk_by_lines(file_path, chunk_lines, overlap)
 
 

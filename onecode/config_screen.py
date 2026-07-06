@@ -333,7 +333,6 @@ class ConfigScreen(App):
                 self._section_fields.append(ConfigItem("log_level", "Log", cfg.log_level))
             case "providers":
                 for pid, pcfg in cfg.providers.items():
-                    n_models = len(pcfg.models)
                     ak = _truncate(_display_val(pcfg.api_key), 24)
                     ep = _truncate(_display_val(pcfg.endpoint), 20)
                     status = f"ep:{ep} ak:{ak}"

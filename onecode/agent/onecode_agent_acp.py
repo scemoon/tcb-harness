@@ -1348,10 +1348,6 @@ class CDHACPAdapter:
                     elif isinstance(block, ToolResult):
                         self._emit_tool_result(block)
                     elif isinstance(block, SubAgentBlock):
-                        content_block = [{
-                            "type": "content",
-                            "content": {"type": "text", "text": block.result},
-                        }] if block.result else []
                         self.send_session_update({
                             "sessionUpdate": "subagent_start",
                             "subagentId": block.id,
@@ -1988,7 +1984,7 @@ class CDHACPAdapter:
                     })
                 elif event.type == StreamEventType.SUBAGENT_END:
                     chunk_count = self._subagent_fwd_count.pop(event.subagent_id, None)
-                    byte_count = self._subagent_fwd_bytes.pop(event.subagent_id, None)
+                    self._subagent_fwd_bytes.pop(event.subagent_id, None)
                     info_log(
                         "[ACP-SUBagent] SUBAGENT_END id=%s type=%s status=%s "
                         "err=%r chunk_count=%s",

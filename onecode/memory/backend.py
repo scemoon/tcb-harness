@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,16 +29,6 @@ class MemoryRecord(Base):
         Index("idx_layer_timestamp", "layer", "timestamp"),
         Index("idx_parent_id", "parent_id"),
     )
-
-
-class RefRecord(Base):
-    __tablename__ = "ref_records"
-
-    id = Column(String(16), primary_key=True)
-    node_id = Column(String(16), nullable=False, index=True)
-    content = Column(Text, nullable=False)
-    file_path = Column(String(512), nullable=True)
-    created_at = Column(DateTime, nullable=False)
 
 
 class MemoryBackend:
@@ -85,12 +74,20 @@ class MemoryBackend:
             s.merge(record)
             return True
 
-    def get_entry(self, entry_id: str) -> Optional[MemoryRecord]:
+    def get_entry(self, entry_id: str) -> Optional[dict]:
         with self.session() as s:
             record = s.query(MemoryRecord).filter_by(id=entry_id).first()
             if record:
-                s.refresh(record)
-            return record
+                return {
+                    "id": record.id,
+                    "layer": record.layer,
+                    "content": record.content,
+                    "timestamp": record.timestamp.isoformat() if record.timestamp else "",
+                    "metadata_json": record.metadata_json,
+                    "parent_id": record.parent_id,
+                    "result_ref": record.result_ref,
+                }
+            return None
 
     def get_entries_by_layer(self, layer: str, limit: int = 100) -> list[MemoryRecord]:
         with self.session() as s:
@@ -101,8 +98,6 @@ class MemoryBackend:
                 .limit(limit)
                 .all()
             )
-            for r in records:
-                s.refresh(r)
             return records
 
     def get_entries_by_parent(self, parent_id: str) -> list[MemoryRecord]:
@@ -121,23 +116,6 @@ class MemoryBackend:
                 query = query.filter_by(layer=layer)
             return query.limit(limit).all()
 
-    def save_ref(self, node_id: str, content: str, file_path: Optional[str] = None) -> bool:
-        with self.session() as s:
-            record = RefRecord(
-                id=str(uuid.uuid4())[:16],
-                node_id=node_id,
-                content=content,
-                file_path=file_path,
-                created_at=datetime.now(timezone.utc),
-            )
-            s.merge(record)
-            return True
-
-    def get_ref(self, node_id: str) -> Optional[str]:
-        with self.session() as s:
-            record = s.query(RefRecord).filter_by(node_id=node_id).order_by(RefRecord.created_at.desc()).first()
-            return record.content if record else None
-
     def search_content(self, query: str, layer: Optional[str] = None, limit: int = 10) -> list[MemoryRecord]:
         with self.session() as s:
             q = s.query(MemoryRecord)
@@ -147,8 +125,6 @@ class MemoryBackend:
             pattern = f"%{escaped}%"
             q = q.filter(MemoryRecord.content.like(pattern, escape="\\"))
             records = q.order_by(MemoryRecord.timestamp.desc()).limit(limit).all()
-            for r in records:
-                s.refresh(r)
             return records
 
     def delete_entry(self, entry_id: str) -> bool:

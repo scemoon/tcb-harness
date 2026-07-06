@@ -145,7 +145,7 @@ class TaskManager:
             return list(self._tasks.values())
         return [t for t in self._tasks.values() if t.status == status]
 
-    def add_todo_to_task(self, task_id: str, content: str, status: str = "pending") -> Optional["TaskChecklistItem"]:
+    def add_todo_to_task(self, task_id: str, content: str, status: str = "pending") -> Optional["TaskChecklistItem"]:  # noqa: F821
         task = self._tasks.get(task_id)
         if not task:
             return None

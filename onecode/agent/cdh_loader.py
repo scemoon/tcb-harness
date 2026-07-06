@@ -110,17 +110,6 @@ class CdhProjectLoader:
             encoding="utf-8",
         )
 
-    @staticmethod
-    def get_skill_content(cdh_dir: Path) -> str:
-        """Read ``.cdh/SKILL.md`` if it exists."""
-        skill_path = cdh_dir / "SKILL.md"
-        if skill_path.exists():
-            try:
-                return skill_path.read_text(encoding="utf-8")
-            except Exception:
-                pass
-        return ""
-
     # ── last-session persistence ───────────────────────────────
 
     @staticmethod
@@ -236,8 +225,12 @@ class CdhProjectLoader:
     ) -> Path:
         """Scaffold a ``.cdh/`` directory inside *workspace_root*.
 
-        Creates ``.cdh/config.yaml``, ``.cdh/state.json``, and a
-        stub ``.cdh/SKILL.md``.
+        Creates ``.cdh/config.yaml`` and ``.cdh/state.json``.
+
+        Project-level agent instructions live in the workspace-root
+        ``AGENTS.md`` (read by :mod:`onecode.agent.project_doc`); we
+        intentionally do **not** create a stub inside ``.cdh/`` — that
+        would split a single source of truth across two files.
 
         If *workspace_root* is inside a directory that is already a
         ``.cdh/`` project, a warning is printed and the existing project
@@ -270,13 +263,5 @@ class CdhProjectLoader:
         state = {"current_phase": phase, "completed_phases": [], "gate_results": {}}
         state_path = cdh_dir / CdhProjectLoader.STATE_FILENAME
         state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        skill_path = cdh_dir / "SKILL.md"
-        if not skill_path.exists():
-            skill_path.write_text(
-                f"# {name} — Project Instructions\n\n"
-                "Add project-specific agent instructions here.\n",
-                encoding="utf-8",
-            )
 
         return cdh_dir

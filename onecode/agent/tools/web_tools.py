@@ -68,7 +68,7 @@ class WebSearch:
 
         for url in search_urls:
             try:
-                results = self._search_duckduckgo(url, num_results)
+                results = self._search_duckduckgo(url, num_results, query)
                 if results:
                     return results
             except Exception:
@@ -76,7 +76,7 @@ class WebSearch:
 
         return self._search_fallback(query, num_results)
 
-    def _search_duckduckgo(self, url: str, num_results: int) -> str:
+    def _search_duckduckgo(self, url: str, num_results: int, query: str) -> str:
         with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
             resp = client.get(url)
             resp.raise_for_status()
@@ -84,9 +84,7 @@ class WebSearch:
         html_content = resp.text
         results = []
 
-        result_pattern = re.compile(r'<a class="result__a" href="([^"]+)">([^<]+)</a>.*?<a class="result__snippet"[^>]*>([^<]+)</a>', re.DOTALL)
         snippets = re.findall(r'<a class="result__a" href="([^"]+)">([^<]+)</a>', html_content)
-        snippet_pattern = re.compile(r'<a class="result__a" href="[^"]+">[^<]+</a>.*?(?:<p class="result__snippet">([^<]+)</p>)?', re.DOTALL)
 
         for i, (url, title) in enumerate(snippets[:num_results]):
             snippet_match = re.search(rf'<a class="result__a" href="{re.escape(url)}"[^>]*>[^<]+</a>.*?(?:<p class="result__snippet">([^<]+)</p>|(?:<a class="result__snippet"[^>]*>([^<]+)</a>))?', html_content, re.DOTALL)
@@ -104,6 +102,7 @@ class WebSearch:
         return f"No results found for '{query}'"
 
     def _search_fallback(self, query: str, num_results: int) -> str:
+        """Fallback search using a different method."""
         return f"Web search for '{query}' returned no results. Try using WebFetch to directly access a URL."
 
     def _quote(self, query: str) -> str:

@@ -54,6 +54,34 @@ def get_source_version(source_dir: Path) -> str:
         return DEFAULT_VERSION
 
 
+def ensure_onecode_default_skills() -> None:
+    """Install built-in skills (git, shell) to ~/.onecode/skills/ on first run."""
+    from onecode.config import ONECODE_DIR
+
+    target_dir = ONECODE_DIR / "skills"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    builtin_root = Path(__file__).resolve().parent.parent / "builtin_skills"
+    if not builtin_root.exists():
+        return
+
+    mgr = CdhSkillManager(skills_dir=target_dir)
+
+    for d in sorted(builtin_root.iterdir()):
+        if not d.is_dir():
+            continue
+        if not (d / "skill.yaml").exists():
+            continue
+        name = d.name
+        if mgr.get_installed_version(name) is not None:
+            continue
+        err = mgr.install(d)
+        if err:
+            logger.warning("default skill %s install failed: %s", name, err)
+        else:
+            logger.info("default skill %s installed \u2192 %s/%s", name, target_dir, name)
+
+
 def ensure_ai_dlc_skill(workspace_root: Path | None = None) -> None:
     """Bootstrap ai-dlc-skill into cdh platform pool.
 

@@ -629,7 +629,6 @@ def codebase_index(force: bool, path: str):
     engine = CodebaseEngine(project_dir, cfg.codebase)
     result = asyncio.run(engine.ensure_indexed(force=force))
 
-    total = result.total_files if hasattr(result, 'total_files') else 0
     click.echo(
         f"Indexed {project_dir.name}: "
         f"{result.indexed_files} files, "
@@ -718,6 +717,71 @@ def codebase_reindex(path: str):
         f"{result.indexed_files} files, "
         f"{result.total_chunks} chunks"
     )
+
+
+@cli.group()
+def memory():
+    """Manage long-term memory.
+
+    \b
+    Memory stores conversation history with BM25 keyword recall.
+    Use `cdh memory status` to view memory usage and `cdh memory clear` to reset.
+    """
+    pass
+
+
+@memory.command("status")
+def memory_status():
+    """Show memory usage statistics."""
+    from onecode.memory.backend import MemoryBackend
+
+    backend = MemoryBackend()
+    counts = backend.count_by_layer()
+    total = sum(counts.values())
+    click.echo(f"Total entries: {total}")
+    for layer, count in counts.items():
+        click.echo(f"  {layer}: {count}")
+    if total == 0:
+        click.echo("  (no memories stored yet)")
+
+
+@memory.command("clear")
+@click.option("--layer", default=None, help="Layer to clear (default: all layers)")
+def memory_clear(layer: str):
+    """Clear memory entries."""
+    from onecode.memory import AgentMemory
+    from onecode.memory.pyramid import MemoryLayer
+
+    am = AgentMemory()
+    if layer:
+        layers_to_clear = [l for l in MemoryLayer if l.value == layer]
+    else:
+        layers_to_clear = list(MemoryLayer)
+    removed = 0
+    for l in layers_to_clear:
+        entries = am.pyramid.list_by_layer(l)
+        for e in entries:
+            am.pyramid._layers[l].remove(e)
+            am.backend.delete_entry(e.id)
+            removed += 1
+    click.echo(f"Cleared {removed} memory entries.")
+
+
+@memory.command("count")
+@click.option("--layer", default=None, help="Layer to count (default: all layers)")
+def memory_count(layer: str):
+    """Count memory entries."""
+    from onecode.memory.backend import MemoryBackend
+
+    backend = MemoryBackend()
+    counts = backend.count_by_layer()
+    if layer:
+        click.echo(f"Entries in {layer}: {counts.get(layer, 0)}")
+    else:
+        total = sum(counts.values())
+        click.echo(f"Total entries: {total}")
+        for ly, count in sorted(counts.items()):
+            click.echo(f"  {ly}: {count}")
 
 
 @cli.command()

@@ -144,7 +144,14 @@ _ONECODE_HELP_OVERRIDES: dict[str, tuple[str, str]] = {
         "Manage the onecode codebase index",
         "Build and query onecode's local codebase index. Used by the "
         "agent to ground answers in the project's own source files. "
+        "Index stored at ~/.onecode/codebase/indexes/. "
         "Sub-commands: index, reindex, status, search.",
+    ),
+    "memory": (
+        "Manage onecode long-term memory",
+        "View and manage onecode's long-term conversation memory. "
+        "Memory stored at ~/.onecode/memory/ with BM25 recall. "
+        "Sub-commands: status, clear, count.",
     ),
     "skill": (
         "Manage onecode skills",

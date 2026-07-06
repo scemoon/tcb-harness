@@ -634,7 +634,7 @@ class Provider(ABC):
         body: str,
         *,
         retry_after: Optional[float] = None,
-    ) -> "ProviderError":
+    ) -> "ProviderError":  # noqa: F821
         """Convert an upstream HTTP error into the most specific
         :class:`ProviderError` subclass.
 

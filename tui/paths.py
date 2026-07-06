@@ -69,3 +69,19 @@ def get_log() -> Path:
     with suppress(OSError):
         path.mkdir(0o700, exist_ok=True, parents=True)
     return path
+
+
+def get_sessions() -> Path:
+    """Get the platform-level sessions directory (~/.cdh/sessions/).
+
+    Session JSON files are stored by the cdh platform, not by individual
+    agent engines.  The DB index at ~/.cdh/state/tui/tui.db maps each
+    session to its owning engine (B mapping mode).
+
+    Returns:
+        Path to the sessions directory.
+    """
+    path = Path.home() / ".cdh" / "sessions"
+    with suppress(OSError):
+        path.mkdir(0o700, exist_ok=True, parents=True)
+    return path

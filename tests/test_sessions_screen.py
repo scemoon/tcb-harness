@@ -6,7 +6,6 @@ but tests the core data flow that the bug depends on.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
 from tui.session_tracker import SessionDetails
 

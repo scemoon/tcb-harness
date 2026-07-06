@@ -2,7 +2,7 @@ import asyncio
 from itertools import islice
 import os
 from pathlib import Path
-from typing import Iterable, Literal, Sequence
+from typing import Iterable, Literal
 
 
 def longest_common_prefix(strings: list[str]) -> str:

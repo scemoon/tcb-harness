@@ -1,31 +1,65 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Vertical, VerticalGroup, VerticalScroll
+from textual.containers import Grid, VerticalGroup, VerticalScroll
+from textual.css.query import NoMatches
+from textual.geometry import Offset, Region, Spacing
+from textual.layouts.vertical import WidgetPlacement
+from textual.reactive import reactive
 from textual.screen import Screen
-from textual.widgets import Header, Markdown, Static
-from textual.widgets.markdown import MarkdownStream
+from textual.widget import Widget
+from textual.widgets import Header, Static
+
+from tui.menus import MenuItem
+from tui.protocol import ExpandProtocol, MenuProtocol
+from tui.widgets.agent_response import AgentResponse
+from tui.widgets.agent_thought import AgentThought
+from tui.widgets.conversation import Cursor, CursorContainer
+from tui.widgets.menu import Menu
+from tui.widgets.subagent import SubAgent
+from tui.widgets.tool_call import ToolCall as ToolCallWidget
 
 _sa_logger = logging.getLogger("tui.widgets.subagent_screen")
 
-from tui.widgets.subagent import SubAgent
+
+_SELECTABLE_BLOCK_TYPES: tuple[type[Widget], ...] = (
+    AgentResponse,
+    AgentThought,
+    ToolCallWidget,
+)
+
+
+def _is_selectable(child: Widget) -> bool:
+    return isinstance(child, _SELECTABLE_BLOCK_TYPES)
 
 
 class SubAgentScreen(Screen):
     """Full-screen view of a SubAgent output.
 
-    Styled to match main-convention styles:
-    - thinking → AgentThought-style (tall border, italic muted, ctrl+x toggle)
-    - text    → AgentResponse-style (MarkdownStream incremental rendering)
-    - tools   → ToolCall cards (same as main conversation)
+    Renders identically to the main Conversation:
+    - AgentResponse for streaming text (MarkdownStream)
+    - ToolCall cards mounted inline between text blocks
+    - AgentThought (thinking) as inline siblings at position of occurrence
+    - All widgets as siblings in a single #content container
+    - Vertical-bar block cursor in a left-side CursorContainer, matching
+      Conversation's visual treatment.
+
+    Mirrors Conversation's block cursor: Ctrl+J/K move between blocks,
+    Enter opens a Menu (copy / maximize), Ctrl+X toggles expand/collapse
+    on ExpandProtocol blocks.
     """
 
-    BINDINGS: list[BindingType] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "app.pop_screen", "Back", priority=True),
-        Binding("ctrl+x", "toggle_thought", "Toggle thought", show=False, priority=True),
+        Binding("ctrl+j", "cursor_down", "Next block", show=False, priority=True),
+        Binding("ctrl+k", "cursor_up", "Prev block", show=False, priority=True),
+        Binding("enter", "select_block", "Block menu", show=False, priority=True),
+        Binding("ctrl+x", "toggle_expand", "Toggle expand", show=False, priority=True),
         Binding("up", "scroll_up", "Up", priority=True),
         Binding("down", "scroll_down", "Down", priority=True),
         Binding("pageup", "scroll_page_up", "Page Up", priority=True),
@@ -37,64 +71,102 @@ class SubAgentScreen(Screen):
     DEFAULT_CSS = """
     SubAgentScreen {
         background: $surface;
+        padding-left: 1;
     }
 
-    #subagent-scroll {
-        padding: 0 1;
+    #scroll {
         height: 1fr;
         overflow-y: auto;
         scrollbar-gutter: stable;
     }
 
-    #subagent-task {
-        margin-bottom: 1;
+    #content-grid {
+        layout: grid;
+        grid-size: 2 1;
+        grid-columns: 1 1fr;
+        grid-gutter: 0;
+        height: auto;
+        width: 1fr;
     }
 
-    #subagent-thought-section {
-        display: none;
-        margin-bottom: 1;
-        border-left: tall $secondary 60%;
-        padding: 0 0 0 1;
-    }
-    #subagent-thought-section.-visible {
-        display: block;
-    }
+    #cursor-container {
+        width: 1;
+        height: auto;
+        color: $foreground 7%;
 
-    #subagent-thought-header {
-        color: $text;
-        text-style: bold;
-        padding: 0 2;
-        height: 1;
-        &:hover {
-            background: $primary-muted 30%;
+        &> Cursor {
+            height: 0;
+            width: 1;
+            border-left: outer $text-accent;
+            visibility: visible;
+            &.-blink {
+                border-left: outer $text-accent 20%;
+            }
         }
     }
 
-    #subagent-thought-content {
-        color: $text-muted;
-        text-style: italic;
-        padding: 0 1 0 2;
+    #content {
+        layout: stream;
+        width: 1fr;
+        overflow: hidden;
+        height: auto;
+        padding: 0 0 0 0;
+    }
+
+    #content > AgentResponse {
+        min-height: 1;
+        padding: 0 0 0 0;
+        overflow-x: auto;
+        scrollbar-size-horizontal: 0;
+        layout: stream;
+    }
+
+    #content > ToolCall {
+        margin: 0 0 0 1 !important;
+        width: 1fr;
+        layout: stream;
+        height: auto;
+    }
+
+    #content > AgentThought {
+        margin: 1 1 1 0;
+    }
+
+    #content > ToolCall ToolCallHeader {
+        color: $text-secondary;
+        pointer: pointer;
+        width: auto;
+        max-width: 1fr;
+        margin: 0 1 0 0;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+    }
+
+    #content > ToolCall #tool-content {
         display: none;
     }
-    #subagent-thought-content.-visible {
+
+    #content > ToolCall.-has-content #tool-content {
+        margin: 1 1 1 0;
+    }
+
+    #content > ToolCall.-expanded #tool-content {
         display: block;
+        max-height: 60vh;
+        overflow-y: hidden;
     }
 
-    #subagent-output {
-        margin-bottom: 1;
+    #content > ToolCall.-expanded ToolCallHeader {
+        text-wrap: wrap;
+        text-overflow: fold;
     }
 
-    #subagent-screen-tools {
-        padding: 0 1;
-        height: auto;
-        margin-top: 1;
+    #content > AgentResponse > MarkdownBlock:last-child,
+    #content > AgentThought > #thought-content MarkdownBlock:last-child {
+        margin-bottom: 0;
     }
 
-    #subagent-screen-tools ToolCall {
-        margin: 0 0 0 1;
-    }
-
-    #subagent-screen-footer {
+    #footer {
         dock: bottom;
         height: 1;
         padding: 0 1;
@@ -103,280 +175,337 @@ class SubAgentScreen(Screen):
     }
     """
 
+    class Content(VerticalGroup, can_focus=False):
+        """Matches Conversation.Contents — strips bottom margin from last child."""
+
+        def process_layout(
+            self, placements: list[WidgetPlacement]
+        ) -> list[WidgetPlacement]:
+            if placements:
+                last = placements[-1]
+                top, right, _bottom, left = last.margin
+                placements[-1] = last._replace(
+                    margin=Spacing(top, right, 0, left)
+                )
+            return placements
+
+    cursor_offset: reactive[int] = reactive(-1)
+
     def __init__(self, subagent: SubAgent) -> None:
         super().__init__()
         self.subagent = subagent
+        self._events_idx: int = 0
+        self._sync_pending = False
+        self._post_lock = asyncio.Lock()
+        self._current_response: AgentResponse | None = None
+        self._current_thought: AgentThought | None = None
         self._auto_follow = True
-        self._refresh_timer = None
-        self._thought_collapsed = False
-        self._stream: MarkdownStream | None = None
-        self._chunks_rendered: int = 0
-        self._syncing_tools: bool = False
-        self._pending_update: bool = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        with VerticalScroll(id="subagent-scroll"):
-            yield Markdown("", id="subagent-task")
-            with Vertical(id="subagent-thought-section"):
-                yield Static("⏳ thinking:", id="subagent-thought-header")
-                yield Static("", id="subagent-thought-content")
-            yield Markdown("", id="subagent-output")
-            with VerticalGroup(id="subagent-screen-tools"):
-                yield from self._compose_tool_calls()
+        with VerticalScroll(id="scroll"):
+            with Grid(id="content-grid"):
+                with CursorContainer(id="cursor-container"):
+                    yield Cursor()
+                with VerticalGroup(id="content-wrap"):
+                    yield self.Content(id="content")
         yield Static(
             "[$text-muted]esc[/] 返回  "
-            "[$text-muted]ctrl+x[/] 折叠思考  "
-            "[$text-muted]↑↓[/] 滚动  "
-            "[$text-muted]end[/] 跟随最新",
-            id="subagent-screen-footer",
+            "[$text-muted]ctrl+j/k[/] 移动  "
+            "[$text-muted]enter[/] 菜单  "
+            "[$text-muted]ctrl+x[/] 折叠  "
+            "[$text-muted]↑↓[/] 滚动",
+            id="footer",
         )
 
-    def _compose_tool_calls(self) -> ComposeResult:
-        from tui.widgets.tool_call import ToolCall as ToolCallWidget
-
-        sa = self.subagent
-        for tool_id in sa._tool_order:
-            tc = sa._tool_calls.get(tool_id)
-            if isinstance(tc, dict):
-                yield ToolCallWidget(tc, id=f"scr-{tool_id}")
+    # ── Lifecycle ──
 
     async def on_mount(self) -> None:
-        self.title = self._make_title()
-        self.sub_title = self._make_subtitle()
-        self._render_initial()
-        await self._sync_tool_calls_async()
         self.subagent._update_callbacks.append(self._on_subagent_update)
-        self._refresh_timer = self.set_interval(0.05, self._poll_subagent)
+        await self._sync_ui()
+        try:
+            self.query_one("#scroll", VerticalScroll).focus()
+        except Exception:
+            pass
 
     def on_unmount(self) -> None:
-        if self._refresh_timer is not None:
-            self._refresh_timer.stop()
-            self._refresh_timer = None
-        self._stream = None
+        self._current_response = None
+        self._current_thought = None
         try:
             self.subagent._update_callbacks.remove(self._on_subagent_update)
         except ValueError:
             pass
 
-    # ── Callback: debounced via call_after_refresh ──
+    # ── Event processing ──
 
     def _on_subagent_update(self) -> None:
-        if self._pending_update:
+        if self._sync_pending:
             return
-        self._pending_update = True
-        self.call_after_refresh(self._flush_pending_update)
+        self._sync_pending = True
+        self.run_worker(self._sync_ui(), exit_on_error=False)
 
-    def _flush_pending_update(self) -> None:
-        self._pending_update = False
+    async def _sync_ui(self) -> None:
         try:
-            sa = self.subagent
+            async with self._post_lock:
+                container = self.query_one("#content", VerticalGroup)
+                while self._events_idx < len(self.subagent._events):
+                    entry = self.subagent._events[self._events_idx]
+                    self._events_idx += 1
+                    if entry[0] == "thinking":
+                        await self._handle_thinking(container, entry[1])
+                    elif entry[0] == "text":
+                        self._complete_current_thought()
+                        await self._handle_text(container, entry[1])
+                    elif entry[0] == "tool":
+                        self._complete_current_thought()
+                        await self._handle_tool(container, entry[1])
 
-            # Stream new text chunks (incremental via MarkdownStream)
-            if self._stream and sa._chunks:
-                rendered = self._chunks_rendered
-                if len(sa._chunks) > rendered:
-                    self._chunks_rendered = len(sa._chunks)
-                    fragment = "".join(sa._chunks[rendered:])
-                    self._stream.write(fragment)
+            # If subagent is done, complete any lingering active thought
+            if self._current_thought is not None and not self._current_thought._completed:
+                if self.subagent._status in ("completed", "failed"):
+                    self._current_thought.mark_completed()
+                    self._current_thought = None
 
-            # Thinking section (Static.update is cheap)
-            self._update_thinking()
-
-            # Auto-scroll
+            self._update_title()
+            self._update_footer()
+            self._refresh_block_cursor()
             if self._auto_follow:
-                scroll = self.query_one("#subagent-scroll", VerticalScroll)
-                scroll.scroll_end(animate=False)
-
-            # Footer
-            self._update_footer()
-
-            # Tool calls (guarded)
-            self._sync_tool_calls()
-
-            # Title
-            self.title = self._make_title()
-            self.sub_title = self._make_subtitle()
+                self.call_after_refresh(self._scroll_to_end)
         except Exception:
-            _sa_logger.exception("_flush_pending_update failed")
+            _sa_logger.exception("_sync_ui failed")
+        finally:
+            self._sync_pending = False
+            if self._events_idx < len(self.subagent._events):
+                self._on_subagent_update()
 
-    # ── Initial render ──
+    async def _handle_thinking(self, container: VerticalGroup, fragment: str) -> None:
+        if self._current_thought is None:
+            self._current_thought = AgentThought(fragment)
+            await container.mount(self._current_thought)
+        else:
+            await self._current_thought.append_fragment(fragment)
 
-    def _render_initial(self) -> None:
-        """Render initial state once on mount (not for streaming updates).
+    async def _handle_text(self, container: VerticalGroup, fragment: str) -> None:
+        if self._current_response is None:
+            self._current_response = AgentResponse("")
+            await container.mount(self._current_response)
+        await self._current_response.append_fragment(fragment)
 
-        Uses Markdown.update() for immediate synchronous display so that
-        historical / already-completed sessions show content right away.
-        MarkdownStream is only used for subsequent incremental writes.
-        """
-        sa = self.subagent
+    async def _handle_tool(self, container: VerticalGroup, data) -> None:
+        tool_id, tc = data
+        self._current_response = None
+
+        scr_id = f"scr-{tool_id}"
         try:
-            # Task
-            task = self.query_one("#subagent-task", Markdown)
-            if sa.prompt:
-                prompt_preview = sa.prompt if len(sa.prompt) <= 200 else sa.prompt[:200] + "..."
-                task.update(f"> ### 任务\n\n> {prompt_preview}")
-                task.display = True
-            else:
-                task.display = False
-
-            # Thinking
-            self._update_thinking()
-
-            # Output: synchronously show existing content, then create stream
-            output = self.query_one("#subagent-output", Markdown)
-            if sa._chunks:
-                output.update("".join(sa._chunks))
-            self._chunks_rendered = len(sa._chunks)
-            self._stream = Markdown.get_stream(output)
-
-            # Footer
-            self._update_footer()
+            existing: ToolCallWidget = container.get_child_by_id(scr_id)  # type: ignore[assignment]
+            await existing.update_tool_call(tc)
+        except NoMatches:
+            await container.mount(ToolCallWidget(tc, id=scr_id))
         except Exception:
-            _sa_logger.exception("_render_initial failed")
+            _sa_logger.exception("_handle_tool failed %s", tool_id)
 
-    # ── Polling safety net + completion handler ──
+    def _complete_current_thought(self) -> None:
+        if self._current_thought is not None and not self._current_thought._completed:
+            self._current_thought.mark_completed()
+            self._current_thought = None
 
-    def _poll_subagent(self) -> None:
-        sa = self.subagent
-        if sa._status == "running":
-            # Catch missed updates (e.g. callback lost during screen transition)
-            if self._stream and len(sa._chunks) > self._chunks_rendered:
-                self.call_after_refresh(self._flush_pending_update)
+    def _scroll_to_end(self) -> None:
+        try:
+            self.query_one("#scroll", VerticalScroll).scroll_end(animate=False)
+        except Exception:
+            pass
+
+    # ── Block cursor ──
+
+    def _selectable_children(self) -> list[Widget]:
+        try:
+            container = self.query_one("#content", VerticalGroup)
+        except Exception:
+            return []
+        return [child for child in container.children if _is_selectable(child)]
+
+    @property
+    def cursor_block(self) -> Widget | None:
+        if self.cursor_offset == -1:
+            return None
+        children = self._selectable_children()
+        if not children or self.cursor_offset >= len(children):
+            return None
+        return children[self.cursor_offset]
+
+    def _cursor_widget(self) -> Cursor | None:
+        try:
+            return self.query_one("#cursor-container Cursor", Cursor)
+        except Exception:
+            return None
+
+    def _content_region(self) -> Region | None:
+        try:
+            return self.query_one("#content", VerticalGroup).content_region
+        except Exception:
+            return None
+
+    def _refresh_block_cursor(self) -> None:
+        cursor = self._cursor_widget()
+        if cursor is None:
             return
-
-        # Not running — finalise and stop polling
-        if self._refresh_timer is not None:
-            self._refresh_timer.stop()
-            self._refresh_timer = None
-
-        # Write any remaining chunks
-        if self._stream and len(sa._chunks) > self._chunks_rendered:
-            rendered = self._chunks_rendered
-            self._chunks_rendered = len(sa._chunks)
-            self._stream.write("".join(sa._chunks[rendered:]))
-
-        # Append failure / completion signal to stream
-        if sa._status == "failed":
-            raw = "".join(sa._chunks)
-            self._stream.write(
-                f"\n\n---\n**❌ Failed:** {sa._error}\n\n"
-                f"**Partial output:**\n```\n{raw[:4000] if raw else '(none)'}\n```"
+        block = self.cursor_block
+        if block is None:
+            cursor.follow(None)
+            return
+        cursor.follow(block)
+        scroll = self._scroll_widget()
+        if scroll is not None:
+            self.call_after_refresh(
+                scroll.scroll_to_center, block, immediate=True
             )
 
-        self.call_after_refresh(self._final_refresh)
+    def action_cursor_down(self) -> None:
+        children = self._selectable_children()
+        if not children:
+            return
+        if self.cursor_offset == -1:
+            self.cursor_offset = 0
+        elif self.cursor_offset < len(children) - 1:
+            self.cursor_offset += 1
+        else:
+            self.cursor_offset = -1
+        self._auto_follow = False
+        self._refresh_block_cursor()
 
-    def _final_refresh(self) -> None:
-        """One last UI refresh after subagent completes."""
-        try:
-            self._update_thinking()
-            self._update_footer()
-            self.title = self._make_title()
-            self.sub_title = self._make_subtitle()
-            self._sync_tool_calls()
-        except Exception:
-            _sa_logger.exception("_final_refresh failed")
+    def action_cursor_up(self) -> None:
+        children = self._selectable_children()
+        if not children:
+            return
+        if self.cursor_offset == -1:
+            self.cursor_offset = len(children) - 1
+        elif self.cursor_offset > 0:
+            self.cursor_offset -= 1
+        else:
+            self.cursor_offset = -1
+        self._auto_follow = False
+        self._refresh_block_cursor()
 
-    # ── Shared UI helpers ──
-
-    def _update_thinking(self) -> None:
-        try:
-            sa = self.subagent
-            thought_section = self.query_one("#subagent-thought-section", Vertical)
-            thought_content = self.query_one("#subagent-thought-content", Static)
-            if sa._thinking_chunks:
-                thought_section.display = True
-                thought_section.set_class(True, "-visible")
-                raw = "".join(sa._thinking_chunks).strip()
-                thought_content.update(raw)
-                # Auto-expand during streaming
-                if sa._status == "running":
-                    self._thought_collapsed = False
-                thought_content.set_class(not self._thought_collapsed, "-visible")
-                thought_content.display = not self._thought_collapsed
+    async def action_select_block(self) -> None:
+        block = self.cursor_block
+        if block is None:
+            return
+        menu_options: list[MenuItem] = [
+            MenuItem("[u]C[/]opy to clipboard", "copy_to_clipboard", "c"),
+            MenuItem("Co[u]p[/u]y to prompt", "copy_to_prompt", "p"),
+        ]
+        if getattr(block, "ALLOW_MAXIMIZE", False):
+            menu_options.append(MenuItem("[u]M[/u]aximize", "maximize_block", "m"))
+        if isinstance(block, MenuProtocol):
+            menu_options.extend(block.get_block_menu())
+        if isinstance(block, ExpandProtocol):
+            if block.is_block_expanded():
+                menu_options.append(MenuItem("[u]C[/]ollapse", "collapse_block", "x"))
             else:
-                thought_section.display = False
-                thought_section.set_class(False, "-visible")
-            self._update_thought_header()
+                menu_options.append(MenuItem("E[x]pand", "expand_block", "x"))
+        menu = Menu(block, menu_options)
+        try:
+            container = self.query_one("#content", VerticalGroup)
+            region = container.content_region
+            menu.styles.offset = Offset(
+                region.x + 1,
+                block.virtual_region.y + container.virtual_region.y,
+            )
         except Exception:
-            _sa_logger.warning("_update_thinking failed", exc_info=True)
+            pass
+        await self.app.mount(menu)
+        menu.focus()
+
+    def action_copy_to_clipboard(self, block: Widget | None = None) -> None:
+        if block is None:
+            block = self.cursor_block
+        if isinstance(block, MenuProtocol):
+            text = block.get_block_content("clipboard")
+        else:
+            text = None
+        if text:
+            self.app.copy_to_clipboard(text)
+            self.flash("Copied to clipboard")
+
+    def action_copy_to_prompt(self) -> None:
+        block = self.cursor_block
+        if isinstance(block, MenuProtocol):
+            text = block.get_block_content("prompt")
+        else:
+            text = None
+        if text:
+            self.flash("Copied to prompt")
+            self.app.pop_screen()
+
+    def action_maximize_block(self) -> None:
+        if (block := self.cursor_block) is not None:
+            self.app.screen.maximize(block, container=False)
+            block.focus()
+
+    def action_expand_block(self) -> None:
+        if (block := self.cursor_block) is not None and isinstance(block, ExpandProtocol):
+            block.expand_block()
+            self._refresh_block_cursor()
+
+    def action_collapse_block(self) -> None:
+        if (block := self.cursor_block) is not None and isinstance(block, ExpandProtocol):
+            block.collapse_block()
+            self._refresh_block_cursor()
+
+    def action_toggle_expand(self) -> None:
+        block = self.cursor_block
+        if block is None:
+            # No cursor → fall back to "toggle latest completed thought"
+            try:
+                container = self.query_one("#content", VerticalGroup)
+                for child in reversed(container.children):
+                    if isinstance(child, AgentThought) and child._completed:
+                        child.action_toggle()
+                        return
+            except Exception:
+                return
+            return
+        if isinstance(block, ExpandProtocol):
+            if block.is_block_expanded():
+                block.collapse_block()
+            else:
+                block.expand_block()
+            self._refresh_block_cursor()
+
+    # ── Title / Footer ──
+
+    def _update_title(self) -> None:
+        sa = self.subagent
+        status_icon = {"running": "🔄", "completed": "✔", "failed": "✗"}.get(sa._status, "?")
+        self.title = f"{status_icon} Subagent ({sa.agent_type})"
+        chunks = len("".join(sa._chunks))
+        tools = len(sa._tool_calls)
+        parts = [sa._status]
+        if chunks:
+            parts.append(f"{chunks}B")
+        if tools:
+            parts.append(f"{tools} tool calls")
+        self.sub_title = " | ".join(parts)
 
     def _update_footer(self) -> None:
         try:
-            thought_label = "折叠思考" if not self._thought_collapsed else "展开思考"
-            self.query_one("#subagent-screen-footer", Static).update(
+            self.query_one("#footer", Static).update(
                 "[$text-muted]esc[/] 返回  "
-                f"[$text-muted]ctrl+x[/] {thought_label}  "
-                "[$text-muted]↑↓[/] 滚动  "
-                "[$text-muted]end[/] 跟随最新"
+                "[$text-muted]ctrl+j/k[/] 移动  "
+                "[$text-muted]enter[/] 菜单  "
+                "[$text-muted]ctrl+x[/] 折叠  "
+                "[$text-muted]↑↓[/] 滚动"
             )
         except Exception:
             pass
-
-    def _update_thought_header(self) -> None:
-        try:
-            header = self.query_one("#subagent-thought-header", Static)
-            if sa := self.subagent:
-                if sa._status == "running":
-                    header.update("⏳ thinking:")
-                elif self._thought_collapsed:
-                    header.update("+ Thought")
-                else:
-                    header.update("- Thought")
-        except Exception:
-            pass
-
-    # ── Thought toggle ──
-
-    def action_toggle_thought(self) -> None:
-        self._thought_collapsed = not self._thought_collapsed
-        self._update_thinking()
-        self._update_footer()
-
-    def on_click(self, event) -> None:
-        if getattr(event.widget, "id", None) == "subagent-thought-header":
-            self.action_toggle_thought()
-            event.stop()
-
-    # ── Tool call sync (guarded) ──
-
-    def _sync_tool_calls(self) -> None:
-        self.run_worker(self._sync_tool_calls_async(), exit_on_error=False)
-
-    async def _sync_tool_calls_async(self) -> None:
-        if self._syncing_tools:
-            return
-        self._syncing_tools = True
-        try:
-            container = self.query_one("#subagent-screen-tools", VerticalGroup)
-        except Exception:
-            self._syncing_tools = False
-            return
-        from tui.widgets.tool_call import ToolCall as ToolCallWidget
-
-        existing: dict[str, ToolCallWidget] = {
-            w.id: w for w in container.children if isinstance(w, ToolCallWidget)
-        }
-        sa = self.subagent
-        for tool_id in sa._tool_order:
-            tc = sa._tool_calls.get(tool_id)
-            if not isinstance(tc, dict):
-                continue
-            scr_id = f"scr-{tool_id}"
-            widget = existing.get(scr_id)
-            try:
-                if widget is None:
-                    await container.mount(ToolCallWidget(tc, id=scr_id))
-                else:
-                    await widget.update_tool_call(tc)
-            except Exception:
-                _sa_logger.exception("mount/update tool call failed %s", tool_id)
-        self._syncing_tools = False
 
     # ── Scroll actions ──
 
     def _scroll_widget(self) -> VerticalScroll | None:
-        return self.query_one("#subagent-scroll", VerticalScroll)
+        try:
+            return self.query_one("#scroll", VerticalScroll)
+        except Exception:
+            return None
 
     def action_scroll_up(self) -> None:
         self._auto_follow = False
@@ -406,24 +535,12 @@ class SubAgentScreen(Screen):
         if w := self._scroll_widget():
             w.scroll_end(animate=False)
 
-    # ── Title ──
+    # ── Scroll tracking ──
 
-    def _make_title(self) -> str:
-        sa = self.subagent
-        status_icon = {
-            "running": "🔄",
-            "completed": "✔",
-            "failed": "✗",
-        }.get(sa._status, "?")
-        return f"{status_icon} Subagent ({sa.agent_type})"
-
-    def _make_subtitle(self) -> str:
-        sa = self.subagent
-        chunks = len("".join(sa._chunks))
-        tools = len(sa._tool_calls)
-        parts = [sa._status]
-        if chunks:
-            parts.append(f"{chunks}B")
-        if tools:
-            parts.append(f"{tools} tool calls")
-        return " | ".join(parts)
+    def on_scroll(self, event) -> None:
+        try:
+            scroll = self.query_one("#scroll", VerticalScroll)
+            at_end = scroll.scroll_y >= scroll.max_scroll_y - 1
+            self._auto_follow = at_end
+        except Exception:
+            pass

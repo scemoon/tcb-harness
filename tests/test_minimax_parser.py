@@ -9,12 +9,10 @@ cover.
 from __future__ import annotations
 
 import logging
-import time
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -276,7 +274,7 @@ class TestProviderErrorClassification:
 
 class TestDailyLogRotation:
     def test_handler_attached_with_midnight_when(self, tmp_path: Path, monkeypatch):
-        from onecode.cli import setup_logging, LOG_DIR
+        from onecode.cli import setup_logging
 
         # Redirect LOG_DIR to a temp path so we don't pollute ~/.cdh.
         monkeypatch.setattr("onecode.cli.LOG_DIR", tmp_path)

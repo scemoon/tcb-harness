@@ -1,9 +1,10 @@
 """onecode legacy migration — move onecode's private state from ~/.cdh/ to ~/.onecode/.
 
 This is a ONE-TIME migration triggered at first startup after upgrade.
-It only moves directories owned by onecode (sessions, logs, traces, memory,
+It only moves directories owned by onecode (logs, traces, memory,
 snapshots, mcps, models, onecode.config.yaml). cdh platform directories
-(skills, projects, state) are left untouched.
+(skills, projects, state, sessions) are left untouched.  Session JSON is owned
+by the cdh platform layer (B mapping mode), not by individual engines.
 """
 
 from __future__ import annotations
@@ -16,8 +17,9 @@ from pathlib import Path
 logger = logging.getLogger("onecode.migrate")
 
 # Directories/state that belong to onecode and should be migrated
+# NOTE: sessions is deliberately excluded — it belongs to the cdh
+# platform layer (B mapping mode), not to any individual engine.
 _ONECODE_PRIVATE_DIRS = {
-    "sessions",
     "logs",
     "traces",
     "memory",

@@ -157,6 +157,10 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
         # Tool calls stashed during replay flush (mounted once the SubAgent
         # itself is mounted). See Conversation._flush_replay_buffer.
         self._pending_tool_calls: list = []
+        # Ordered event queue for chronological rendering (used by SubAgentScreen)
+        self._events: list = []
+        # Direct streaming hook for SubAgentScreen (bypasses _notify_update for chunks)
+        self._screen_hook = None
         # Diagnostics counters (for log correlation)
         self._chunk_count_log: int = 0
         self._byte_count_log: int = 0
@@ -320,22 +324,22 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
 
     def append_chunk(self, text: str) -> None:
         self._chunks.append(text)
+        self._events.append(("text", text))
         self._chunk_count_log += 1
         self._byte_count_log += len(text or "")
         self.latest_line = self._update_latest_line()
         self._refresh_latest()
         if self._expanded:
             self.call_after_refresh(self._refresh_full_body)
-        self._notify_update()
-        if self._chunk_count_log <= 5 or self._chunk_count_log % 50 == 0:
-            _sa_logger.debug(
-                "[WIDGET-SUBagent] append_chunk id=%s chunk#%d total_bytes=%d mounted=%s",
-                self.id, self._chunk_count_log, self._byte_count_log,
-                self._mounted,
-            )
+        hook = self._screen_hook
+        if hook:
+            self.run_worker(hook(text), exit_on_error=False)
+        else:
+            self._notify_update()
 
     def append_thinking(self, text: str) -> None:
         self._thinking_chunks.append(text)
+        self._events.append(("thinking", text))
         if self._expanded:
             self.call_after_refresh(self._refresh_full_body)
         self._notify_update()
@@ -367,6 +371,7 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
         self._tool_calls[tool_id] = tool_call
         if tool_id not in self._tool_order:
             self._tool_order.append(tool_id)
+        self._events.append(("tool", (tool_id, tool_call)))
         # Show the current tool name as the inline preview line.
         title = tool_call.get("title", "") if isinstance(tool_call, dict) else ""
         if title:

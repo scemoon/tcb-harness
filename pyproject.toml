@@ -57,6 +57,9 @@ onecode = [
     "builtin_skills/**/*",
 ]
 
+[tool.ruff]
+exclude = ["tui/", "dist/", ".venv/"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 
@@ -66,5 +69,6 @@ dev = [
     "pyinstrument>=5.1.1",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=6.0.0",
     "textual-dev>=1.8.0",
 ]

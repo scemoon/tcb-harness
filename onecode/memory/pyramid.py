@@ -11,9 +11,6 @@ from typing import Optional
 
 class MemoryLayer(Enum):
     L0_CONVERSATION = "l0_conversation"
-    L1_ATOM = "l1_atom"
-    L2_SCENARIO = "l2_scenario"
-    L3_PERSONA = "l3_persona"
 
 
 @dataclass
@@ -134,69 +131,3 @@ class MemoryPyramid:
     def list_recent(self, layer: MemoryLayer, limit: int = 10) -> list[MemoryEntry]:
         entries = self._layers.get(layer, [])
         return sorted(entries, key=lambda e: e.timestamp, reverse=True)[:limit]
-
-    def drill_down(self, entry_id: str) -> list[MemoryEntry]:
-        chain = []
-        current = self._find_entry_anywhere(entry_id)
-        while current:
-            chain.append(current)
-            if current.parent_id:
-                current = self._find_entry_anywhere(current.parent_id)
-            else:
-                current = None
-        return list(reversed(chain))
-
-    def _find_entry_anywhere(self, entry_id: str) -> Optional[MemoryEntry]:
-        for entries in self._layers.values():
-            for entry in entries:
-                if entry.id == entry_id:
-                    return entry
-        return None
-
-    def extract_atoms_from_conversation(
-        self, conversation_id: str, max_atoms: int = 20
-    ) -> list[MemoryEntry]:
-        l0_entries = [e for e in self._layers[MemoryLayer.L0_CONVERSATION] if e.parent_id == conversation_id]
-        atoms = []
-        for l0 in l0_entries:
-            content = self.get_content(l0)
-            if len(content) > 100:
-                atom_content = content[:200] + "..."
-            else:
-                atom_content = content
-            atom = self.add(
-                MemoryLayer.L1_ATOM,
-                atom_content,
-                metadata={"source": "auto_extract", "source_id": l0.id},
-                parent_id=l0.id,
-            )
-            atoms.append(atom)
-            if len(atoms) >= max_atoms:
-                break
-        return atoms
-
-    def build_scenario_from_atoms(self, atom_ids: list[str], name: str) -> MemoryEntry:
-        atom_contents = []
-        for atom_id in atom_ids:
-            atom = self._find_entry_anywhere(atom_id)
-            if atom:
-                atom_contents.append(f"- {atom.content}")
-        content = f"## {name}\n\n" + "\n".join(atom_contents)
-        return self.add(
-            MemoryLayer.L2_SCENARIO,
-            content,
-            metadata={"atom_count": len(atom_ids)},
-        )
-
-    def build_persona_from_scenarios(self, scenario_ids: list[str], name: str) -> MemoryEntry:
-        scenario_contents = []
-        for sc_id in scenario_ids:
-            sc = self._find_entry_anywhere(sc_id)
-            if sc:
-                scenario_contents.append(f"### {sc.content[:100]}...\n{sc.content}")
-        content = f"# {name}\n\n" + "\n".join(scenario_contents)
-        return self.add(
-            MemoryLayer.L3_PERSONA,
-            content,
-            metadata={"scenario_count": len(scenario_ids)},
-        )

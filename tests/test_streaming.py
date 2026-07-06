@@ -6,7 +6,6 @@ the engine — the text parser must NOT emit its own notifications."""
 
 from unittest.mock import Mock
 
-import pytest
 
 from onecode.agent.onecode_agent_acp import CDHACPAdapter
 

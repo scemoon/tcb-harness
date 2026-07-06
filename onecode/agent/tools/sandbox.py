@@ -78,7 +78,6 @@ class Sandbox:
         bwrap_args.extend(["--uid", str(os.getuid())])
         bwrap_args.extend(["--gid", str(os.getgid())])
 
-        env = " ".join(f"{k}={v}" for k, v in os.environ.items() if k in self.config.env_whitelist or k.startswith("LC_"))
         bwrap_args.extend(["--setenv", "HOME", "/workspace"])
         bwrap_args.extend(["--setenv", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/bin:/bin"])
 

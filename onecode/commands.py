@@ -349,7 +349,6 @@ async def _mcp(conversation: "Conversation", parameters: str) -> None:
             )
             return
         lines = ["**MCP Servers**\n"]
-        names = [s.get("name", "?") for s in servers]
         for i, s in enumerate(servers, 1):
             name = s.get("name", "?")
             transport = s.get("transport", "sse")

@@ -67,7 +67,7 @@ from tui.widgets.shell_terminal import ShellTerminal
 from tui.widgets.ask_user import AskUserWidget, AskUserSubmitted
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Callable
     from tui.acp.agent import Mode
     from tui.widgets.terminal import Terminal
     from tui.widgets.agent_response import AgentResponse
