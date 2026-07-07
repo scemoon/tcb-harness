@@ -211,7 +211,6 @@ class MainScreen(Screen, can_focus=False):
             new_dir = event.project_dir
             sidebar = self.query_one(SideBar)
             if new_dir is None:
-                self.project_path = None
                 if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
                     mf.refresh_files()
                 self._swap_directory_watcher(None)

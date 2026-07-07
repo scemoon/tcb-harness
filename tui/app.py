@@ -233,12 +233,6 @@ def get_store_screen():
     return StoreScreen()
 
 
-def get_projects_screen() -> "ProjectsScreen":
-    from tui.screens.projects_screen import ProjectsScreen
-
-    return ProjectsScreen()
-
-
 class A2TUIApp(App, inherit_bindings=False):
     """The top level app."""
 
@@ -248,7 +242,6 @@ class A2TUIApp(App, inherit_bindings=False):
         "settings": get_settings_screen,
         "sessions": get_sessions_screen,
         "store": get_store_screen,
-        "projects": get_projects_screen,
     }
     MODES = {}
     BINDING_GROUP_TITLE = "System"
@@ -1139,7 +1132,8 @@ class A2TUIApp(App, inherit_bindings=False):
         from onecode.config_screen import EditFieldScreen
         import yaml
 
-        result = await self.push_screen_wait("projects")
+        from tui.screens.projects_screen import ProjectsScreen
+        result = await self.push_screen_wait(ProjectsScreen())
         if result is None:
             cfg = load_config()
             if cfg.current_project:

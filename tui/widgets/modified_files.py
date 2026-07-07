@@ -120,15 +120,12 @@ class ModifiedFiles(containers.Vertical, can_focus=True):
 
     def watch_path(self, path: Path | None) -> None:
         self._cancel_debounce()
-        if path is None:
-            self._show_status("no-changes", NO_CHANGES_TEXT)
-            return
-        self._schedule_run(path)
+        self._schedule_run(path or Path.cwd())
 
     def refresh_files(self) -> None:
-        if self.path is not None:
-            self._cancel_debounce()
-            self._run_git_status(self.path)
+        target = self.path or Path.cwd()
+        self._cancel_debounce()
+        self._run_git_status(target)
 
     def _schedule_run(self, path: Path) -> None:
         timer = self.set_timer(
