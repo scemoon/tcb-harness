@@ -4,7 +4,7 @@ import logging
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from textual import containers
+from textual import containers, events
 from textual.app import ComposeResult
 from textual.content import Content
 from textual.reactive import var
@@ -34,7 +34,7 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
     HELP = """
 ## Sub-agent
 
-- **ctrl+n** Open full-screen output
+- **ctrl+n / click** Open full-screen output
 """
 
     DEFAULT_CSS = """
@@ -194,9 +194,9 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
             return Content.assemble(
                 Content(text),
                 Content("  "),
-                Content.from_markup("[$text-muted]ctrl+n[/]"),
+                Content.from_markup("[$text-muted]ctrl+n / 点击打开全屏[/]"),
             )
-        return Content.from_markup("[$text-muted]⏳ 等待输出…  (ctrl+n 打开全屏)[/]")
+        return Content.from_markup("[$text-muted]⏳ 等待输出…  (ctrl+n / 点击打开全屏)[/]")
 
     def _status_label(self) -> str:
         if self._status == "running":
@@ -278,7 +278,10 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
         except Exception:
             pass
 
+    def on_click(self, _event: events.Click) -> None:
+        self.action_fullscreen()
+
     def action_fullscreen(self) -> None:
-        """Ctrl+N: open full-screen view (works even while running)."""
+        """Ctrl+N / click: open full-screen view (works even while running)."""
         from tui.widgets.subagent_screen import SubAgentScreen
         self.app.push_screen(SubAgentScreen(self))
