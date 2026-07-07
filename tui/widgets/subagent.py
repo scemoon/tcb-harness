@@ -169,6 +169,11 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
         parts = [
             Content.from_markup(f"🧠 Subagent ({self.agent_type})"),
         ]
+        if self.prompt:
+            p = self.prompt.replace("\n", " ").strip()
+            if len(p) > 55:
+                p = p[:55] + "…"
+            parts.append(Content.from_markup(f"  [$text-muted]{p}[/]"))
         if self._status == "running":
             spin = self.SPINNER_FRAMES[self.spinner_frame]
             parts.append(Content.from_markup(f" [$text-warning]{spin}"))
