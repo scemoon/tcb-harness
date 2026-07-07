@@ -16,7 +16,7 @@ This skill implements the AI-Driven Development Lifecycle for **monorepo multi-c
 │       │              │           │                    │
 │       └──────┬───────┴─────┬─────┘                    │
 │              │             │                          │
-│          aidlc/contracts/  packages/shared/                 │
+│          aidlc/contracts/  aidlc/packages/shared/                 │
 │          (INT-FR-*)   (generated types)                     │
 │                                                        │
 │  aidlc/features/  tests/  aidlc/openspec/  aidlc/providers/              │
@@ -34,7 +34,7 @@ FR namespaces:
 | `WXA-*` | `apps/wxa` | WeChat Mini Program behavior |
 | `MYA-*` | `apps/mya` | Mini Program (e.g. Alipay) behavior |
 | `TTA-*` | `apps/tta` | TikTok Mini Program behavior |
-| `INT-*` | `aidlc/contracts/`, `packages/shared/` | Cross-component contract & integration |
+| `INT-*` | `aidlc/contracts/`, `aidlc/packages/shared/` | Cross-component contract & integration |
 
 ## Functional Requirements
 
@@ -108,7 +108,7 @@ FR namespaces:
 **Acceptance Criteria:**
 - All public APIs and async events are described in `aidlc/contracts/` (OpenAPI/AsyncAPI) and tagged with `INT-FR-NNN`
 - Contract changes require a contract-diff review (backward-compat by default)
-- Shared types are generated from contracts, not hand-written, in `packages/shared/`
+- Shared types are generated from contracts, not hand-written, in `aidlc/packages/shared/`
 - Contract tests run on every PR that touches `aidlc/contracts/` or any consumer
 - A breaking contract change requires a major version bump and human approval
 

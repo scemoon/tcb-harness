@@ -10,7 +10,7 @@
 ## 任务
 
 1. **SDD: Intent Capture**
-   - 在 `requirements.md` 记录 Why / What / Success Criteria / Scope
+   - 在 `aidlc/requirements.md` 记录 Why / What / Success Criteria / Scope
    - 声明 `affects: [native|desktop|web|backend|wxa|mya|tta|contracts]`
 
 2. **SDD: Spec Delta (EARS)**
@@ -29,7 +29,7 @@
    - 引用 INT-FR-NNN
 
 ## 输出产物
-- `requirements.md`
+- `aidlc/requirements.md`
 - `aidlc/openspec/changes/{id}/spec-delta.md`
 - `apps/{component}/features/{domain}/{feature}.feature`
 - `aidlc/features/cross-stack/{domain}/{feature}.feature`（跨组件时）

@@ -103,5 +103,37 @@ class SkillLoader:
             if s.path and str(s.path).startswith(source_prefix)
         ]
 
+    def search(self, keyword: str) -> list[Skill]:
+        kw = keyword.lower()
+        results: list[tuple[Skill, int]] = []
+
+        for skill in self._discover().values():
+            score = 0
+            name_lower = skill.name.lower()
+            desc_lower = skill.description.lower()
+
+            if kw == name_lower:
+                score += 100
+            elif kw in name_lower:
+                score += 50
+            if kw in desc_lower:
+                score += 30
+                if desc_lower.startswith(kw):
+                    score += 10
+            for trigger in skill.triggers:
+                if kw in trigger.lower():
+                    score += 20
+                    break
+            for phase in skill.phases:
+                if kw in phase.lower():
+                    score += 10
+                    break
+
+            if score > 0:
+                results.append((skill, score))
+
+        results.sort(key=lambda x: x[1], reverse=True)
+        return [s for s, _ in results]
+
     def invalidate_cache(self) -> None:
         self._cache = None

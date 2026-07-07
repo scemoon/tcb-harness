@@ -57,7 +57,7 @@ Work is partitioned by component prefix. Place new code in the matching director
 
 > **注**: 以上是 AI-DLC skill 期望的**目标 monorepo 布局**，与 cdh 工具自身的仓库结构不同。FR 命名空间仅在 AI-DLC 生命周期中使用。
 
-Reference skill: `~/.cdh/skills/ai-dlc-skill/SKILL.md` (full AI-DLC methodology; installed by cdh platform bootstrap).
+Reference skill: `ai-dlc-skill/SKILL.md` (full AI-DLC methodology; source of truth in repo).
 
 ## File / Path Hygiene
 
@@ -101,7 +101,7 @@ Reference skill: `~/.cdh/skills/ai-dlc-skill/SKILL.md` (full AI-DLC methodology;
 
 ## Where to Find More
 
-- **AI-DLC methodology**: `~/.cdh/skills/ai-dlc-skill/SKILL.md` (load via `Skill` tool; installed by cdh bootstrap)
+- **AI-DLC methodology**: `ai-dlc-skill/SKILL.md` (load via `Skill` tool; source of truth in repo)
 - **Human-readable README**: `README.md`
 - **Architecture / practices**: `docs/` if present, or ask the user
 - **Legacy Cline rules**: `.clinerules` (some overlap; this file supersedes)

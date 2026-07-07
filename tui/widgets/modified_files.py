@@ -266,6 +266,11 @@ class ModifiedFiles(containers.Vertical, can_focus=True):
 
         files_widget = self.query_one("#mf-files", Static)
         files_widget.update("\n".join(out))
+        self.call_after_refresh(self._scroll_to_highlighted)
+
+    def _scroll_to_highlighted(self) -> None:
+        if self.highlighted is not None:
+            self.scroll_to(y=self.highlighted, animate=False)
 
     def action_cursor_up(self) -> None:
         if not self._filepaths:

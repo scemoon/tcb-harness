@@ -87,6 +87,7 @@ class Agent(AgentBase):
         self._message_target: MessagePump | None = None
 
         self._terminal_count: int = 0
+        self.session_load_info: dict = {}
 
     @property
     def command(self) -> str | None:
@@ -121,7 +122,12 @@ class Agent(AgentBase):
             request: JSONRPC request object.
 
         """
-        assert self._process is not None, "Process should be present here"
+        if self._process is None:
+            logger.warning(
+                "Cannot send request %s: agent process is not running",
+                request.body,
+            )
+            return
 
         logger.info("[client] send: %s", request.body)
         if (stdin := self._process.stdin) is not None:
@@ -819,8 +825,16 @@ class Agent(AgentBase):
         self.post_message(messages.SessionReplay(active=True))
         try:
             response = await session_load_response.wait()
+            self.session_load_info = {
+                "total_messages": response.get("_total_messages", 0),
+                "visible_start": response.get("_visible_start", 0),
+            }
         finally:
-            self.post_message(messages.SessionReplay(active=False))
+            self.post_message(messages.SessionReplay(
+                active=False,
+                total_messages=self.session_load_info.get("total_messages", 0),
+                visible_count=self.session_load_info.get("total_messages", 0) - self.session_load_info.get("visible_start", 0),
+            ))
 
         if error := response.get("error"):
             logger.warning("Session load error: %s", error)
@@ -855,6 +869,16 @@ class Agent(AgentBase):
 
         await self._save_last_session_to_cdh()
 
+    async def acp_load_earlier_messages(self, offset: int, limit: int) -> None:
+        """Load a range of earlier messages from the current session."""
+        assert self.session_id is not None
+        with self.request():
+            response = api.session_load_earlier(self.session_id, offset, limit)
+        try:
+            await response.wait()
+        except jsonrpc.JSONRPCError:
+            pass
+
     async def acp_session_prompt(
         self, prompt: list[protocol.ContentBlock]
     ) -> str | None:
@@ -864,6 +888,14 @@ class Agent(AgentBase):
             The stop reason.
 
         """
+        if self._process is None:
+            self.post_message(
+                AgentFail(
+                    "Agent process is not running",
+                    "The agent subprocess has terminated. Restart the session to continue.",
+                )
+            )
+            return None
         with self.request():
             session_prompt = api.session_prompt(prompt, self.session_id)
         try:

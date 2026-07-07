@@ -107,7 +107,7 @@ CROSS_CUTTING: tuple[CrossCutSpec, ...] = (
     ),
     CrossCutSpec(
         id="shared",
-        paths=("packages/shared",),
+        paths=("aidlc/packages/shared",),
         label="Shared Types",
         description="Cross-component shared types package",
     ),
@@ -125,7 +125,7 @@ CROSS_CUTTING: tuple[CrossCutSpec, ...] = (
     ),
     CrossCutSpec(
         id="cross_stack_tests",
-        paths=("tests/contract", "tests/cross-stack"),
+        paths=("aidlc/tests/contract", "aidlc/tests/cross-stack"),
         label="Cross-Stack Tests",
         description="Contract tests and cross-stack integration tests",
     ),
@@ -385,7 +385,7 @@ def _build_agents_component_table(active: list[ComponentSpec]) -> str:
     rows = []
     for c in active:
         rows.append(f"| {c.fr_prefix:7s} | {c.label:14s} | {c.owns:20s} |")
-    rows.append("| INT      | Contracts, Shared | aidlc/contracts/, packages/shared/ |")
+    rows.append("| INT      | Contracts, Shared | aidlc/contracts/, aidlc/packages/shared/ |")
     return "\n".join(rows)
 
 
@@ -426,7 +426,7 @@ def _build_project_yaml(
     if "contracts" in cross_cutting_ids:
         cross_cutting["contracts"] = "aidlc/contracts/"
     if "shared" in cross_cutting_ids:
-        cross_cutting["shared_types"] = "packages/shared/"
+        cross_cutting["shared_types"] = "aidlc/packages/shared/"
     doc: dict = {
         "name": name,
         "description": description,
@@ -469,15 +469,15 @@ def _scaffold_cross_cutting(cross_ids: list[str], root: Path) -> None:
         for p in spec.paths:
             target = root / p
             if p.endswith((".yaml", ".py", ".md")):
-                if p == "contracts/CHANGELOG.md":
+                if p == "aidlc/contracts/CHANGELOG.md":
                     _write(target, CHANGELOG_MD)
-                elif p == "providers/tcb/provider.yaml":
+                elif p == "aidlc/providers/tcb/provider.yaml":
                     _write(target, TCB_PROVIDER_YAML)
-                elif p == "providers/tcb/deployment.yaml":
+                elif p == "aidlc/providers/tcb/deployment.yaml":
                     _write(target, TCB_DEPLOYMENT_YAML)
-                elif p == "providers/tcb/preview.yaml":
+                elif p == "aidlc/providers/tcb/preview.yaml":
                     _write(target, TCB_PREVIEW_YAML)
-                elif p.startswith("tools/") and p.endswith(".py"):
+                elif p.startswith("aidlc/tools/") and p.endswith(".py"):
                     _write(target, TOOL_STUB)
                     target.chmod(0o755)
                 else:
@@ -495,14 +495,14 @@ def _write_project_yaml(
     description: str,
 ) -> None:
     _write(
-        root / "project.yaml",
+        root / "aidlc" / "project.yaml",
         yaml.dump(
             _build_project_yaml(active, cross_cutting_ids, name=project_name, description=description),
             default_flow_style=False,
         ),
     )
     _write(
-        root / "requirements.md",
+        root / "aidlc" / "requirements.md",
         REQUIREMENTS_MD.format(
             project_name=project_name,
             description=description or f"AI-DLC monorepo project: {project_name}",
@@ -510,7 +510,7 @@ def _write_project_yaml(
         ),
     )
     _write(root / ".gitignore", GITIGNORE_CONTENT)
-    _write(root / "CHANGELOG.md", CHANGELOG_MD)
+    _write(root / "aidlc" / "CHANGELOG.md", CHANGELOG_MD)
 
 
 def init_dlc_project(
@@ -520,15 +520,15 @@ def init_dlc_project(
 ) -> bool:
     """Scaffold project metadata only (no apps/*, no cross-cutting dirs).
 
-    Writes project.yaml (with empty components list), requirements.md,
-    .gitignore, and CHANGELOG.md. The user is expected to add components
+    Writes project.yaml (with empty components list), aidlc/requirements.md,
+    .gitignore, and aidlc/CHANGELOG.md. The user is expected to add components
     and cross-cutting items later via add_component / add_cross_cutting.
 
     Returns True if scaffolding was performed.
 
     Raises RuntimeError if ai-dlc-skill is not available — the directory
     is left untouched in that case so callers don't end up with a
-    half-initialized project (.cdh/ written but no project.yaml).
+    half-initialized project (.cdh/ written but no aidlc/project.yaml).
     """
     if not _detect_dlc_skill(workspace_root):
         raise RuntimeError(
@@ -609,7 +609,7 @@ def scaffold_dlc_project(
 
 
 def _regenerate_agents_and_claude_md(root: Path) -> None:
-    project_yaml = root / "project.yaml"
+    project_yaml = root / "aidlc" / "project.yaml"
     if not project_yaml.exists():
         return
     data = yaml.safe_load(project_yaml.read_text(encoding="utf-8")) or {}
@@ -631,7 +631,7 @@ def add_component(
     """Add a single application component to an existing project.
 
     Creates apps/<owns>/{src,tests/unit,tests/e2e,features} with
-    .gitkeep files and updates project.yaml's stack.components list.
+    .gitkeep files and updates aidlc/project.yaml's stack.components list.
 
     Returns True if the component was added, False if it was already
     present. Raises ValueError on unknown component id.
@@ -644,10 +644,10 @@ def add_component(
         )
 
     root = workspace_root.resolve()
-    project_yaml = root / "project.yaml"
+    project_yaml = root / "aidlc" / "project.yaml"
     if not project_yaml.exists():
         raise FileNotFoundError(
-            f"project.yaml not found at {root}. Run 'cdh project init' first."
+            f"aidlc/project.yaml not found at {root}. Run 'cdh project init' first."
         )
 
     data = yaml.safe_load(project_yaml.read_text(encoding="utf-8")) or {}
@@ -673,7 +673,7 @@ def add_cross_cutting(
 ) -> bool:
     """Add a single cross-cutting item to an existing project.
 
-    Creates the relevant directories/files and updates project.yaml
+    Creates the relevant directories/files and updates aidlc/project.yaml
     so that stack.cross_cutting references the new path.
 
     Returns True if the item was added, False if it was already present.
@@ -687,10 +687,10 @@ def add_cross_cutting(
         )
 
     root = workspace_root.resolve()
-    project_yaml = root / "project.yaml"
+    project_yaml = root / "aidlc" / "project.yaml"
     if not project_yaml.exists():
         raise FileNotFoundError(
-            f"project.yaml not found at {root}. Run 'cdh project init' first."
+            f"aidlc/project.yaml not found at {root}. Run 'cdh project init' first."
         )
 
     cross_paths = [root / p for p in spec.paths]

@@ -35,8 +35,8 @@ phases:
       - UND-001..006: Understand rules
       - Human review and approval
     artifacts:
-      - requirements.md
-      - openspec/changes/{id}/spec-delta.md
+      - aidlc/requirements.md
+      - aidlc/openspec/changes/{id}/spec-delta.md
       - apps/{component}/features/{domain}/{feature}.feature
       - aidlc/features/cross-stack/{domain}/{feature}.feature
       - aidlc/contracts/api|events/{name}.{yaml,graphql}
@@ -57,9 +57,9 @@ phases:
       - PLN-001..004: Plan rules
       - Human review and approval
     artifacts:
-      - openspec/changes/{id}/design.md
-      - openspec/changes/{id}/task-list.md
-      - openspec/changes/{id}/contract-diff.md
+      - aidlc/openspec/changes/{id}/design.md
+      - aidlc/openspec/changes/{id}/task-list.md
+      - aidlc/openspec/changes/{id}/contract-diff.md
 
   - name: verify
     label: "③ Verify — 验证"
@@ -81,10 +81,10 @@ phases:
       - apps/{component}/tests/{unit,integration,e2e}/test_{feature}.py
       - apps/{component}/features/steps/test_{feature}_steps.py
       - apps/{component}/src/{module}/{feature}.py
-      - tests/contract/test_{contract}.py
-      - tests/cross-stack/test_{flow}.py
-      - packages/shared/
-      - openspec/changes/{id}/contract-diff.md
+      - aidlc/tests/contract/test_{contract}.py
+      - aidlc/tests/cross-stack/test_{flow}.py
+      - aidlc/packages/shared/
+      - aidlc/openspec/changes/{id}/contract-diff.md
 
   - name: deliver
     label: "④ Deliver — 交付"
@@ -105,6 +105,6 @@ phases:
       - STACK_URL / BACKEND_URL
       - Per-component e2e report
       - Cross-stack e2e report
-      - openspec/changes/{id}/contract-diff.md
+      - aidlc/openspec/changes/{id}/contract-diff.md
       - Stack BVT report
       - Deploy log

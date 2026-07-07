@@ -52,7 +52,7 @@ metadata:
 | WXA | WeChat Mini | `apps/wxa/` | `WXA-FR-NNN` |
 | MYA | Alipay Mini | `apps/mya/` | `MYA-FR-NNN` |
 | TTA | TikTok Mini | `apps/tta/` | `TTA-FR-NNN` |
-| INT | Contracts | `contracts/`, `packages/shared/` | `INT-FR-NNN` |
+| INT | Contracts | `aidlc/contracts/`, `aidlc/packages/shared/` | `INT-FR-NNN` |
 
 ## Adaptive Flow
 

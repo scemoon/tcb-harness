@@ -15,7 +15,7 @@ AI-DLC: Intent → Spec (EARS) → BDD → Design → TDD → Deploy
 ## FR Namespaces
 NATIVE apps/native | DESKTOP apps/desktop | WEB apps/web
 BE apps/backend | WXA apps/wxa | MYA apps/mya | TTA apps/tta
-INT aidlc/contracts/ + packages/shared/
+INT aidlc/contracts/ + aidlc/packages/shared/
 
 ## Quality Gates
 - Coverage >= 80%

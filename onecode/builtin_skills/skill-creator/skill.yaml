@@ -1,0 +1,8 @@
+name: skill-creator
+description: >-
+  Meta-skill for creating new agent skills. Teaches the agent how to design,
+  scaffold, and write effective SKILL.md files with proper frontmatter,
+  conventions, and tool integration.
+version: 1.0.0
+enabled: true
+entry: SKILL.md

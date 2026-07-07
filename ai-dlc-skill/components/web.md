@@ -27,5 +27,5 @@
 
 ## 特定约束
 - Web 组件在构建时接收 `BACKEND_URL` 环境变量
-- 使用 `packages/shared/` 中的生成类型
-- API 调用走 `packages/shared/api/`
+- 使用 `aidlc/packages/shared/` 中的生成类型
+- API 调用走 `aidlc/packages/shared/api/`

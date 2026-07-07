@@ -74,7 +74,7 @@ stack:
     fr_prefix: INT
     owns:
       - aidlc/contracts/
-      - packages/shared/
+      - aidlc/packages/shared/
   e2e_layers:
     - unit
     - integration
@@ -101,7 +101,7 @@ integration:
   breaking_change_gate: human-approval
   shared_types:
     generator: openapi-typescript | openapi-python
-    output: packages/shared/
+    output: aidlc/packages/shared/
     publish: workspace-package
   event_contract:
     format: asyncapi | cloudevent

@@ -17,7 +17,7 @@ git push feature branch
   → DESKTOP_DIST_URL = internal distribution URL
   → WXA_URL / MYA_URL / TTA_URL = mini-program preview QR
   → Per-component e2e: pytest apps/{comp}/tests/e2e/ --base-url $URL
-  → Cross-stack e2e:  pytest tests/cross-stack/ --stack-url $STACK_URL
+  → Cross-stack e2e:  pytest aidlc/tests/cross-stack/ --stack-url $STACK_URL
   → TTL: 24h → auto cleanup
 ```
 
@@ -77,7 +77,7 @@ pytest apps/mya/tests/e2e/ --backend-url $BACKEND_URL
 pytest apps/tta/tests/e2e/ --backend-url $BACKEND_URL
 
 # Cross-stack e2e
-pytest tests/cross-stack/ --stack-url $STACK_URL
+pytest aidlc/tests/cross-stack/ --stack-url $STACK_URL
 
 # Cleanup (automatic after TTL)
 ```

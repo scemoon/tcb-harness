@@ -11,7 +11,7 @@
 
 ## 关键产出
 
-1. Intent 捕获 → `requirements.md`
+1. Intent 捕获 → `aidlc/requirements.md`
 2. Spec Delta (EARS) → `aidlc/openspec/changes/{id}/spec-delta.md`
 3. BDD Feature 文件 → `apps/{component}/features/`
 4. 跨组件 Feature 文件 → `aidlc/features/cross-stack/`（如适用）

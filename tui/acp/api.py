@@ -65,3 +65,9 @@ def session_save(sessionId: str) -> dict:
 def session_clear_todos(sessionId: str) -> dict:
     """Clear all todos in the current session."""
     ...
+
+
+@API.method(name="session/load_earlier")
+def session_load_earlier(sessionId: str, offset: int, limit: int) -> dict:
+    """Load a range of earlier messages from the current session."""
+    ...

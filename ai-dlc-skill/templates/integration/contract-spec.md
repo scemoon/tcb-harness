@@ -40,7 +40,7 @@
 
 ## Contract Test Mapping
 
-- `tests/contract/test_{{contract_name}}.py`
+- `aidlc/tests/contract/test_{{contract_name}}.py`
 - Scenarios: @INT-FR-{{int_fr_id}} @positive / @negative / @edge
 
 ## See Also

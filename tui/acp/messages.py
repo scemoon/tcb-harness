@@ -38,6 +38,8 @@ class Thinking(AgentMessage):
 class SessionReplay(AgentMessage):
     """Marks the start/end of a session replay (loading historical messages)."""
     active: bool
+    total_messages: int = 0
+    visible_count: int = 0
 
 
 @dataclass

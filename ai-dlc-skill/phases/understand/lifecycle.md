@@ -167,7 +167,7 @@ Feature: Cross-stack login flow
 
 | Artifact | Location | Purpose |
 |----------|----------|---------|
-| Intent | `requirements.md` | Business need + `affects` |
+| Intent | `aidlc/requirements.md` | Business need + `affects` |
 | Spec delta | `aidlc/openspec/changes/{id}/spec-delta.md` | EARS, FR namespaces, `affects` |
 | Per-component BDD | `apps/{component}/features/{domain}/{feature}.feature` | Component behavior |
 | Cross-stack BDD | `aidlc/features/cross-stack/{domain}/{feature}.feature` | End-to-end flow |

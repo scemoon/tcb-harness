@@ -26,7 +26,7 @@ Follow the AI-Driven Development Lifecycle:
 - WXA-FR-* → apps/wxa/
 - MYA-FR-* → apps/mya/
 - TTA-FR-* → apps/tta/
-- INT-FR-* → contracts/ + packages/shared/
+- INT-FR-* → aidlc/contracts/ + aidlc/packages/shared/
 
 ## Quality Gates
 - Coverage ≥80%

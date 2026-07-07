@@ -13,7 +13,7 @@
 | wxa | `WXA-FR-*` | JavaScript | Vant Weapp | `apps/wxa/` | WeChat Mini Program |
 | mya | `MYA-FR-*` | JavaScript | Ant Design Mini | `apps/mya/` | Mini Program (e.g. Alipay) |
 | tta | `TTA-FR-*` | TypeScript | — | `apps/tta/` | TikTok Mini Program |
-| contracts | `INT-FR-*` | — | — | `aidlc/contracts/`, `packages/shared/` | Cross-component contracts |
+| contracts | `INT-FR-*` | — | — | `aidlc/contracts/`, `aidlc/packages/shared/` | Cross-component contracts |
 
 Cloud: {{cloud_provider}} (default: TCB).
 
@@ -21,7 +21,7 @@ Cloud: {{cloud_provider}} (default: TCB).
 
 ```bash
 # ① Understand — declare scope + namespaces
-cat > openspec/changes/CHG-001/spec-delta.md <<'YAML'
+cat > aidlc/openspec/changes/CHG-001/spec-delta.md <<'YAML'
 affects: [{{primary_components}}]
 frs:
   - id: {{primary_namespace}}-FR-001
@@ -31,17 +31,17 @@ YAML
 # if cross-component, also write aidlc/features/cross-stack/{domain}/{feature}.feature
 
 # ② Plan
-# write openspec/changes/CHG-001/design.md
-# write openspec/changes/CHG-001/task-list.md  (DAG with cross-component edges)
+# write aidlc/openspec/changes/CHG-001/design.md
+# write aidlc/openspec/changes/CHG-001/task-list.md  (DAG with cross-component edges)
 
 # ③ Verify
 # Per component: TDD red-green-refactor
 {{verify_per_component}}
 # Contracts
 aidlc/tools/generate_shared.py
-pytest tests/contract/
+pytest aidlc/tests/contract/
 # Cross-stack (if applies)
-pytest tests/cross-stack/ -k INT-FR-001
+pytest aidlc/tests/cross-stack/ -k INT-FR-001
 
 # ④ Deliver
 deploy_stack --preview                                # unified stack URL
@@ -66,7 +66,7 @@ bvt ${PRODUCTION_URL}                                # stack-level BVT
 
 ```
 {{project_name}}/
-├── project.yaml                 # stack topology, components, contracts
+├── aidlc/project.yaml                 # stack topology, components, contracts
 ├── apps/
 │   ├── native/                  # NATIVE-FR-* (native mobile)
 │   ├── desktop/                 # DESKTOP-FR-* (desktop)
@@ -79,15 +79,14 @@ bvt ${PRODUCTION_URL}                                # stack-level BVT
 │   ├── api/                     # OpenAPI 3.1
 │   ├── events/                  # AsyncAPI / CloudEvent
 │   └── CHANGELOG.md
-├── packages/shared/             # generated from contracts, consumed by all
-├── features/
-│   └── cross-stack/             # INT-FR-*.feature (full flow)
-├── tests/
+├── aidlc/packages/shared/             # generated from contracts, consumed by all
+├── aidlc/features/cross-stack/        # INT-FR-*.feature (full flow)
+├── aidlc/tests/
 │   ├── contract/                # contract tests
 │   └── cross-stack/             # cross-stack e2e
-├── openspec/changes/{id}/       # spec + design + task-list per change
-├── providers/{tcb,aliyun}/      # cloud config
-└── tools/                       # deploy_stack, contract_diff, generate_shared
+├── aidlc/openspec/changes/{id}/ # spec + design + task-list per change
+├── aidlc/providers/{tcb,aliyun}/      # cloud config
+└── aidlc/tools/                       # deploy_stack, contract_diff, generate_shared
 ```
 
 ### AI-DLC Workflow
@@ -117,8 +116,8 @@ bvt ${PRODUCTION_URL}                           # stack BVT
 |------|---------|-----------|-------|
 | TDD | `pytest --cov` per component | ≥80% | Per component |
 | BDD | `pytest-bdd features/` per component | 100% pass | Per component |
-| Contract | `pytest tests/contract/` | 100% pass | Cross-component |
-| Cross-stack | `pytest tests/cross-stack/` | 100% pass | Stack |
+| Contract | `pytest aidlc/tests/contract/` | 100% pass | Cross-component |
+| Cross-stack | `pytest aidlc/tests/cross-stack/` | 100% pass | Stack |
 | Security | `bandit -r apps/` | 0 vulns | Per component |
 | BVT | `bvt ${URL}` | All checks pass | Stack |
 

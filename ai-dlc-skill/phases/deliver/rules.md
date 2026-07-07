@@ -3,7 +3,7 @@
 ## DLV-001: Unified Stack Preview Before Production
 **Severity:** MUST
 **Description:** Every release MUST deploy as unified stack preview with per-component e2e + cross-stack e2e passing before production.
-**Valid:** `deploy_stack --preview` → `pytest tests/cross-stack/ --stack-url $STACK_URL`.
+**Valid:** `deploy_stack --preview` → `pytest aidlc/tests/cross-stack/ --stack-url $STACK_URL`.
 **Invalid:** Deploying only one component to preview.
 
 ## DLV-002: Production Approval Gate

@@ -6,8 +6,8 @@ AI-DLC monorepo project. Stack: native + desktop + web + backend + wxa + mya + t
 
 ```
 {{project_name}}/
-├── project.yaml                       # Stack topology
-├── requirements.md                    # Intent + global spec
+├── aidlc/project.yaml                 # Stack topology
+├── aidlc/requirements.md              # Intent + global spec
 ├── apps/
 │   ├── native/                        # NATIVE-FR-* native mobile
 │   │   ├── src/
@@ -41,21 +41,21 @@ AI-DLC monorepo project. Stack: native + desktop + web + backend + wxa + mya + t
 │   ├── api/                           # OpenAPI 3.1
 │   ├── events/                        # AsyncAPI / CloudEvent
 │   └── CHANGELOG.md
-├── packages/shared/                   # generated from contracts
+├── aidlc/packages/shared/                   # generated from contracts
 ├── aidlc/features/cross-stack/              # INT-FR-*.feature full flow
-├── tests/
+├── aidlc/tests/
 │   ├── contract/                      # INT contract tests
 │   └── cross-stack/                   # cross-stack e2e
-├── openspec/changes/{id}/
+├── aidlc/openspec/changes/{id}/
 │   ├── spec-delta.md                  # declares affects + FR namespaces
 │   ├── design.md                      # per-component + integration
 │   ├── task-list.md                   # DAG with cross-component edges
 │   └── contract-diff.md               # auto-generated contract changes
-├── providers/{tcb,aliyun}/
-└── tools/
+├── aidlc/providers/{tcb,aliyun}/
+└── aidlc/tools/
     ├── deploy_stack.py                # unified stack deploy
     ├── contract_diff.py               # contract compat check
-    └── generate_shared.py             # contracts → packages/shared
+    └── generate_shared.py             # contracts → aidlc/packages/shared
 ```
 
 ## project.yaml
@@ -74,25 +74,25 @@ stack:
   cross_cutting:
     fr_prefix: INT
     contracts: aidlc/contracts/
-    shared_types: packages/shared/
+    shared_types: aidlc/packages/shared/
 ```
 
 ## AI-DLC Workflow
 
 ```bash
 # ① Understand
-# requirements.md → openspec/changes/{id}/spec-delta.md (with affects)
+# aidlc/requirements.md → aidlc/openspec/changes/{id}/spec-delta.md (with affects)
 # → features/{component}/{domain}/{feature}.feature
 # → aidlc/features/cross-stack/{domain}/{feature}.feature  (if cross-component)
 
 # ② Plan
-# → openspec/changes/{id}/design.md  (per-component + integration)
-# → openspec/changes/{id}/task-list.md (DAG with cross-component edges)
+# → aidlc/openspec/changes/{id}/design.md  (per-component + integration)
+# → aidlc/openspec/changes/{id}/task-list.md (DAG with cross-component edges)
 
 # ③ Verify
 # For each affected component, per BDD scenario: RED → GREEN → REFACTOR
-# Then: aidlc/tools/generate_shared.py  →  pytest tests/contract/
-# Then: pytest tests/cross-stack/  (if cross-component)
+# Then: aidlc/tools/generate_shared.py  →  pytest aidlc/tests/contract/
+# Then: pytest aidlc/tests/cross-stack/  (if cross-component)
 
 # ④ Deliver
 deploy_stack --preview                # unified stack URL
@@ -108,8 +108,8 @@ bvt ${PRODUCTION_URL}                 # stack BVT
 |------|---------|-----------|
 | TDD coverage | `pytest --cov` per component | ≥80% |
 | BDD scenarios | `pytest-bdd features/` per component | 100% pass |
-| Contract | `pytest tests/contract/` | 100% pass |
-| Cross-stack e2e | `pytest tests/cross-stack/` | 100% pass |
+| Contract | `pytest aidlc/tests/contract/` | 100% pass |
+| Cross-stack e2e | `pytest aidlc/tests/cross-stack/` | 100% pass |
 | Contract diff | `aidlc/tools/contract_diff.py` | backward-compat |
 | Security | `bandit -r apps/` | 0 vulns |
 | Stack BVT | `bvt ${URL}` | all checks pass |

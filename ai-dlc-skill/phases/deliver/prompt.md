@@ -18,7 +18,7 @@
    - 使用动态解析的 URL
 
 3. **Cross-Stack e2e**
-   - `pytest tests/cross-stack/ --stack-url ${STACK_URL}`
+   - `pytest aidlc/tests/cross-stack/ --stack-url ${STACK_URL}`
 
 4. **Staging Deploy + Smoke**
    - `deploy_stack --env staging`

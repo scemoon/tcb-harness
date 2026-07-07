@@ -82,7 +82,7 @@ cd apps/tta && BACKEND_URL=$BACKEND_URL pnpm build
 | `apps/wxa/tests/e2e/` | `BACKEND_URL` (built into app) |
 | `apps/mya/tests/e2e/` | `BACKEND_URL` (built into app) |
 | `apps/tta/tests/e2e/` | `BACKEND_URL` (built into app) |
-| `tests/cross-stack/` | `STACK_URL` (full flow) |
+| `aidlc/tests/cross-stack/` | `STACK_URL` (full flow) |
 
 ## Dynamic Preview URL
 
@@ -102,7 +102,7 @@ export DESKTOP_URL=$(deploy_stack --preview --output desktop_url)
 pytest apps/web/tests/e2e/ --base-url $WEB_URL --api-url $BACKEND_URL
 pytest apps/native/tests/e2e/ --backend-url $BACKEND_URL
 pytest apps/desktop/tests/e2e/ --backend-url $BACKEND_URL
-pytest tests/cross-stack/ --stack-url $STACK_URL
+pytest aidlc/tests/cross-stack/ --stack-url $STACK_URL
 ```
 
 ## Stack Rollback

@@ -33,7 +33,7 @@
 ## VRF-006: Test Layer Correctness
 **Severity:** MUST
 **Description:** Each BDD scenario MUST be tested at the layer the plan specified. Cross-stack ≠ unit.
-**Valid:** Cross-stack scenarios in `tests/cross-stack/` against STACK_URL.
+**Valid:** Cross-stack scenarios in `aidlc/tests/cross-stack/` against STACK_URL.
 **Invalid:** Cross-stack scenario implemented as mocked unit test.
 
 ## INT-001: Contract as Source of Truth
@@ -50,19 +50,19 @@
 
 ## INT-003: Generated Shared Types
 **Severity:** MUST
-**Description:** `packages/shared/` generated from `aidlc/contracts/`. Component code MUST import from shared.
-**Valid:** `git diff --exit-code packages/shared/` → clean after generation.
-**Invalid:** Hand-edited files under `packages/shared/`.
+**Description:** `aidlc/packages/shared/` generated from `aidlc/contracts/`. Component code MUST import from shared.
+**Valid:** `git diff --exit-code aidlc/packages/shared/` → clean after generation.
+**Invalid:** Hand-edited files under `aidlc/packages/shared/`.
 
 ## INT-004: Contract Tests at INT FR Level
 **Severity:** MUST
-**Description:** Every `INT-FR-*` MUST have contract tests in `tests/contract/` verifying schema.
+**Description:** Every `INT-FR-*` MUST have contract tests in `aidlc/tests/contract/` verifying schema.
 **Valid:** Provider-agnostic contract tests using generated shared types.
 **Invalid:** Contract tests calling real production backend.
 
 ## INT-005: Cross-Stack Feature Coverage
 **Severity:** MUST
-**Description:** Every `INT-FR-*` MUST have ≥3 scenarios in `aidlc/features/cross-stack/` implemented in `tests/cross-stack/`.
+**Description:** Every `INT-FR-*` MUST have ≥3 scenarios in `aidlc/features/cross-stack/` implemented in `aidlc/tests/cross-stack/`.
 **Valid:** Cross-stack scenarios running against unified STACK_URL.
 **Invalid:** INT-FR without cross-stack feature file.
 

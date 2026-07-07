@@ -52,27 +52,27 @@ A multi-component design doc is organized by **component sections** plus an **in
 ### Component: web (WEB-FR-*)
 - Architecture: {{SPA / SSR}}
 - Routes: {{...}}
-- Data flow: {{uses packages/shared generated from INT-FR-001}}
+- Data flow: {{uses aidlc/packages/shared generated from INT-FR-001}}
 
 ### Component: native (NATIVE-FR-*)
 - Architecture: {{native architecture}}
-- Data flow: {{uses packages/shared generated from INT-FR-*}}
+- Data flow: {{uses aidlc/packages/shared generated from INT-FR-*}}
 
 ### Component: desktop (DESKTOP-FR-*)
 - Architecture: {{desktop architecture}}
-- Data flow: {{uses packages/shared generated from INT-FR-*}}
+- Data flow: {{uses aidlc/packages/shared generated from INT-FR-*}}
 
 ### Component: wxa (WXA-FR-*)
 - Architecture: {{WeChat Mini Program}}
-- Data flow: {{uses packages/shared generated from INT-FR-*}}
+- Data flow: {{uses aidlc/packages/shared generated from INT-FR-*}}
 
 ### Component: mya (MYA-FR-*)
 - Architecture: {{Mini Program}}
-- Data flow: {{uses packages/shared generated from INT-FR-*}}
+- Data flow: {{uses aidlc/packages/shared generated from INT-FR-*}}
 
 ### Component: tta (TTA-FR-*)
 - Architecture: {{TikTok Mini Program}}
-- Data flow: {{uses packages/shared generated from INT-FR-*}}
+- Data flow: {{uses aidlc/packages/shared generated from INT-FR-*}}
 
 ### Integration
 - Flow: {{web → backend → DB; or app → backend → event → ...}}

@@ -54,6 +54,8 @@ class TaskManager:
         self._storage_path = storage_path or Path.home() / ".cdh" / "tasks"
         self._executor: Optional[TaskExecutor] = None
         self._worker_task: Optional[asyncio.Task] = None
+        self._semaphore = asyncio.Semaphore(5)
+        self._shutdown: bool = False
 
     def set_executor(self, executor: TaskExecutor) -> None:
         self._executor = executor
@@ -88,11 +90,14 @@ class TaskManager:
             self._worker_task = asyncio.create_task(self._worker_loop())
 
     async def _worker_loop(self) -> None:
-        while True:
+        while not self._shutdown:
             try:
-                task = await self._queue.get()
+                task = await asyncio.wait_for(self._queue.get(), timeout=30)
                 if task.id not in self._running:
-                    self._running[task.id] = asyncio.create_task(self._run_task(task))
+                    async with self._semaphore:
+                        self._running[task.id] = asyncio.create_task(self._run_task(task))
+            except asyncio.TimeoutError:
+                continue
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -110,7 +115,10 @@ class TaskManager:
             if self._executor:
                 cancel = asyncio.Event()
                 events: asyncio.Queue = asyncio.Queue()
-                result = await self._executor.execute(execution, events, cancel)
+                result = await asyncio.wait_for(
+                    self._executor.execute(execution, events, cancel),
+                    timeout=300,
+                )
                 task_record.status = TaskStatus.COMPLETED if result.get("success") else TaskStatus.FAILED
                 task_record.error = result.get("error")
             else:
@@ -208,9 +216,17 @@ class TaskManager:
         return True
 
     async def stop(self) -> None:
+        self._shutdown = True
         if self._worker_task:
             self._worker_task.cancel()
             try:
                 await self._worker_task
             except asyncio.CancelledError:
                 pass
+        if self._running:
+            results = await asyncio.gather(
+                *self._running.values(), return_exceptions=True,
+            )
+            for tid, res in zip(list(self._running.keys()), results):
+                if isinstance(res, Exception):
+                    logger.warning("Task %s exited with error: %s", tid, res)

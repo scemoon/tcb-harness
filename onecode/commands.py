@@ -310,6 +310,51 @@ async def _skill(conversation: "Conversation", parameters: str) -> None:
         await _skill(conversation, "list")
         return
 
+    if sub == "create":
+        name = rest.strip()
+        if not name:
+            conversation.notify("Usage: /onecode:skill create <name>", title="/onecode:skill create", severity="error")
+            return
+        from onecode.skills.model import Skill as SkillModel
+        valid, err_msg = SkillModel.validate_name(name)
+        if not valid:
+            conversation.notify(f"Invalid name: {err_msg}", title="/onecode:skill create", severity="error")
+            return
+        mgr = SkillManager()
+        if mgr.get(name):
+            conversation.notify(f"Skill '{name}' already exists", title="/onecode:skill create", severity="error")
+            return
+        err = create_skill_scaffold(mgr.skills_dir, name, f"A skill for {name}")
+        if err:
+            conversation.notify(f"Error: {err}", title="/onecode:skill create", severity="error")
+            return
+        await _post(
+            conversation,
+            f"**Skill '{name}' created**\n\n"
+            f"- location: `{mgr.skills_dir / name}`\n"
+            f"- edit `SKILL.md` to add instructions\n"
+            f"- then `/onecode:skill list` to confirm",
+        )
+        return
+
+    if sub in ("search", "find"):
+        keyword = rest.strip()
+        if not keyword:
+            conversation.notify("Usage: /onecode:skill search <keyword>", title="/onecode:skill search", severity="error")
+            return
+        results = SkillLoader().search(keyword)
+        if not results:
+            await _post(conversation, f"**Skill Search: `{keyword}`**\n\n_No matches found._")
+            return
+        lines = [f"**Skill Search: `{keyword}`**\n"]
+        for i, s in enumerate(results, 1):
+            marker = "✓" if s.enabled else "✗"
+            desc = s.description or "(no description)"
+            lines.append(f"- `{i}) {marker}` **{s.name}** — {desc}")
+        lines.append(f"\n{len(results)} match(es)")
+        await _post(conversation, "\n".join(lines))
+        return
+
     await _post(conversation, _HELP_SKILL)
 
 
@@ -317,14 +362,17 @@ _HELP_SKILL = (
     "**/onecode:skill** — manage installed skills\n\n"
     "**Sub-commands**\n"
     "- `(none)` or `list` — show all skills with status\n"
+    "- `create <name>` — scaffold a new skill\n"
+    "- `search <keyword>` — search skills by keyword\n"
     "- `enable <name|n>` — turn a skill on\n"
     "- `disable <name|n>` — turn a skill off\n"
-    "- `add <name>` — scaffold a new skill\n"
+    "- `add <name>` — scaffold a new skill (alias for create)\n"
     "- `remove <name|n>` — delete a skill\n\n"
     "**Examples**\n"
     "- `/onecode:skill` — list\n"
-    "- `/onecode:skill enable 2` — enable the skill at index 2 from the list\n"
-    "- `/onecode:skill add my-skill` — scaffold a new skill named `my-skill`"
+    "- `/onecode:skill create my-skill` — scaffold a new skill\n"
+    "- `/onecode:skill search browser` — find browser-related skills\n"
+    "- `/onecode:skill enable 2` — enable the skill at index 2"
 )
 
 
@@ -530,9 +578,9 @@ def register_commands() -> None:
     )
     platform_commands.register(
         "skill",
-        "Manage skills: list, enable, disable, add, remove (accepts name or list number)",
+        "Manage skills: list, create, search, enable, disable, add, remove (accepts name or list number)",
         _skill,
-        "list|enable|disable|add|remove [name|n]",
+        "list|create|search|enable|disable|add|remove [name|n]",
     )
     platform_commands.register(
         "mcp",

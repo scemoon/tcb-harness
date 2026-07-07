@@ -3,7 +3,7 @@
 ## UND-001: Intent Documentation
 **Severity:** MUST
 **Description:** Before any specification or implementation, the business intent MUST be documented. Intent includes: what is being built, why, and how success is measured.
-**Valid:** Intent captured in `requirements.md` with `affects: [...]` before spec delta.
+**Valid:** Intent captured in `aidlc/requirements.md` with `affects: [...]` before spec delta.
 **Invalid:** Starting spec delta or feature files without documented intent or without an `affects` declaration.
 
 ## UND-002: EARS Format

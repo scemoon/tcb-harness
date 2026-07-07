@@ -1,6 +1,6 @@
 {
   "name": "@scemoon/cdh",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Cloud Dev Harness - cloud-native development Agent framework",
   "keywords": ["ai", "agent", "cloud", "development", "cli", "cdc"],
   "license": "MIT",

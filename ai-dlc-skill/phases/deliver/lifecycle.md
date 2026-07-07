@@ -103,7 +103,7 @@ pytest apps/tta/tests/e2e/ --backend-url $BACKEND_URL
 ## Cross-Stack E2E
 
 ```bash
-pytest tests/cross-stack/ --stack-url $STACK_URL --verbose
+pytest aidlc/tests/cross-stack/ --stack-url $STACK_URL --verbose
 # Runs the full multi-client ↔ backend flow defined in aidlc/features/cross-stack/
 ```
 
@@ -114,7 +114,7 @@ pytest tests/cross-stack/ --stack-url $STACK_URL --verbose
 ```bash
 deploy_stack --env staging
 export STAGING_URL=$(deploy_stack --env staging --output url)
-pytest tests/cross-stack/ --stack-url $STAGING_URL
+pytest aidlc/tests/cross-stack/ --stack-url $STAGING_URL
 smoke-test $STAGING_URL
 ```
 

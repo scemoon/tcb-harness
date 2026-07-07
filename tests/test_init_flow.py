@@ -84,7 +84,7 @@ def test_init_dlc_project_raises_when_skill_missing(monkeypatch, tmp_path):
         scaffold.init_dlc_project(tmp_path, "demo")
 
     # nothing should have been written
-    assert not (tmp_path / "project.yaml").exists()
+    assert not (tmp_path / "aidlc" / "project.yaml").exists()
     assert not (tmp_path / ".cdh").exists()
 
 
@@ -95,8 +95,8 @@ def test_init_dlc_project_writes_metadata_when_skill_available(
 
     monkeypatch.setattr(scaffold, "_detect_dlc_skill", lambda *_a, **_kw: True)
     assert scaffold.init_dlc_project(tmp_path, "demo") is True
-    assert (tmp_path / "project.yaml").exists()
-    assert (tmp_path / "requirements.md").exists()
+    assert (tmp_path / "aidlc" / "project.yaml").exists()
+    assert (tmp_path / "aidlc" / "requirements.md").exists()
     assert (tmp_path / ".gitignore").exists()
 
 
@@ -138,7 +138,7 @@ def test_picker_empty_selection_still_initialises(sandbox, tmp_path, monkeypatch
     screen = _build_screen(sandbox)
     screen._on_init_components(target, [])
 
-    assert (target / "project.yaml").exists()
+    assert (target / "aidlc" / "project.yaml").exists()
     assert (target / ".cdh" / "config.yaml").exists()
     assert (projects_dir / "empty_init.yaml").exists()
     assert screen.project_grid_select.mount.called
@@ -195,7 +195,7 @@ def test_add_component_file_not_found_caught(sandbox, tmp_path, monkeypatch):
     original_add_component = scaffold.add_component
 
     def patched_add_component(root, component_id):
-        (root / "project.yaml").unlink()
+        (root / "aidlc" / "project.yaml").unlink()
         return original_add_component(root, component_id)
 
     monkeypatch.setattr(scaffold, "add_component", patched_add_component)
@@ -255,8 +255,8 @@ def test_do_init_project_creates_files(sandbox, tmp_path, monkeypatch):
     screen = _build_screen(sandbox)
     screen._do_init_project(target, [])
 
-    assert (target / "project.yaml").exists()
-    assert (target / "requirements.md").exists()
+    assert (target / "aidlc" / "project.yaml").exists()
+    assert (target / "aidlc" / "requirements.md").exists()
     assert (target / ".cdh" / "config.yaml").exists()
     assert (projects_dir / "happy_path.yaml").exists()
     assert screen.project_grid_select.mount.called

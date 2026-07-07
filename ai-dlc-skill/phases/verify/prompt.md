@@ -17,12 +17,12 @@
    - 测试按 layer 分类：unit / integration / e2e
 
 2. **Contract Verification**
-   - 重新生成 `packages/shared/` 类型
-   - 运行 `pytest tests/contract/`
+   - 重新生成 `aidlc/packages/shared/` 类型
+   - 运行 `pytest aidlc/tests/contract/`
    - 运行 `aidlc/tools/contract_diff.py`
 
 3. **Cross-Stack e2e**
-   - 对 unified preview 运行 `tests/cross-stack/`
+   - 对 unified preview 运行 `aidlc/tests/cross-stack/`
 
 4. **Quality Gates**
    - coverage ≥ 80%
@@ -33,8 +33,8 @@
 - `apps/{component}/tests/{unit,integration,e2e}/test_{feature}.py`
 - `apps/{component}/features/steps/test_{feature}_steps.py`
 - `apps/{component}/src/{module}/{feature}.py`
-- `tests/contract/test_{contract}.py`
-- `tests/cross-stack/test_{flow}.py`
+- `aidlc/tests/contract/test_{contract}.py`
+- `aidlc/tests/cross-stack/test_{flow}.py`
 - `aidlc/openspec/changes/{id}/contract-diff.md`（填充）
 
 ## 约束

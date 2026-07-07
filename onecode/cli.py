@@ -276,6 +276,73 @@ def skill_disable(name):
     _toggle_skill(name, enabled=False)
 
 
+@skill.command("create")
+@click.argument("name")
+@click.option("--description", "-d", default="", help="Skill description")
+def skill_create(name, description):
+    """Create a new skill scaffold.
+
+    \b
+    Creates SKILL.md and skill.yaml in ~/.onecode/skills/<name>/.
+    Edit the generated SKILL.md to add your instructions.
+
+    \b
+    Example:
+      cdh skill create my-skill -d "My custom skill"
+    """
+    from onecode.skills.create import create_skill_scaffold
+    from onecode.skills.manager import SkillManager
+    from onecode.skills.model import Skill as SkillModel
+
+    valid, err = SkillModel.validate_name(name)
+    if not valid:
+        click.echo(f"Error: Invalid skill name: {err}")
+        return
+    if description:
+        valid, err = SkillModel.validate_description(description)
+        if not valid:
+            click.echo(f"Error: Invalid description: {err}")
+            return
+
+    mgr = SkillManager()
+    err = create_skill_scaffold(mgr.skills_dir, name, description or f"A skill for {name}")
+    if err:
+        click.echo(f"Error: {err}")
+    else:
+        click.echo(f"Skill '{name}' created at {mgr.skills_dir / name}")
+        click.echo(f"  Edit {mgr.skills_dir / name / 'SKILL.md'} to add instructions.")
+
+
+@skill.command("search")
+@click.argument("keyword")
+def skill_search(keyword):
+    """Search installed skills by keyword.
+
+    Matches against name, description, triggers, and phases.
+    Case-insensitive.
+
+    \b
+    Example:
+      cdh skill search browser
+    """
+    from onecode.skills.loader import SkillLoader
+
+    loader = SkillLoader()
+    results = loader.search(keyword)
+
+    if not results:
+        click.echo(f"No skills found matching '{keyword}'.")
+        return
+
+    click.echo(f"Skills matching '{keyword}':")
+    for s in results:
+        status = "[enabled]" if s.enabled else "[disabled]"
+        click.echo(f"  {status} {s.name}")
+        if s.description:
+            click.echo(f"           {s.description}")
+    click.echo(f"\nTotal: {len(results)} match(es)")
+
+
 def _toggle_skill(name: str, enabled: bool):
     import yaml
     from onecode.skills.loader import SkillLoader
@@ -370,6 +437,56 @@ def config_skill_enable(name):
 def config_skill_disable(name):
     """Disable a skill by name."""
     _toggle_skill(name, enabled=False)
+
+
+@config_skill.command("create")
+@click.argument("name")
+@click.option("--description", "-d", default="", help="Skill description")
+def config_skill_create(name, description):
+    """Create a new skill scaffold (alias for cdh skill create)."""
+    from onecode.skills.create import create_skill_scaffold
+    from onecode.skills.manager import SkillManager
+    from onecode.skills.model import Skill as SkillModel
+
+    valid, err = SkillModel.validate_name(name)
+    if not valid:
+        click.echo(f"Error: Invalid skill name: {err}")
+        return
+    if description:
+        valid, err = SkillModel.validate_description(description)
+        if not valid:
+            click.echo(f"Error: Invalid description: {err}")
+            return
+
+    mgr = SkillManager()
+    err = create_skill_scaffold(mgr.skills_dir, name, description or f"A skill for {name}")
+    if err:
+        click.echo(f"Error: {err}")
+    else:
+        click.echo(f"Skill '{name}' created at {mgr.skills_dir / name}")
+        click.echo(f"  Edit {mgr.skills_dir / name / 'SKILL.md'} to add instructions.")
+
+
+@config_skill.command("search")
+@click.argument("keyword")
+def config_skill_search(keyword):
+    """Search installed skills by keyword (alias for cdh skill search)."""
+    from onecode.skills.loader import SkillLoader
+
+    loader = SkillLoader()
+    results = loader.search(keyword)
+
+    if not results:
+        click.echo(f"No skills found matching '{keyword}'.")
+        return
+
+    click.echo(f"Skills matching '{keyword}':")
+    for s in results:
+        status = "[enabled]" if s.enabled else "[disabled]"
+        click.echo(f"  {status} {s.name}")
+        if s.description:
+            click.echo(f"           {s.description}")
+    click.echo(f"\nTotal: {len(results)} match(es)")
 
 
 @cli.group(invoke_without_command=True)

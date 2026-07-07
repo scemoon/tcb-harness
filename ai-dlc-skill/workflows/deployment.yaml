@@ -107,7 +107,7 @@ stages:
         requires: [deploy_stack]
         when: affects contains tta
       - name: e2e_cross_stack
-        command: pytest tests/cross-stack/ --stack-url ${STACK_URL}
+        command: pytest aidlc/tests/cross-stack/ --stack-url ${STACK_URL}
         requires: [e2e_backend, e2e_web, e2e_native, e2e_desktop, e2e_wxa, e2e_mya, e2e_tta]
         when: affects contains >= 2 components
 
@@ -119,7 +119,7 @@ stages:
       - name: smoke
         command: smoke-test ${STACK_URL}
       - name: cross_stack
-        command: pytest tests/cross-stack/ --stack-url ${STACK_URL}
+        command: pytest aidlc/tests/cross-stack/ --stack-url ${STACK_URL}
 
   - name: production
     description: Stack production deploy with stack BVT
@@ -132,7 +132,7 @@ stages:
           - per_component_e2e_reports
           - cross_stack_e2e_report
           - staging_smoke_report
-          - openspec/changes/{id}/contract-diff.md
+          - aidlc/openspec/changes/{id}/contract-diff.md
       - name: deploy_stack
         command: deploy_stack --env production
       - name: bvt
@@ -142,7 +142,7 @@ stages:
         command: curl -f ${PRODUCTION_URL}/health
         timeout: 30s
       - name: archive_contract_diff
-        command: cp openspec/changes/{id}/contract-diff.md aidlc/deploy-artifacts/
+        command: cp aidlc/openspec/changes/{id}/contract-diff.md aidlc/deploy-artifacts/
 
 rollback:
   triggers:

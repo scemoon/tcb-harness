@@ -65,6 +65,7 @@ from tui.protocol import BlockProtocol, MenuProtocol, ExpandProtocol
 from tui.menus import MenuItem
 from tui.widgets.shell_terminal import ShellTerminal
 from tui.widgets.ask_user import AskUserWidget, AskUserSubmitted
+from tui.widgets.load_more import LoadMoreIndicator
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -445,6 +446,12 @@ class Conversation(containers.Vertical):
 
         self._post_lock = asyncio.Lock()
         self._auto_named_session = False
+
+        self._total_messages: int = 0
+        self._visible_count: int = 0
+        self._loaded_up_to: int = 0
+        self._load_more_widget: LoadMoreIndicator | None = None
+        self._flush_append_at: int | None = None
 
     def update_title(self) -> None:
         """Update the screen title."""
@@ -956,6 +963,9 @@ class Conversation(containers.Vertical):
             self._auto_named_session = True
             return
 
+        if self.agent.session_pk is None:
+            return
+
         self._auto_named_session = True
         name = prompt.strip().split("\n")[0][:60].strip()
         if name:
@@ -987,6 +997,7 @@ class Conversation(containers.Vertical):
                 )
             finally:
                 self.busy_count -= 1
+            await self._auto_name_session(prompt)
             self.call_later(self.agent_turn_over, stop_reason)
 
     async def agent_turn_over(self, stop_reason: str | None) -> None:
@@ -1132,6 +1143,10 @@ class Conversation(containers.Vertical):
         self._replay = message.active
         # When the replay just ended, flush buffer and complete any pending thought.
         if was_replay and not message.active:
+            if message.total_messages > 0:
+                self._total_messages = message.total_messages
+                self._visible_count = message.visible_count
+                self._loaded_up_to = message.total_messages - message.visible_count
             self.call_after_refresh(self._flush_replay_buffer)
             self._complete_thought()
 
@@ -1223,11 +1238,50 @@ class Conversation(containers.Vertical):
                         questions=entry.get("questions", []),
                     ))
 
+        if self._loaded_up_to > 0 and self._flush_append_at is None:
+            load_more = LoadMoreIndicator(count=self._loaded_up_to)
+            widgets.insert(0, load_more)
+            self._load_more_widget = load_more
+
         if widgets:
-            await self.contents.mount(*widgets)
+            insert_before = self._flush_append_at
+            if insert_before is not None:
+                await self.contents.mount(*widgets, before=insert_before)
+                self._loaded_up_to = max(0, self._loaded_up_to - len(widgets))
+                if self._loaded_up_to > 0:
+                    lm = LoadMoreIndicator(count=self._loaded_up_to)
+                    self._load_more_widget = lm
+                    await self.contents.mount(lm, before=len(widgets))
+                self._flush_append_at = None
+            else:
+                await self.contents.mount(*widgets)
         self._replay_buffer.clear()
         self._complete_thought()
         self.window.scroll_end_if_following(animate=False)
+
+    @on(LoadMoreIndicator.LoadMorePressed)
+    async def on_load_more_pressed(self, message: LoadMoreIndicator.LoadMorePressed) -> None:
+        message.stop()
+        if self._loaded_up_to <= 0:
+            return
+        batch_size = 50
+        start = max(0, self._loaded_up_to - batch_size)
+        limit = self._loaded_up_to - start
+        if limit <= 0:
+            return
+
+        if self._load_more_widget is not None:
+            await self._load_more_widget.remove()
+            self._load_more_widget = None
+
+        loading = Static("  Loading earlier messages...  ")
+        await self.contents.mount(loading, before=0)
+
+        self._flush_append_at = 0
+        self.post_message(acp_messages.SessionReplay(active=True))
+        await self.agent.acp_load_earlier_messages(offset=start, limit=limit)
+        self.post_message(acp_messages.SessionReplay(active=False))
+        await loading.remove()
 
     @on(acp_messages.RequestPermission)
     async def on_acp_request_permission(self, message: acp_messages.RequestPermission):

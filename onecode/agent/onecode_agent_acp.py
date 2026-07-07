@@ -398,6 +398,9 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
                 "content": {"type": "text", "text": text},
             }]
 
+    if name == "ToolSearch":
+        return []
+
     if name == "ApplyPatch":
         patch = str(arguments.get("patch", ""))
         if patch:
@@ -444,11 +447,7 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
             "content": {"type": "text", "text": "\n".join(lines)},
         }] if lines else []
 
-    args_text = json.dumps(arguments, indent=2, ensure_ascii=False)
-    return [{
-        "type": "content",
-        "content": {"type": "text", "text": f"```json\n{args_text}\n```"},
-    }]
+    return []
 
 
 def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
@@ -476,6 +475,19 @@ def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
         return result_text
     if not isinstance(parsed, dict):
         return result_text
+    if tool_name == "ToolSearch":
+        matches = parsed.get("matches", [])
+        if matches:
+            lines = [f"🔍 Found {len(matches)} tool(s):", ""]
+            for m in matches:
+                name = m.get("name", "")
+                desc = m.get("description", "")
+                if desc:
+                    lines.append(f"  • **{name}** — {desc}")
+                else:
+                    lines.append(f"  • **{name}**")
+            return "\n".join(lines)
+        return "No matching tools found."
     if "error" in parsed:
         return str(parsed["error"])
     # Read: show actual file content (code fence + language wrapping in _emit_tool_result)
@@ -966,6 +978,16 @@ class CDHACPAdapter:
                 pattern = str(args.get("pattern", ""))
                 if pattern:
                     title = f"Glob: {pattern}"
+            elif tname == "ToolSearch":
+                query = str(args.get("query", ""))
+                if query:
+                    title = f"ToolSearch: {query}"
+            else:
+                for key in ("query", "command", "pattern", "name", "subject"):
+                    val = str(args.get(key, ""))
+                    if val:
+                        title = f"{tname}: {val}"
+                        break
         content = _build_tool_call_content(tname, args)
         entry = self._subagent_tool_calls.get(ns_id)
         if entry is None:
@@ -1272,7 +1294,35 @@ class CDHACPAdapter:
         # instead of the raw _session.messages dicts, which only carry
         # `content: str`.  Engine.chat_stream() stores tool_use / tool_result
         # blocks in context.Message.content, and we need them at replay time.
-        for ctx_msg in self.agent.context.messages:
+        # Only replay the most recent MAX_VISIBLE messages; older ones are
+        # fetched on demand via session/load_earlier.
+        MAX_VISIBLE = 50
+        total_messages = len(self.agent.context.messages)
+        visible_start = max(0, total_messages - MAX_VISIBLE)
+        self._replay_messages(self.agent.context.messages[visible_start:])
+
+        return {
+            "modes": {
+                "currentModeId": cfg.default_mode,
+                "availableModes": _DEFAULT_MODES["availableModes"],
+            },
+            "_total_messages": total_messages,
+            "_visible_start": visible_start,
+        }
+
+    async def session_load_earlier(self, session_id: str, offset: int, limit: int) -> dict:
+        """Replay a range of earlier messages (used by 'load earlier messages')."""
+        if self.agent is None or self.agent.context is None:
+            return {"count": 0, "remaining": 0}
+        messages = self.agent.context.messages
+        end = min(offset + limit, len(messages))
+        segment = messages[offset:end]
+        self._replay_messages(segment)
+        return {"count": end - offset, "remaining": offset}
+
+    def _replay_messages(self, messages: list) -> None:
+        """Replay a list of context messages as session/update notifications."""
+        for ctx_msg in messages:
             role = ctx_msg.role
             content = ctx_msg.content
             if role == "user":
@@ -1380,13 +1430,6 @@ class CDHACPAdapter:
                         content.get("content", ""),
                         content.get("is_error", False),
                     )
-
-        return {
-            "modes": {
-                "currentModeId": cfg.default_mode,
-                "availableModes": _DEFAULT_MODES["availableModes"],
-            },
-        }
 
     def _make_stream_callback(self):
         """Create a thinking-aware streaming callback for real-time token output.
@@ -1798,6 +1841,16 @@ class CDHACPAdapter:
                                 pattern = str(event.tool_args.get("pattern", ""))
                                 if pattern:
                                     title = f"Grep: {pattern}"
+                            elif event.tool_name == "ToolSearch":
+                                query = str(event.tool_args.get("query", ""))
+                                if query:
+                                    title = f"ToolSearch: {query}"
+                            else:
+                                for key in ("query", "command", "pattern", "name", "subject"):
+                                    val = str(event.tool_args.get(key, ""))
+                                    if val:
+                                        title = f"{event.tool_name}: {val}"
+                                        break
                             content = _build_tool_call_content(
                                 event.tool_name, event.tool_args
                             )
@@ -1878,7 +1931,7 @@ class CDHACPAdapter:
                     # For Read results, detect language from the file path.
                     # For Bash/Glob/Grep/List, use bash-style fence.
                     # Skip if already contains a code fence to avoid nesting.
-                    if display_text and "\n" in display_text and "```" not in display_text:
+                    if display_text and "\n" in display_text and "```" not in display_text and tname != "ToolSearch":
                         lang = ""
                         tool_info = self.tool_calls.get(event.tool_id, {})
                         tname = tool_info.get("_tool_name", "")
@@ -2410,6 +2463,7 @@ class JSONRPCServer:
             "session/save": self._handle_session_save,
             "session/set_mode": self._handle_session_set_mode,
             "session/clear_todos": self._handle_session_clear_todos,
+            "session/load_earlier": self._handle_session_load_earlier,
             "session/ask_user_answer": self._handle_ask_user_answer,
             "terminal/create": self._handle_terminal_create,
             "terminal/kill": self._handle_terminal_kill,
@@ -2487,6 +2541,13 @@ class JSONRPCServer:
     async def _handle_session_clear_todos(self, params: dict):
         return await self.adapter.session_clear_todos(
             params.get("sessionId"),
+        )
+
+    async def _handle_session_load_earlier(self, params: dict):
+        return await self.adapter.session_load_earlier(
+            params.get("sessionId"),
+            params.get("offset", 0),
+            params.get("limit", 50),
         )
 
     async def _handle_terminal_create(self, params: dict):

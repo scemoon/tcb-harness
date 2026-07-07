@@ -569,6 +569,11 @@ class AgentEngine:
         self._react_phase: str = "thought"  # "thought" | "action" | "observation"
         self._direct_execution_count: int = 0  # Track direct tool use for routing-decision reminder
 
+        # Consecutive turns with zero tool_uses — if the LLM repeatedly
+        # refuses to call tools despite pending todos, we cap the loop
+        # instead of cycling until max_turns is exhausted.
+        self._empty_tool_turns: int = 0
+
     def _build_tool_registry(self) -> ToolRegistry:  # noqa: F821
         from onecode.agent.tools.registry import ToolRegistry
         from onecode.agent.tools.file_tools import ReadTool, WriteTool, EditTool, InsertTool, UndoEditTool, GlobTool, GrepTool, ListTool
@@ -726,6 +731,75 @@ class AgentEngine:
             for t in self._todo_manager.list_todos()
         )
 
+    def _build_completion_summary(self) -> str:
+        """Build a deterministic completion summary from todo state.
+
+        Called after the agent loop exits when the last round had no
+        visible text — ensures the user always sees a completion report
+        without an extra LLM round-trip.
+        """
+        todos = self._todo_manager.list_todos()
+        completed = [t for t in todos if t.get("status") == "completed"]
+        failed = [t for t in todos if t.get("status") == "failed"]
+        pending = [t for t in todos if t.get("status") in ("pending", "in_progress")]
+
+        lines = ["\n---", "## Session Complete", ""]
+
+        if not todos:
+            lines.append("No todos were tracked in this session.")
+        else:
+            if completed:
+                lines.append(f"**Completed** ({len(completed)}):")
+                for t in completed:
+                    lines.append(f"- {t.get('subject') or t.get('description', '')}")
+                lines.append("")
+            if pending:
+                lines.append(f"**Unfinished** ({len(pending)}):")
+                for t in pending:
+                    lines.append(f"- {t.get('subject') or t.get('description', '')}")
+                lines.append("")
+            if failed:
+                lines.append(f"**Failed** ({len(failed)}):")
+                for t in failed:
+                    lines.append(f"- {t.get('subject') or t.get('description', '')}")
+                lines.append("")
+
+        lines.append(
+            f"**Stats**: {self.iterations} round(s), "
+            f"{self.total_tokens} tokens"
+        )
+        return "\n".join(lines)
+
+    def _auto_advance_after_spawn(self, subagent_prompt: str) -> None:
+        """After a Spawn subagent completes, auto-advance todo status.
+
+        Finds the first ``in_progress`` todo (typically the one the subagent
+        was working on) and marks it ``completed``.  If another ``pending``
+        todo remains, injects a user message into the LLM context directing
+        the agent to continue — no need to wait for the LLM to spontaneously
+        call ``TodoUpdate`` then ``Spawn`` again.
+        """
+        todos = self._todo_manager.list_todos()
+        in_progress = [t for t in todos if t.get("status") == "in_progress"]
+        if in_progress:
+            tid = in_progress[0]["id"]
+            self._todo_manager.update_todo(tid, status="completed")
+
+        pending = [t for t in self._todo_manager.list_todos() if t.get("status") == "pending"]
+        if pending:
+            lines = ["# Continue working — remaining todos", ""]
+            for t in pending:
+                sub = t.get("subject", "")
+                desc = t.get("description", "")
+                if desc and desc != sub:
+                    lines.append(f"- `{t['id']}`: {sub} — {desc}")
+                else:
+                    lines.append(f"- `{t['id']}`: {sub}")
+            lines.append("")
+            lines.append("Continue with the next pending todo above. Do NOT stop.")
+            body = "\n".join(lines)
+            self.context.add_message("user", [{"type": "text", "text": body}])
+
     def _refresh_pending_todos_nudge(self) -> None:
         """Inject a reminder that nudges the agent to advance unfinished todos.
 
@@ -742,7 +816,6 @@ class AgentEngine:
                       if t.get("status") in ("pending", "in_progress")]
         if not open_todos:
             self.context.remove_system_by_marker(marker)
-            self.context.remove_system_by_marker("<!-- FORCE_CONTINUE -->")
             return
 
         in_progress = [t for t in open_todos if t.get("status") == "in_progress"]
@@ -840,24 +913,26 @@ class AgentEngine:
             # Subagents: simple CoT guidance without Todo/Spawn instructions.
             system_parts.append(
                 "\n## Response style\n"
-                "- **Every turn must start with Chain of Thought reasoning** "
-                "inside `<thinking>`. Analyze the current state and determine the "
-                "next step.\n"
+                "- **Every round must start with Chain of Thought reasoning** "
+                "inside `<thinking>`. Review the last round's tool results, "
+                "assess progress, and decide the next action.\n"
                 "- If you need to reason between tool calls, wrap your "
                 "reasoning in `<thinking>...</thinking>`.  The TUI will "
                 "render the wrapped block as a collapsible thought and "
                 "keep it out of the main answer.\n"
-                "- Do not narrate your plan in the visible answer.  Avoid "
-                'phrases like "I will now…", "Let me first…", "X is done, '
-                'let me verify…" — those should go inside `<thinking>`.  '
-                "The visible answer is only the final user-facing summary.\n"
+                "- **Intermediate rounds**: visible text is for progress "
+                "updates, status reports, and questions.  Do NOT announce "
+                '"done" or "complete" unless ALL work is actually finished.\n'
+                "- **FINAL round** (all work done): output a visible summary "
+                "describing what was accomplished, changed, or decided.\n"
             )
         else:
             system_parts.append(
                 "\n## Response style\n"
-                "- **Every turn must start with Chain of Thought reasoning** "
-                "inside `<thinking>`. Analyze the current state, determine the "
-                "next step, then plan with `TodoCreate` and route execution by complexity.\n"
+                "- **Every round must start with Chain of Thought reasoning** "
+                "inside `<thinking>`. Review the last round's tool results, "
+                "assess progress against todos, and decide the next action. "
+                "Then plan with `TodoCreate` and route execution by complexity.\n"
                 "- **Plan + execution routing**:\n"
                 "  - Every task is a `TodoCreate` (persisted to .cdh/todos.json, "
                 "sidebar Plan). No work without a todo.\n"
@@ -871,10 +946,15 @@ class AgentEngine:
                 "reasoning in `<thinking>...</thinking>`.  The TUI will "
                 "render the wrapped block as a collapsible thought and "
                 "keep it out of the main answer.\n"
-                "- Do not narrate your plan in the visible answer.  Avoid "
-                'phrases like "I will now…", "Let me first…", "X is done, '
-                'let me verify…" — those should go inside `<thinking>`.  '
-                "The visible answer is only the final user-facing summary.\n"
+                "- **Intermediate rounds**: visible text is for progress "
+                "updates, status reports, and user questions.  Do NOT "
+                'announce "done", "complete", or "task finished" unless '
+                "ALL todos are actually completed.\n"
+                "- Do NOT call `TodoUpdate(status=\"completed\")` unless you "
+                "have actually executed the work (tool calls or Spawn).\n"
+                "- **FINAL round** (all todos completed, all work done): "
+                "output a visible summary describing what was accomplished, "
+                "what was changed, and any important outcomes or limitations.\n"
             )
 
         tagged_content = "<!-- AGENT_CONFIG -->\n" + "\n".join(system_parts)
@@ -1274,14 +1354,11 @@ class AgentEngine:
         # Reset cancellation flag (adapter also resets it before calling)
         self._cancelled = False
 
-        # ── Agent loop: CoT + ReAct (思考 → 行动 → 观察) ──
+        # ── Agent loop: 思考 → Todo → 行动 (per-Round) ──
         is_anthropic = provider.is_anthropic_style()
         max_turns = self.current_agent.max_turns or 10
 
-        # Initialize ReAct phase section (first turn prompt)
-        # Routing rules are in REACT_WORKFLOW (AGENT_CONFIG), so REACT_PHASE
-        # only needs the turn number — no boilerplate repetition per turn.
-        cot_phase_init = "<!-- REACT_PHASE -->\n## Turn 1\n"
+        cot_phase_init = "<!-- REACT_PHASE -->\n## Round 1 — 思考 → Todo → 行动\n"
         if not self.context.replace_system_section("REACT_PHASE", cot_phase_init):
             self.context.add_system(cot_phase_init)
 
@@ -1294,7 +1371,6 @@ class AgentEngine:
             # Cleanup stale reminders that may have accumulated
             self.context.remove_system_by_marker("<!-- ROUTING_REMINDER -->")
             self.context.remove_system_by_marker("<!-- PLAN_REMINDER -->")
-            self.context.remove_system_by_marker("<!-- FORCE_CONTINUE -->")
             # Inject (or refresh) a nudge that prioritizes any unfinished todos
             # from this session. The marker is replaced in-place so the context
             # stays bounded — the agent always sees the current open list.
@@ -1302,7 +1378,7 @@ class AgentEngine:
             if turn > 0:
                 self.context.replace_system_section(
                     "REACT_PHASE",
-                    f"<!-- REACT_PHASE -->\n## Turn {turn + 1}\n",
+                    f"<!-- REACT_PHASE -->\n## Round {turn + 1} — 思考 → Todo → 行动\n",
                 )
 
             self._pending_thinking_blocks = []
@@ -1512,6 +1588,16 @@ class AgentEngine:
                 # If there are still pending/in-progress todos, inject a
                 # forceful continuation nudge and loop again instead of
                 # exiting the turn loop.
+                self._empty_tool_turns += 1
+                if self._empty_tool_turns >= 3:
+                    logger.warning(
+                        "LLM produced %d consecutive empty turns with %d "
+                        "remaining todos — breaking loop",
+                        self._empty_tool_turns,
+                        sum(1 for t in self._todo_manager.list_todos()
+                            if t.get("status") in ("pending", "in_progress")),
+                    )
+                    break
                 if self._has_pending_todos():
                     open_count = sum(
                         1 for t in self._todo_manager.list_todos()
@@ -1519,23 +1605,65 @@ class AgentEngine:
                     )
                     logger.info(
                         "LLM stopped calling tools but %d pending todos remain — "
-                        "injecting FORCE_CONTINUE nudge",
-                        open_count,
+                        "injecting FORCE_CONTINUE nudge (empty_tool_turns=%d)",
+                        open_count, self._empty_tool_turns,
                     )
-                    _force_body = (
-                        "<!-- FORCE_CONTINUE -->\n"
-                        "## CRITICAL: Unfinished todos detected\n"
-                        "You stopped without completing all planned todos. "
-                        "This is incorrect. You MUST continue working:\n"
-                        "1. Call TodoUpdate(status=\"completed\") for any finished work.\n"
-                        "2. Then Spawn or execute the next pending todo.\n"
-                        "3. Repeat until ALL todos are Done.\n"
-                        "Do NOT stop. Do NOT summarise. Keep executing."
+                    # Auto-advance: since the LLM is stalled, find the next
+                    # pending todo and inject a direct instruction.
+                    next_todo = None
+                    for t in self._todo_manager.list_todos():
+                        if t.get("status") == "pending":
+                            next_todo = t
+                            break
+                    if next_todo:
+                        lines = [
+                            "# Continue working",
+                            "",
+                            f"The next pending todo is `{next_todo['id']}`: "
+                            f"{next_todo.get('subject', '')}",
+                            "",
+                            "Execute it now. Do NOT summarise or stop.",
+                        ]
+                        self.context.add_message(
+                            "user",
+                            [{"type": "text", "text": "\n".join(lines)}],
+                        )
+                    else:
+                        lines = [
+                            "<!-- FORCE_CONTINUE -->",
+            "## CRITICAL: Unfinished todos detected",
+            "You stopped without completing all planned todos.",
+            "You MUST continue working:",
+            "1. Call TodoUpdate(status=\"completed\") for any finished work.",
+            "2. Then Spawn or execute the next pending todo.",
+            "3. Repeat until ALL todos are Done.",
+            "Do NOT stop. Do NOT summarise. Keep executing.",
+                        ]
+                        self.context.add_message(
+                            "user",
+                            [{"type": "text", "text": "\n".join(lines)}],
+                        )
+                    continue
+                # No pending todos and no tool calls: work appears done.
+                # Guard: if no todos were ever created after multiple rounds,
+                # the agent may have done work without tracking it. Inject a
+                # one-time confirmation prompt before giving the final break.
+                all_todos = self._todo_manager.list_todos()
+                if not all_todos and self.iterations > 1:
+                    confirm_lines = [
+                        "# Final check",
+                        "",
+                        "You haven't created any todos in this session. "
+                        "Are you sure all work is complete?",
+                        "",
+                        "If work remains → `TodoCreate` and continue.",
+                        "If done → output a visible summary of what you accomplished.",
+                    ]
+                    self.context.add_message(
+                        "user",
+                        [{"type": "text", "text": "\n".join(confirm_lines)}],
                     )
-                    if not self.context.replace_system_section(
-                        "<!-- FORCE_CONTINUE -->", _force_body,
-                    ):
-                        self.context.add_system(_force_body)
+                    self._empty_tool_turns += 1
                     continue
                 break
 
@@ -1675,6 +1803,9 @@ class AgentEngine:
                             "content": formatted,
                             "raw_content": raw_output,
                         }
+                        # Auto-advance todo after subagent completes
+                        if not is_failed:
+                            self._auto_advance_after_spawn(subagent_prompt)
                 elif (self._plan_gate_mode != "off"
                       and not self._todo_manager.list_todos()
                       and tu["name"] in _EXECUTION_TOOLS
@@ -1891,6 +2022,9 @@ class AgentEngine:
                             yield event
                         self._plan_dirty = False
 
+            # Tools were called this turn — reset the empty-turn counter
+            self._empty_tool_turns = 0
+
             if self._cancelled:
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                 return
@@ -1899,7 +2033,29 @@ class AgentEngine:
             f"turn {i+1}: {u.get('total_tokens', '?')} tokens"
             for i, u in enumerate(self._turn_usages) if u
         )
-        logger.info(f"Chat stream complete after {self.iterations} turn(s). Usage: [{usage_summary}]")
+        logger.info(f"Chat stream complete after {self.iterations} round(s). Usage: [{usage_summary}]")
+
+        # ── Final summary fallback ──
+        # If the last round had no visible text (all reasoning was inside
+        # <thinking>), emit a deterministic summary so the user always sees
+        # a completion report — no extra LLM round-trip needed.
+        if not self._cancelled:
+            last_msg = self.context.messages[-1] if self.context.messages else None
+            has_visible = False
+            if last_msg and last_msg.get("role") == "assistant":
+                content = last_msg.get("content", "")
+                if isinstance(content, str):
+                    has_visible = bool(content.strip())
+                elif isinstance(content, list):
+                    has_visible = any(
+                        isinstance(block, dict)
+                        and block.get("type") == "text"
+                        and block.get("text", "").strip()
+                        for block in content
+                    )
+            if not has_visible:
+                summary = self._build_completion_summary()
+                yield StreamEvent.text_delta(summary)
 
     def has_pending_approval(self) -> bool:
         """Check if there's a pending approval request from ASK permission."""
@@ -1973,6 +2129,7 @@ class AgentEngine:
         """Reset ReAct loop state for a fresh cycle."""
         self._react_phase = "thought"
         self._direct_execution_count = 0
+        self._empty_tool_turns = 0
         self._plan_gate_fired = False
         # Invalidate the plan-emit dedupe cache so the next chat_stream
         # always produces a fresh snapshot for the TUI.

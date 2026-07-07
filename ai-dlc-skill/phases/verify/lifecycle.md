@@ -25,12 +25,12 @@ For each unit in DAG order (within each affected component):
   ▼
 After per-component units: regenerate shared types + contract tests
   aidlc/tools/generate_shared.py
-  pytest tests/contract/
+  pytest aidlc/tests/contract/
   aidlc/tools/contract_diff.py
   │
   ▼
 After contracts: cross-stack e2e against unified preview
-  pytest tests/cross-stack/
+  pytest aidlc/tests/cross-stack/
   │
   ▼
 Gate: All layers green + contracts compatible + cross-stack pass
@@ -43,8 +43,8 @@ Gate: All layers green + contracts compatible + cross-stack pass
 | `unit` | Per function / module | `apps/{comp}/tests/unit/` | Local |
 | `integration` | Component + its DB / internal API | `apps/{comp}/tests/integration/` | Local container |
 | `e2e` | Whole component against preview | `apps/{comp}/tests/e2e/` | Component preview URL |
-| `cross-stack` | Full multi-client ↔ backend flow | `tests/cross-stack/` | Unified stack preview URL |
-| `contract` | Contract shape + backward compat | `tests/contract/` | Generated `packages/shared/` |
+| `cross-stack` | Full multi-client ↔ backend flow | `aidlc/tests/cross-stack/` | Unified stack preview URL |
+| `contract` | Contract shape + backward compat | `aidlc/tests/contract/` | Generated `aidlc/packages/shared/` |
 
 ## TDD — Red
 
@@ -95,10 +95,10 @@ After per-component units pass and before cross-stack e2e:
 ```bash
 # 1. Regenerate shared types from contracts
 aidlc/tools/generate_shared.py
-# → packages/shared/{api,events} updated
+# → aidlc/packages/shared/{api,events} updated
 
 # 2. Run contract tests
-pytest tests/contract/ --verbose
+pytest aidlc/tests/contract/ --verbose
 # → All contract scenarios pass (uses packages/shared)
 
 # 3. Run contract compat check
@@ -111,13 +111,13 @@ aidlc/tools/contract_diff.py --base main --head HEAD
 
 **Rule INT-002:** Any breaking contract change (field removed, type changed, status code changed, required field added) is BLOCKED until a human approves the major version bump and a migration note is added to `aidlc/contracts/CHANGELOG.md`.
 
-**Rule INT-003:** Shared types must be generated, not hand-written. CI runs `generate_shared` and fails the build if `packages/shared/` is out of date.
+**Rule INT-003:** Shared types must be generated, not hand-written. CI runs `generate_shared` and fails the build if `aidlc/packages/shared/` is out of date.
 
 ## Cross-Stack E2E (STK-001)
 
 ```bash
 export STACK_URL=$(deploy_stack --preview --output url)
-pytest tests/cross-stack/ --stack-url $STACK_URL --verbose
+pytest aidlc/tests/cross-stack/ --stack-url $STACK_URL --verbose
 # All cross-stack scenarios pass
 ```
 
@@ -151,11 +151,11 @@ pytest apps/{component}/ --cov --cov-fail-under=80 && \
   ! grep -rn "TODO\|FIXME\|HACK\|XXX" apps/{component}/src/
 
 # Cross-component
-pytest tests/contract/ && \
+pytest aidlc/tests/contract/ && \
   aidlc/tools/contract_diff.py --base main --head HEAD
 
 # Stack
-pytest tests/cross-stack/ --stack-url $STACK_URL
+pytest aidlc/tests/cross-stack/ --stack-url $STACK_URL
 ```
 
 | Gate | Threshold | Rule | Scope |
@@ -178,15 +178,15 @@ pytest tests/cross-stack/ --stack-url $STACK_URL
 | BDD step defs (component) | `apps/{comp}/features/steps/test_{feature}_steps.py` |
 | BDD step defs (cross-stack) | `aidlc/features/cross-stack/steps/test_{feature}_steps.py` |
 | Implementation | `apps/{comp}/src/{module}/{feature}.py` |
-| Contract tests | `tests/contract/test_{contract}.py` |
-| Cross-stack e2e | `tests/cross-stack/test_{flow}.py` |
+| Contract tests | `aidlc/tests/contract/test_{contract}.py` |
+| Cross-stack e2e | `aidlc/tests/cross-stack/test_{flow}.py` |
 | Contract diff | `aidlc/openspec/changes/{id}/contract-diff.md` (filled) |
 
 ## Gate
 
 **Before advancing to Deliver phase:**
 - [ ] Per-component: All BDD scenarios pass (100%), coverage ≥80%, 0 vulns, no TODO
-- [ ] Contracts: `aidlc/tools/contract_diff.py` exits 0; `tests/contract/` 100% pass; `packages/shared/` regenerated and in sync
-- [ ] Cross-stack: `tests/cross-stack/` 100% pass against stack preview
+- [ ] Contracts: `aidlc/tools/contract_diff.py` exits 0; `aidlc/tests/contract/` 100% pass; `aidlc/packages/shared/` regenerated and in sync
+- [ ] Cross-stack: `aidlc/tests/cross-stack/` 100% pass against stack preview
 - [ ] `aidlc/openspec/changes/{id}/contract-diff.md` is filled and reviewed
 - [ ] All existing tests still pass

@@ -518,24 +518,33 @@ def filter_tool_descriptions(
 
 
 REACT_WORKFLOW = """
-## Workflow: Thought → Action → Observation
+## Workflow: 思考 → Todo → 行动 (per-Round)
 
-Each cycle: `<thinking>` (plan) → `TodoCreate` → tool(s) → `TodoUpdate`.
+Each round: `<thinking>` → Todo ops → tool execution → TodoUpdate.
+Tool results from the previous round are already in context — review them
+at the start of `<thinking>`. No separate "Observation" step is needed.
+
+### Round Structure
+
+**思考** (inside `<thinking>`):
+1. Review: what did the last round's tools produce? Any errors to address?
+2. Progress: which todos are done, which are pending?
+3. Decide: what is the single next action? Pick: direct tool or `Spawn`?
+
+**Todo** (before acting):
+- No todo for this work? → `TodoCreate` first.
+- Todo exists? → advance it (`in_progress`).
+- Completed work? → `TodoUpdate(status="completed")` immediately.
+- Do NOT mark a todo as completed unless its work was actually executed.
+
+**行动** (execute):
+- Simple (1 tool, 1 file) → call the tool directly.
+- Complex (multi-step/research) → `Spawn(agent_type, prompt)` to delegate.
+- Spawn executes a todo — it does not replace one.
 
 ### Routing
-- **Todo = plan, Spawn = execution delegation.** Every task is `TodoCreate`.
-- **Simple** (1 tool, 1 file) → execute directly → `TodoUpdate(status="completed")`
-- **Complex** (multi-file/multi-step/research) → `Spawn(agent_type, prompt)` → `TodoUpdate(status="completed")`
-- Spawn does NOT replace a Todo — it executes one.
-
-### Thought Phase
-Reason in `<thinking>`:
-1. Current state? Goal? Route: simple (direct) or complex (Spawn)?
-2. Todo exists? No → `TodoCreate`. Yes → advance it.
-3. Execute → `TodoUpdate(status="completed")`.
-
-### Observation
-Tool result = observation. Success → update status. Error → diagnose & retry/ask user.
+- Every task = a `TodoCreate`. No work without a todo.
+- `Spawn` = execution delegation for complex todos only.
 """
 
 PLAN_GATE_HARD = """

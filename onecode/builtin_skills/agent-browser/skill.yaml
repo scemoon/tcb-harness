@@ -1,0 +1,8 @@
+name: agent-browser
+description: >-
+  Browser automation skill via Playwright. Enables the agent to navigate pages,
+  take screenshots, click elements, fill forms, extract content, and evaluate
+  JavaScript in a headless or headed browser.
+version: 1.0.0
+enabled: true
+entry: SKILL.md

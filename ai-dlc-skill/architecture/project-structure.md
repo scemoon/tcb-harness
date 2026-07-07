@@ -16,10 +16,10 @@
 │   ├── api/
 │   ├── events/
 │   └── functions/
-├── packages/shared/     # INT-FR-*      从 contracts 生成的共享类型
+├── aidlc/packages/shared/     # INT-FR-*      从 contracts 生成的共享类型
 ├── aidlc/features/            # BDD feature 文件
 │   └── cross-stack/     # 跨组件集成场景
-├── tests/
+├── aidlc/tests/
 │   ├── contract/        # 合约测试 (INT-FR 级别, provider-agnostic)
 │   └── cross-stack/     # 跨组件 e2e 测试 (对 STACK_URL 运行)
 ├── aidlc/openspec/            # AI-DLC 生命周期产出物
@@ -74,5 +74,5 @@ apps/{component}/
 | WXA-FR-NNN | `apps/wxa/` | `apps/wxa/tests/` | BACKEND_URL |
 | MYA-FR-NNN | `apps/mya/` | `apps/mya/tests/` | BACKEND_URL |
 | TTA-FR-NNN | `apps/tta/` | `apps/tta/tests/` | BACKEND_URL |
-| INT-FR-NNN | `contracts/` + `packages/shared/` | `tests/contract/` | generated types |
-| 跨组件 | `aidlc/features/cross-stack/` | `tests/cross-stack/` | STACK_URL |
+| INT-FR-NNN | `aidlc/contracts/` + `aidlc/packages/shared/` | `aidlc/tests/contract/` | generated types |
+| 跨组件 | `aidlc/features/cross-stack/` | `aidlc/tests/cross-stack/` | STACK_URL |
