@@ -58,6 +58,25 @@ class AnthropicProvider(Provider):
                 model=model,
             )
         async with httpx.AsyncClient(timeout=120) as client:
+            prepared = self.prepare_messages(messages)
+            system_content = None
+            filtered_messages = []
+            for msg in prepared:
+                if msg.get("role") == "system":
+                    system_content = msg["content"]
+                else:
+                    filtered_messages.append(msg)
+            api_body = {
+                "model": model,
+                "max_tokens": kwargs.get("max_tokens", 4096),
+                "messages": filtered_messages,
+            }
+            if system_content:
+                api_body["system"] = [{
+                    "type": "text",
+                    "text": system_content,
+                    "cache_control": {"type": "ephemeral"},
+                }]
             resp = await client.post(
                 f"{self._endpoint}/messages",
                 headers={
@@ -65,11 +84,7 @@ class AnthropicProvider(Provider):
                     "anthropic-version": "2023-06-01",
                     "content-type": "application/json",
                 },
-                json={
-                    "model": model,
-                    "max_tokens": kwargs.get("max_tokens", 4096),
-                    "messages": self.prepare_messages(messages),
-                },
+                json=api_body,
             )
             data = resp.json()
             return ModelResponse(
@@ -87,6 +102,26 @@ class AnthropicProvider(Provider):
             yield "API key not configured."
             return
         async with httpx.AsyncClient(timeout=300) as client:
+            prepared_cs = self.prepare_messages(messages)
+            system_content_cs = None
+            filtered_cs = []
+            for msg in prepared_cs:
+                if msg.get("role") == "system":
+                    system_content_cs = msg["content"]
+                else:
+                    filtered_cs.append(msg)
+            body_cs = {
+                "model": model,
+                "max_tokens": kwargs.get("max_tokens", 4096),
+                "messages": filtered_cs,
+                "stream": True,
+            }
+            if system_content_cs:
+                body_cs["system"] = [{
+                    "type": "text",
+                    "text": system_content_cs,
+                    "cache_control": {"type": "ephemeral"},
+                }]
             async with client.stream(
                 "POST",
                 f"{self._endpoint}/messages",
@@ -95,12 +130,7 @@ class AnthropicProvider(Provider):
                     "anthropic-version": "2023-06-01",
                     "content-type": "application/json",
                 },
-                json={
-                    "model": model,
-                    "max_tokens": kwargs.get("max_tokens", 4096),
-                    "messages": self.prepare_messages(messages),
-                    "stream": True,
-                },
+                json=body_cs,
             ) as resp:
                 async for line in resp.aiter_lines():
                     if line.startswith("data: ") and line[6:] != "[DONE]":
@@ -131,12 +161,29 @@ class AnthropicProvider(Provider):
 
         try:
             async with httpx.AsyncClient(timeout=300) as client:
+                # Extract system message for Anthropic's separate ``system``
+                # parameter (enables prompt caching).
+                prepared = self.prepare_messages(messages)
+                system_content = None
+                filtered_messages = []
+                for msg in prepared:
+                    if msg.get("role") == "system":
+                        system_content = msg["content"]
+                    else:
+                        filtered_messages.append(msg)
+
                 body = {
                     "model": model,
                     "max_tokens": kwargs.get("max_tokens", 4096),
-                    "messages": self.prepare_messages(messages),
+                    "messages": filtered_messages,
                     "stream": True,
                 }
+                if system_content:
+                    body["system"] = [{
+                        "type": "text",
+                        "text": system_content,
+                        "cache_control": {"type": "ephemeral"},
+                    }]
                 tools = kwargs.get("tools")
                 if tools:
                     body["tools"] = tools

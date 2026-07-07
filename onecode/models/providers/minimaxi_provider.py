@@ -128,6 +128,9 @@ class MiniMaxiProvider(Provider):
     def is_anthropic_style(self) -> bool:
         return False
 
+    def supports_native_tools(self) -> bool:
+        return False
+
     async def chat(
         self, messages: list[Message], model: str = "", **kwargs
     ) -> ModelResponse:

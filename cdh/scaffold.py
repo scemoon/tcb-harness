@@ -101,7 +101,7 @@ COMPONENT_BY_ID: dict[str, ComponentSpec] = {c.id: c for c in COMPONENTS}
 CROSS_CUTTING: tuple[CrossCutSpec, ...] = (
     CrossCutSpec(
         id="contracts",
-        paths=("contracts/api", "contracts/events", "contracts/CHANGELOG.md"),
+        paths=("aidlc/contracts/api", "aidlc/contracts/events", "aidlc/contracts/CHANGELOG.md"),
         label="Interface Contracts",
         description="API/event contracts and changelog",
     ),
@@ -113,13 +113,13 @@ CROSS_CUTTING: tuple[CrossCutSpec, ...] = (
     ),
     CrossCutSpec(
         id="openspec",
-        paths=("openspec/changes",),
+        paths=("aidlc/openspec/changes",),
         label="OpenSpec Changes",
         description="OpenSpec change proposals",
     ),
     CrossCutSpec(
         id="cross_stack_features",
-        paths=("features/cross-stack",),
+        paths=("aidlc/features/cross-stack",),
         label="Cross-Stack BDD",
         description="End-to-end BDD features across components",
     ),
@@ -132,9 +132,9 @@ CROSS_CUTTING: tuple[CrossCutSpec, ...] = (
     CrossCutSpec(
         id="provider",
         paths=(
-            "providers/tcb/provider.yaml",
-            "providers/tcb/deployment.yaml",
-            "providers/tcb/preview.yaml",
+            "aidlc/providers/tcb/provider.yaml",
+            "aidlc/providers/tcb/deployment.yaml",
+            "aidlc/providers/tcb/preview.yaml",
         ),
         label="Cloud Provider",
         description="TCB (Tencent CloudBase) provider config",
@@ -142,9 +142,9 @@ CROSS_CUTTING: tuple[CrossCutSpec, ...] = (
     CrossCutSpec(
         id="tools",
         paths=(
-            "tools/deploy_stack.py",
-            "tools/contract_diff.py",
-            "tools/generate_shared.py",
+            "aidlc/tools/deploy_stack.py",
+            "aidlc/tools/contract_diff.py",
+            "aidlc/tools/generate_shared.py",
         ),
         label="Tooling Scripts",
         description="deploy_stack / contract_diff / generate_shared stubs",
@@ -237,6 +237,19 @@ Thumbs.db
 
 CHANGELOG_MD = "# Changelog\n\n## [0.1.0] - Initial scaffold\n\n- Project created via cdh scaffold\n"
 
+AGENTS_MD_TEMPLATE = """# AGENTS.md — Project Constitution
+
+Hard rules every AI agent must follow when working in this repo.
+Read once per session; behavior is enforced by the agent runtime.
+
+## Project
+
+- **Name**: {project_name}
+- **Description**: {description}
+
+<!-- CDH_SKILL ~/.cdh/skills/ai-dlc-skill/SKILL.md -->
+"""
+
 REQUIREMENTS_MD = """# {project_name}
 
 ## Intent
@@ -266,9 +279,8 @@ Default cloud provider: TCB (Tencent CloudBase).
 
 
 def _detect_dlc_skill(workspace_root: Path) -> bool:
-    from cdh.cdh_skill_loader import CdhSkillLoader
-    loader = CdhSkillLoader()
-    return loader.get(SKILL_NAME) is not None
+    from cdh.cdh_skill_manager import CDH_PLATFORM_SKILLS_DIR
+    return (CDH_PLATFORM_SKILLS_DIR / SKILL_NAME / "SKILL.md").exists()
 
 
 def _mkdir(path: Path) -> None:
@@ -286,6 +298,14 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content.lstrip("\n"), encoding="utf-8")
 
 
+def _write_agents_md(root: Path, project_name: str, description: str) -> None:
+    content = AGENTS_MD_TEMPLATE.format(
+        project_name=project_name,
+        description=description or f"AI-DLC monorepo project: {project_name}",
+    )
+    _write(root / "AGENTS.md", content)
+
+
 def _component_to_dict(c: ComponentSpec) -> dict:
     out = {
         "id": c.id,
@@ -300,7 +320,7 @@ def _component_to_dict(c: ComponentSpec) -> dict:
 def _build_project_yaml(active: list[ComponentSpec], cross_cutting_ids: list[str]) -> dict:
     cross_cutting: dict = {"fr_prefix": "INT"}
     if "contracts" in cross_cutting_ids:
-        cross_cutting["contracts"] = "contracts/"
+        cross_cutting["contracts"] = "aidlc/contracts/"
     if "shared" in cross_cutting_ids:
         cross_cutting["shared_types"] = "packages/shared/"
     return {
@@ -414,6 +434,7 @@ def init_dlc_project(
         cross_cutting_ids=[],
         description=description,
     )
+    _write_agents_md(root, project_name, description)
     return True
 
 
@@ -470,6 +491,7 @@ def scaffold_dlc_project(
         _scaffold_component(c, root)
 
     _scaffold_cross_cutting(all_cross_ids, root)
+    _write_agents_md(root, project_name, description)
 
     return True
 
@@ -551,7 +573,7 @@ def add_cross_cutting(
     data = yaml.safe_load(project_yaml.read_text(encoding="utf-8")) or {}
     cross_cutting = data.setdefault("stack", {}).setdefault("cross_cutting", {})
     if cross_id == "contracts":
-        cross_cutting["contracts"] = "contracts/"
+        cross_cutting["contracts"] = "aidlc/contracts/"
     elif cross_id == "shared":
         cross_cutting["shared_types"] = "packages/shared/"
 

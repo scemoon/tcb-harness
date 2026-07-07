@@ -217,15 +217,20 @@ class ContextManager:
                 for b in m.content:
                     if isinstance(b, dict) and b.get("type") == "tool_result":
                         content = b.get("content", "")
-                        if isinstance(content, str) and len(content) > 500:
-                            b["content"] = content[:500] + "\n... [truncated]"
+                        if isinstance(content, str) and len(content) > 2000:
+                            # Preserve full output if it contains code blocks
+                            # or structured JSON results.
+                            if "```" not in content and not content.lstrip().startswith("{"):
+                                b["content"] = content[:500] + "\n... [truncated]"
 
     def _tier_truncate_old(self, msgs: list[Message], keep_recent: int = 10) -> None:
         if len(msgs) <= keep_recent:
             return
         for m in msgs[:-keep_recent]:
             if isinstance(m.content, str) and len(m.content) > 200:
-                m.content = m.content[:200] + "..."
+                # Preserve messages containing code blocks or structured data
+                if "```" not in m.content:
+                    m.content = m.content[:200] + "..."
             elif isinstance(m.content, list):
                 m.content = [b for b in m.content if isinstance(b, dict) and b.get("type") == "tool_use"]
                 if not m.content:

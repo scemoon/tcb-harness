@@ -751,27 +751,14 @@ class AgentEngine:
             return f"- `{sid}`{owner_part}: {sub}"
 
         lines: list[str] = []
-        lines.append(
-            "There are unfinished todos from earlier in this session. Prioritize "
-            "them before starting new work: finish in-progress items, then move "
-            "to the next pending todo in DAG order (respect `addBlockedBy`). "
-            "If a todo is blocked on user input or external information, call "
-            "`AskUser` to clarify instead of starting a new branch."
-        )
+        total = len(in_progress) + len(pending)
+        lines.append(f"Open todos ({total}): resume in DAG order, or AskUser to unblock.")
         if in_progress:
-            lines.append("")
-            lines.append("**In progress:**")
-            lines.extend(_label(t) for t in in_progress)
+            labels = ", ".join(_label(t) for t in in_progress)
+            lines.append(f"In progress: {labels}")
         if pending:
-            lines.append("")
-            lines.append("**Pending:**")
-            lines.extend(_label(t) for t in pending)
-        lines.append("")
-        lines.append(
-            "Next action: either `TodoUpdate(status=\"in_progress\")` to pick one "
-            "up, advance it with the appropriate tool, and `TodoUpdate(status=\"completed\")` "
-            "when done — or `AskUser` to unblock."
-        )
+            labels = ", ".join(_label(t) for t in pending)
+            lines.append(f"Pending: {labels}")
         body = f"{marker}\n" + "\n".join(lines)
         if not self.context.replace_system_section(marker, body):
             self.context.add_system(body)
@@ -784,8 +771,9 @@ class AgentEngine:
         keeps the public API synchronous and avoids re-entrancy.
 
         Subagents have an isolated TodoManager and (since Todo tools are
-        disabled for subagents) cannot mutate the parent's shared plan, so
-        this callback only fires for the main agent's own TodoManager.
+        denied via disallowed_tools for subagents) cannot mutate the parent's
+        shared plan, so this callback only fires for the main agent's own
+        TodoManager.
 
         Also persists todos to ``.cdh/todos.json`` immediately so they
         survive a crash or Ctrl+C before the next ACP turn boundary.
@@ -799,10 +787,13 @@ class AgentEngine:
 
     def set_agent(self, agent_type: str) -> None:
         from onecode.agent.agents.types import (
+            AgentMode,
             AgentPermission,
+            SUBAGENT_CONSTRAINTS,
             create_agent,
-            PLAN_INSTRUCTIONS,
-            REACT_CYCLE,
+            PLAN_GATE_HARD,
+            PLAN_GATE_SOFT,
+            REACT_WORKFLOW,
             filter_tool_descriptions,
         )
         self.current_agent = create_agent(agent_type)
@@ -818,52 +809,87 @@ class AgentEngine:
                 restrictions.append("- Shell commands require user approval")
             system_parts.append("\n".join(restrictions))
 
+        if self.current_agent.mode == AgentMode.SUBAGENT:
+            system_parts.append(SUBAGENT_CONSTRAINTS)
+
         if self.current_agent.permission_task != AgentPermission.DENY:
-            system_parts.append(REACT_CYCLE)
-            system_parts.append(PLAN_INSTRUCTIONS)
+            system_parts.append(REACT_WORKFLOW)
+            if self.current_agent.mode.name == "SUBAGENT":
+                pass  # subagents don't need plan gate
+            elif self.current_agent.permission_edit == AgentPermission.DENY and self.current_agent.permission_bash == AgentPermission.DENY:
+                pass  # read-only mode, no gate needed
+            elif self.current_agent.permission_task == AgentPermission.DENY:
+                pass
+            else:
+                gate = PLAN_GATE_HARD if self.current_agent.mode == AgentMode.PRIMARY and self.current_agent.name == "plan" else PLAN_GATE_SOFT
+                system_parts.append(gate)
 
-        # Tell the model how to format intermediate reasoning so the TUI
-        # can render it as a collapsible "thought" block instead of
-        # leaking it into the visible answer.  Without these tags, the
-        # model's planning prose ("I will now update X…", "X is done,
-        # let me verify…") flows through as plain ``agent_message_chunk``
-        # and shows up in chat interleaved with tool calls.
-        system_parts.append(
-            "\n## Response style\n"
-            "- **Every turn must start with Chain of Thought reasoning** "
-            "inside `<thinking>`. Analyze the current state, determine the "
-            "next step, then plan with `TodoCreate` and route execution by complexity.\n"
-            "- **Plan + execution routing**:\n"
-            "  - Every task is a `TodoCreate` (persisted to .cdh/todos.json, "
-            "sidebar Plan). No work without a todo.\n"
-            "  - Simple / single-step todo → execute directly, then "
-            "`TodoUpdate(status=\"completed\")`.\n"
-            "  - Complex / multi-step todo → `Spawn(agent_type, prompt)` to "
-            "delegate execution to an isolated subagent, then "
-            "`TodoUpdate(status=\"completed\")`.\n"
-            "  - Use `TodoClear` to reset the entire plan and start fresh.\n"
-            "- If you need to reason between tool calls, wrap your "
-            "reasoning in `<thinking>...</thinking>`.  The TUI will "
-            "render the wrapped block as a collapsible thought and "
-            "keep it out of the main answer.\n"
-            "- Do not narrate your plan in the visible answer.  Avoid "
-            'phrases like "I will now…", "Let me first…", "X is done, '
-            'let me verify…" — those should go inside `<thinking>`.  '
-            "The visible answer is only the final user-facing summary.\n"
-        )
-
-        tool_desc = filter_tool_descriptions(
-            allowlist=self.current_agent.tools or None,
-            denylist=self.current_agent.disallowed_tools or None,
-        )
-        system_parts.append(tool_desc)
+        # Response style with CoT reasoning guidance.
+        if self.current_agent.mode == AgentMode.SUBAGENT:
+            # Subagents: simple CoT guidance without Todo/Spawn instructions.
+            system_parts.append(
+                "\n## Response style\n"
+                "- **Every turn must start with Chain of Thought reasoning** "
+                "inside `<thinking>`. Analyze the current state and determine the "
+                "next step.\n"
+                "- If you need to reason between tool calls, wrap your "
+                "reasoning in `<thinking>...</thinking>`.  The TUI will "
+                "render the wrapped block as a collapsible thought and "
+                "keep it out of the main answer.\n"
+                "- Do not narrate your plan in the visible answer.  Avoid "
+                'phrases like "I will now…", "Let me first…", "X is done, '
+                'let me verify…" — those should go inside `<thinking>`.  '
+                "The visible answer is only the final user-facing summary.\n"
+            )
+        else:
+            system_parts.append(
+                "\n## Response style\n"
+                "- **Every turn must start with Chain of Thought reasoning** "
+                "inside `<thinking>`. Analyze the current state, determine the "
+                "next step, then plan with `TodoCreate` and route execution by complexity.\n"
+                "- **Plan + execution routing**:\n"
+                "  - Every task is a `TodoCreate` (persisted to .cdh/todos.json, "
+                "sidebar Plan). No work without a todo.\n"
+                "  - Simple / single-step todo → execute directly, then "
+                "`TodoUpdate(status=\"completed\")`.\n"
+                "  - Complex / multi-step todo → `Spawn(agent_type, prompt)` to "
+                "delegate execution to an isolated subagent, then "
+                "`TodoUpdate(status=\"completed\")`.\n"
+                "  - Use `TodoClear` to reset the entire plan and start fresh.\n"
+                "- If you need to reason between tool calls, wrap your "
+                "reasoning in `<thinking>...</thinking>`.  The TUI will "
+                "render the wrapped block as a collapsible thought and "
+                "keep it out of the main answer.\n"
+                "- Do not narrate your plan in the visible answer.  Avoid "
+                'phrases like "I will now…", "Let me first…", "X is done, '
+                'let me verify…" — those should go inside `<thinking>`.  '
+                "The visible answer is only the final user-facing summary.\n"
+            )
 
         tagged_content = "<!-- AGENT_CONFIG -->\n" + "\n".join(system_parts)
         if not self.context.replace_system_section("AGENT_CONFIG", tagged_content):
             self.context.add_system(tagged_content)
 
+        # Inject TOOL_DESCRIPTIONS as its own marker so it can be independently
+        # stripped when the provider supports native tool schemas.
+        tool_desc = filter_tool_descriptions(
+            allowlist=self.current_agent.tools or None,
+            denylist=self.current_agent.disallowed_tools or None,
+        )
+        tool_tagged = "<!-- TOOL_DESCRIPTIONS -->\n" + tool_desc
+        if not self.context.replace_system_section("TOOL_DESCRIPTIONS", tool_tagged):
+            self.context.add_system(tool_tagged)
+
         # Re-apply user permission overrides (e.g. "allow always")
         self._perm_store.apply_to(self.current_agent)
+
+    def _strip_agent_config_tool_descriptions(self) -> None:
+        """Remove the ``<!-- TOOL_DESCRIPTIONS -->`` system section.
+
+        Called after the provider is known, for providers that support
+        native tool schemas and don't need the prose TOOL_DESCRIPTIONS.
+        """
+        self.context.remove_system_by_marker("<!-- TOOL_DESCRIPTIONS -->")
 
     def get_available_tools(self) -> str:
         from onecode.agent.agents.types import filter_tool_descriptions
@@ -1023,6 +1049,13 @@ class AgentEngine:
         "Agent": "task",
         "Skill": "skill",
         "codebase_search": "read",
+        "TodoCreate": "todowrite",
+        "TodoGet": "todowrite",
+        "TodoList": "todowrite",
+        "TodoUpdate": "todowrite",
+        "TodoOutput": "todowrite",
+        "TodoStop": "todowrite",
+        "TodoClear": "todowrite",
     }
 
     def _check_tool_permission(self, name: str, inp: dict) -> str | None:
@@ -1218,6 +1251,12 @@ class AgentEngine:
         provider_kwargs = dict(api_key=config.api_key or "", endpoint=config.endpoint or None)
         provider = provider_cls(**provider_kwargs)
 
+        # If the provider supports native tool schemas (OpenAI/Anthropic/DeepSeek
+        # etc.), strip the prose TOOL_DESCRIPTIONS from system context to save
+        # tokens. The structured ``tools`` kwarg provides the same info.
+        if not hasattr(provider, 'supports_native_tools') or provider.supports_native_tools():
+            self._strip_agent_config_tool_descriptions()
+
         # Reset per-turn usage tracking
         self._turn_usages = []
 
@@ -1229,20 +1268,9 @@ class AgentEngine:
         max_turns = self.current_agent.max_turns or 10
 
         # Initialize ReAct phase section (first turn prompt)
-        cot_phase_init = (
-            "<!-- REACT_PHASE -->\n"
-            "## Turn 1 — Thought Phase (思考)\n"
-            "Begin this turn by reasoning step by step in `<thinking>`:\n"
-            "1. **Current state**: Analyze the user request and what needs to be done.\n"
-            "2. **Goal**: What should I accomplish this turn?\n"
-            "3. **Plan**: Is this work tracked by a todo? If not, `TodoCreate` first "
-            "(persists to .cdh/todos.json + sidebar Plan).\n"
-            "4. **Execution routing** (by complexity):\n"
-            "   - Simple (1 tool call, 1 file) → execute directly, then `TodoUpdate(status)`\n"
-            "   - Complex (multi-file, multi-step, needs isolated context) → "
-            "`Spawn(agent_type, prompt)` delegates to a subagent, then `TodoUpdate(status)`\n"
-            "   - Pure research → `Read/Grep/Glob/WebFetch` directly, or `explore/scout` subagent\n"
-        )
+        # Routing rules are in REACT_WORKFLOW (AGENT_CONFIG), so REACT_PHASE
+        # only needs the turn number — no boilerplate repetition per turn.
+        cot_phase_init = "<!-- REACT_PHASE -->\n## Turn 1\n"
         if not self.context.replace_system_section("REACT_PHASE", cot_phase_init):
             self.context.add_system(cot_phase_init)
 
@@ -1254,24 +1282,16 @@ class AgentEngine:
             # ── Thought Phase: update CoT reasoning guidance for this turn ──
             # Cleanup stale reminders that may have accumulated
             self.context.remove_system_by_marker("<!-- ROUTING_REMINDER -->")
+            self.context.remove_system_by_marker("<!-- PLAN_REMINDER -->")
             # Inject (or refresh) a nudge that prioritizes any unfinished todos
             # from this session. The marker is replaced in-place so the context
             # stays bounded — the agent always sees the current open list.
             self._refresh_pending_todos_nudge()
             if turn > 0:
-                cot_phase = (
-                    f"<!-- REACT_PHASE -->\n"
-                    f"## Turn {turn + 1} — Thought Phase (思考)\n"
-                    "Begin this turn by reasoning step by step in `<thinking>`:\n"
-                    "1. **Current state**: What just happened? What results do I have?\n"
-                    "2. **Goal**: What should I accomplish this turn?\n"
-                    "3. **Plan**: Advance existing todos via `TodoUpdate`; create new ones "
-                    "via `TodoCreate` if work is untracked.\n"
-                    "4. **Execution routing**: Simple todo → execute directly + "
-                    "`TodoUpdate(status)`. Complex todo → `Spawn(agent_type, prompt)` + "
-                    "`TodoUpdate(status)`.\n"
+                self.context.replace_system_section(
+                    "REACT_PHASE",
+                    f"<!-- REACT_PHASE -->\n## Turn {turn + 1}\n",
                 )
-                self.context.replace_system_section("REACT_PHASE", cot_phase)
 
             self._pending_thinking_blocks = []
 
@@ -2287,7 +2307,12 @@ class AgentEngine:
         yield (StreamEvent.subagent_end(
             "", agent_type=agent_type, status="completed",
         ), "".join(parts))
-    
+
+    _SUBAGENT_SECTION_RE = re.compile(
+        r'^(SUMMARY|CHANGES|EVIDENCE|RISKS|BLOCKERS):\s*$',
+        re.IGNORECASE | re.MULTILINE,
+    )
+
     def _format_subagent_output(self, agent_type: str, prompt: str, result: str) -> str:
         """Format sub-agent output in DeepSeek-TUI structured contract format.
         
@@ -2298,26 +2323,20 @@ class AgentEngine:
         RISKS: what could go wrong / what the parent should double-check
         BLOCKERS: what stopped you; "None." if you finished cleanly
         """
-        # Try to detect if the result already has structured sections
-        result_lower = result.lower()
-        has_sections = all(
-            tag.lower() in result_lower 
-            for tag in ["summary", "changes", "evidence", "risks", "blockers"]
-        )
-        
+        # Detect structured sections via line-start regex, not substring match
+        has_sections = self._SUBAGENT_SECTION_RE.search(result) is not None
+
         if has_sections:
-            # Already structured — just ensure proper formatting
             return result
-        else:
-            # Add structured wrapper around raw result
-            return (
-                f"SUMMARY:\n{agent_type.capitalize()} agent completed task: {prompt[:200]}\n\n"
-                f"CHANGES:\nNone detected.\n\n"
-                f"EVIDENCE:\n- See detailed output below\n\n"
-                f"RISKS:\nNone identified.\n\n"
-                f"BLOCKERS:\nNone.\n\n"
-                f"--- Raw Output ---\n{result}"
-            )
+
+        return (
+            f"SUMMARY:\n{agent_type.capitalize()} agent completed task: {prompt[:200]}\n\n"
+            f"CHANGES:\nNone detected.\n\n"
+            f"EVIDENCE:\n- See detailed output below\n\n"
+            f"RISKS:\nNone identified.\n\n"
+            f"BLOCKERS:\nNone.\n\n"
+            f"--- Raw Output ---\n{result}"
+        )
 
     def spawn_subagent(self, agent_type: str, prompt: str) -> dict:
         if self.current_agent.permission_task == AgentPermission.DENY:

@@ -1,4 +1,5 @@
 import base64
+import re
 from pathlib import Path
 
 from tui.acp import protocol
@@ -6,52 +7,28 @@ from tui.prompt.extract import extract_paths_from_prompt
 from tui.prompt.resource import load_resource, ResourceError
 
 
-CLOUD_SPEC_SKILL_PATH = Path(__file__).resolve().parent.parent.parent / "cloud-spec-skill" / "SKILL.md"
+CDH_SKILL_MARKER_RE = re.compile(r"<!--\s*CDH_SKILL\s+(\S+)\s*-->")
 
 
-def _get_cloud_spec_content() -> str:
-    """Load cloud-spec-skill content."""
-    if CLOUD_SPEC_SKILL_PATH.exists():
-        return CLOUD_SPEC_SKILL_PATH.read_text(encoding="utf-8")
-    return ""
-
-
-def cloud_spec_skill_loaded() -> bool:
-    """Check if cloud-spec-skill SKILL.md exists."""
-    return CLOUD_SPEC_SKILL_PATH.exists()
-
-
-def ensure_cloud_spec_skill_installed() -> str | None:
-    """Ensure cloud-spec-skill is accessible to agents.
-
-    Checks if SKILL.md exists in repo and copies it to ~/.cdh/skills/ if needed,
-    or updates if the repo version is newer.
-    Returns error message if installation fails, None on success.
-    """
-    from cdh.cdh_skill_manager import CDH_PLATFORM_SKILLS_DIR
-
-    if not CLOUD_SPEC_SKILL_PATH.exists():
-        return None
-
-    skill_dest = CDH_PLATFORM_SKILLS_DIR / "cloud-spec-skill"
-    dest_skills_md = skill_dest / "SKILL.md"
-
-    if skill_dest.exists() and dest_skills_md.exists():
-        repo_mtime = CLOUD_SPEC_SKILL_PATH.stat().st_mtime
-        dest_mtime = dest_skills_md.stat().st_mtime
-        if dest_mtime >= repo_mtime:
-            return None
-
+def _load_from_cdh_marker(project_path: Path) -> str:
+    """If AGENTS.md contains ``<!-- CDH_SKILL <path> -->``, load that file."""
+    agents_md = project_path / "AGENTS.md"
+    if not agents_md.exists():
+        return ""
     try:
-        import shutil
-
-        if skill_dest.exists():
-            shutil.rmtree(skill_dest)
-        skill_dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(CLOUD_SPEC_SKILL_PATH.parent, skill_dest)
-        return None
-    except Exception as e:
-        return str(e)
+        text = agents_md.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+    m = CDH_SKILL_MARKER_RE.search(text)
+    if not m:
+        return ""
+    skill_path = Path(m.group(1)).expanduser()
+    if not skill_path.exists():
+        return ""
+    try:
+        return skill_path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
 
 
 def build(project_path: Path, prompt: str) -> list[protocol.ContentBlock]:
@@ -66,12 +43,11 @@ def build(project_path: Path, prompt: str) -> list[protocol.ContentBlock]:
     """
     prompt_content: list[protocol.ContentBlock] = []
 
-    # Prepend cloud-spec-skill as system guidance
-    cloud_spec_content = _get_cloud_spec_content()
-    if cloud_spec_content:
+    skill_content = _load_from_cdh_marker(project_path)
+    if skill_content:
         prompt_content.append({
             "type": "text",
-            "text": f"[System Guidance - Always follow these development standards]\n\n{cloud_spec_content}\n\n---\n\n"
+            "text": f"[Development Standards - AI-DLC]\n\n{skill_content}\n\n---\n\n"
         })
 
     prompt_content.append({"type": "text", "text": prompt})
@@ -81,7 +57,6 @@ def build(project_path: Path, prompt: str) -> list[protocol.ContentBlock]:
         try:
             resource = load_resource(project_path, Path(path))
         except ResourceError:
-            # TODO: How should this be handled?
             continue
         uri = f"file://{resource.path.absolute().resolve()}"
         if resource.text is not None:

@@ -67,10 +67,7 @@ def migrate_legacy_cdh_to_onecode(
             (target / d).exists() for d in _ONECODE_PRIVATE_DIRS
         ) or target / "onecode.config.yaml" in target.iterdir()
         if has_content:
-            return (
-                f"Both {legacy} (legacy) and {target} (new) exist with content. "
-                "Please manually migrate: cp -r {legacy}/* {target}/ && rm -rf {legacy}"
-            )
+            return None  # 各自独立运行，无需迁移
         # Target exists but empty — safe to proceed
 
     # Perform migration

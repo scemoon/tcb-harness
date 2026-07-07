@@ -593,6 +593,15 @@ class Provider(ABC):
         """Whether this provider uses Anthropic-style 'system' kwarg."""
         return False
 
+    def supports_native_tools(self) -> bool:
+        """Whether this provider accepts structured tools param in API calls.
+
+        When True, TOOL_DESCRIPTIONS prose in the system prompt is skipped
+        because the provider's native tool schema (passed via the ``tools``
+        kwarg to ``chat_stream_response``) provides equivalent information.
+        """
+        return True
+
     async def chat_stream_response(
         self,
         messages: list[Message],

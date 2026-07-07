@@ -186,8 +186,12 @@ class SubAgent(containers.VerticalGroup, can_focus=True):
     def _latest_content(self) -> Content:
         text = (self.latest_line or "").strip()
         if text:
-            return Content(text)
-        return Content.from_markup("[$text-muted]⏳ 等待输出…")
+            return Content.assemble(
+                Content(text),
+                Content("  "),
+                Content.from_markup("[$text-muted]ctrl+n[/]"),
+            )
+        return Content.from_markup("[$text-muted]⏳ 等待输出…  (ctrl+n 打开全屏)[/]")
 
     def _status_label(self) -> str:
         if self._status == "running":
