@@ -186,7 +186,7 @@ pytest tests/cross-stack/ --stack-url $STACK_URL
 
 **Before advancing to Deliver phase:**
 - [ ] Per-component: All BDD scenarios pass (100%), coverage ≥80%, 0 vulns, no TODO
-- [ ] Contracts: `aidlc/aidlc/tools/contract_diff.py` exits 0; `tests/contract/` 100% pass; `packages/shared/` regenerated and in sync
+- [ ] Contracts: `aidlc/tools/contract_diff.py` exits 0; `tests/contract/` 100% pass; `packages/shared/` regenerated and in sync
 - [ ] Cross-stack: `tests/cross-stack/` 100% pass against stack preview
 - [ ] `aidlc/openspec/changes/{id}/contract-diff.md` is filled and reviewed
 - [ ] All existing tests still pass

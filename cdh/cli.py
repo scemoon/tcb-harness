@@ -670,7 +670,13 @@ def session(action, session_id):
             if session_id is None:
                 click.echo("Usage: cdh session load <id>")
                 return
-            s = await db.session_get(session_id)
+            s = None
+            try:
+                s = await db.session_get(int(session_id))
+            except (ValueError, TypeError):
+                pass
+            if s is None:
+                s = await db.session_get_by_agent_session_id(session_id)
             if s is None:
                 click.echo(f"Session {session_id} not found.")
                 return

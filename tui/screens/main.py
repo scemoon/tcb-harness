@@ -299,6 +299,8 @@ class MainScreen(Screen, can_focus=False):
                 state=event.state,
                 session_pk=event.session_pk,
             )
+        if event.session_pk is not None:
+            self.conversation._session_pk = event.session_pk
         if event.name is not None:
             self.conversation.update_title()
 

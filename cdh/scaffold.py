@@ -101,7 +101,7 @@ COMPONENT_BY_ID: dict[str, ComponentSpec] = {c.id: c for c in COMPONENTS}
 CROSS_CUTTING: tuple[CrossCutSpec, ...] = (
     CrossCutSpec(
         id="contracts",
-        paths=("aidlc/contracts/api", "aidlc/contracts/events", "aidlc/contracts/CHANGELOG.md"),
+        paths=("aidlc/contracts/CHANGELOG.md",),
         label="Interface Contracts",
         description="API/event contracts and changelog",
     ),
@@ -113,13 +113,13 @@ CROSS_CUTTING: tuple[CrossCutSpec, ...] = (
     ),
     CrossCutSpec(
         id="openspec",
-        paths=("aidlc/openspec/changes",),
+        paths=(),
         label="OpenSpec Changes",
         description="OpenSpec change proposals",
     ),
     CrossCutSpec(
         id="cross_stack_features",
-        paths=("aidlc/features/cross-stack",),
+        paths=(),
         label="Cross-Stack BDD",
         description="End-to-end BDD features across components",
     ),
@@ -477,7 +477,9 @@ def scaffold_dlc_project(
 
     root = workspace_root.resolve()
     active = [COMPONENT_BY_ID[cid] for cid in components]
-    all_cross_ids = [c.id for c in CROSS_CUTTING]
+    all_cross_ids = [
+        c.id for c in CROSS_CUTTING if c.id not in ("provider", "tools")
+    ]
 
     _write_project_yaml(
         root=root,

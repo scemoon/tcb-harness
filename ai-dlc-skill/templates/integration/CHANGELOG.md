@@ -4,7 +4,7 @@ All notable changes to any contract in `aidlc/contracts/` are recorded here. For
 [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
 > **Breaking change rule (INT-002):** any MAJOR bump requires human approval and a
-> Migration section. `aidlc/aidlc/tools/contract_diff.py` flags breaking changes automatically.
+> Migration section. `aidlc/tools/contract_diff.py` flags breaking changes automatically.
 
 ## [Unreleased]
 

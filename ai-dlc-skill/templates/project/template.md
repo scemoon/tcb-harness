@@ -110,7 +110,7 @@ bvt ${PRODUCTION_URL}                 # stack BVT
 | BDD scenarios | `pytest-bdd features/` per component | 100% pass |
 | Contract | `pytest tests/contract/` | 100% pass |
 | Cross-stack e2e | `pytest tests/cross-stack/` | 100% pass |
-| Contract diff | `aidlc/aidlc/tools/contract_diff.py` | backward-compat |
+| Contract diff | `aidlc/tools/contract_diff.py` | backward-compat |
 | Security | `bandit -r apps/` | 0 vulns |
 | Stack BVT | `bvt ${URL}` | all checks pass |
 

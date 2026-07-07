@@ -360,9 +360,12 @@ class A2TUIApp(App, inherit_bindings=False):
             return
         session_time = monotonic() - conv.session_start_time
         session_id = getattr(conv.agent, "session_id", None) or conv._agent_session_id or ""
+        session_pk = conv._session_pk
+        if session_pk is None and conv.agent is not None:
+            session_pk = getattr(conv.agent, "session_pk", None)
         self._exit_metrics = {
             "session_id": session_id,
-            "session_pk": conv._session_pk,
+            "session_pk": session_pk,
             "tool_call_total": conv._tool_call_total,
             "tool_call_success": conv._tool_call_success,
             "tool_call_failed": conv._tool_call_failed,
@@ -1005,7 +1008,7 @@ class A2TUIApp(App, inherit_bindings=False):
             hint = f"  Reload with: cdh session load {session_pk}\n"
         elif sid:
             display_id = sid
-            hint = ""
+            hint = f"  Reload with: cdh session load {sid}\n"
         else:
             display_id = "-"
             hint = ""

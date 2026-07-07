@@ -19,7 +19,7 @@
 2. **Contract Verification**
    - 重新生成 `packages/shared/` 类型
    - 运行 `pytest tests/contract/`
-   - 运行 `aidlc/aidlc/tools/contract_diff.py`
+   - 运行 `aidlc/tools/contract_diff.py`
 
 3. **Cross-Stack e2e**
    - 对 unified preview 运行 `tests/cross-stack/`
