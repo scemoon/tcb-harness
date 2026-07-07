@@ -63,27 +63,6 @@ See `core/adaptive-flow.md` for complexity assessment.
 3. Delegate each phase via `Spawn(agent_type="general", prompt=...)` using the phase's `prompt.md`
 4. Collect results, enforce gates, iterate or advance
 
-## ⚠️ 角色边界（重要）
-
-| 角色 | 职责 | 允许工具 |
-|------|------|---------|
-| **主 Agent** | 分析复杂度、创建 TODO、判断直行/委托 | `Todo*`, `Spawn`, `AskUser`, 全部工具 |
-| **子 Agent** | **只做实现**（读/写/改文件、查代码） | 无 `Spawn`、无 `Todo*`、无 `AskUser` |
-
-**规则：**
-- **子 Agent 是叶子节点**，深度固定为 1，不可嵌套
-- 子 Agent **不可调用 Spawn**（系统已禁用），不可创建/更新 Todo
-- 主 Agent 必须自己完成"分析复杂度、判断直行或 Spawn"这一决策
-- Spawn 的 prompt 必须包含**完整上下文和目标**，子 Agent 专注执行，不做规划
-
-```
-✅ 正确:
-  主 Agent → TodoCreate → 判断复杂度 → 简单: 直接执行
-                                       → 复杂: Spawn(general, 详细prompt) → 子 Agent 只实现
-
-❌ 错误:
-  主 Agent → TodoCreate → Spawn → 子 Agent → 分析复杂度 → Spawn → ❌ 被拒绝
-                                               ↑ 子 Agent 不能做规划，不能嵌套 Spawn
 ```
 
 ## Phase Reference

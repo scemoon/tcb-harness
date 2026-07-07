@@ -719,25 +719,30 @@ class AgentEngine:
         ]
         return [StreamEvent.plan(wire_entries)]
 
+    def _has_pending_todos(self) -> bool:
+        """Return True if there are any pending or in-progress todos."""
+        return any(
+            t.get("status") in ("pending", "in_progress")
+            for t in self._todo_manager.list_todos()
+        )
+
     def _refresh_pending_todos_nudge(self) -> None:
         """Inject a reminder that nudges the agent to advance unfinished todos.
 
         Called at the start of each ReAct turn. If there are pending or
-        in-progress todos, a ``<!-- PENDING_TODOS -->`` section is added to
-        the system context so the LLM sees it during its next Thought phase
-        and prefers to:
-          1. continue the in-progress todo, or
-          2. start the next pending todo (respecting ``addBlockedBy`` DAG), or
-          3. call ``AskUser`` if the todo is blocked on user input.
+        in-progress todos, a strong ``<!-- PENDING_TODOS -->`` section is
+        injected into the system context directing the agent to continue
+        working rather than summarising or stopping early.
 
         When no todos are open, any stale nudge is removed so the context
         stays clean.
         """
         marker = "<!-- PENDING_TODOS -->"
-        todos = self._todo_manager.list_todos()
-        open_todos = [t for t in todos if t.get("status") in ("pending", "in_progress")]
+        open_todos = [t for t in self._todo_manager.list_todos()
+                      if t.get("status") in ("pending", "in_progress")]
         if not open_todos:
             self.context.remove_system_by_marker(marker)
+            self.context.remove_system_by_marker("<!-- FORCE_CONTINUE -->")
             return
 
         in_progress = [t for t in open_todos if t.get("status") == "in_progress"]
@@ -752,13 +757,19 @@ class AgentEngine:
 
         lines: list[str] = []
         total = len(in_progress) + len(pending)
-        lines.append(f"Open todos ({total}): resume in DAG order, or AskUser to unblock.")
+        lines.append(f"## ⚠️ Open todos ({total}) — you MUST continue working on these")
+        lines.append("Do NOT end your turn until ALL todos below are completed.")
         if in_progress:
-            labels = ", ".join(_label(t) for t in in_progress)
-            lines.append(f"In progress: {labels}")
+            labels = "\n".join(_label(t) for t in in_progress)
+            lines.append(f"\nIn progress:\n{labels}")
         if pending:
-            labels = ", ".join(_label(t) for t in pending)
-            lines.append(f"Pending: {labels}")
+            labels = "\n".join(_label(t) for t in pending)
+            lines.append(f"\nPending:\n{labels}")
+        lines.append(
+            "\nFor each completed todo, call TodoUpdate(status=\"completed\") "
+            "immediately. Then proceed to the next pending todo. "
+            "Do NOT summarise or stop — keep working."
+        )
         body = f"{marker}\n" + "\n".join(lines)
         if not self.context.replace_system_section(marker, body):
             self.context.add_system(body)
@@ -1283,6 +1294,7 @@ class AgentEngine:
             # Cleanup stale reminders that may have accumulated
             self.context.remove_system_by_marker("<!-- ROUTING_REMINDER -->")
             self.context.remove_system_by_marker("<!-- PLAN_REMINDER -->")
+            self.context.remove_system_by_marker("<!-- FORCE_CONTINUE -->")
             # Inject (or refresh) a nudge that prioritizes any unfinished todos
             # from this session. The marker is replaced in-place so the context
             # stays bounded — the agent always sees the current open list.
@@ -1493,6 +1505,38 @@ class AgentEngine:
                         )
                     except Exception as e:
                         logger.warning("Memory store failed: %s", e)
+
+                # ── Force continuation if todos remain ──
+                # After subagents complete, the LLM may stop calling tools
+                # because the structured output strongly signals "done".
+                # If there are still pending/in-progress todos, inject a
+                # forceful continuation nudge and loop again instead of
+                # exiting the turn loop.
+                if self._has_pending_todos():
+                    open_count = sum(
+                        1 for t in self._todo_manager.list_todos()
+                        if t.get("status") in ("pending", "in_progress")
+                    )
+                    logger.info(
+                        "LLM stopped calling tools but %d pending todos remain — "
+                        "injecting FORCE_CONTINUE nudge",
+                        open_count,
+                    )
+                    _force_body = (
+                        "<!-- FORCE_CONTINUE -->\n"
+                        "## CRITICAL: Unfinished todos detected\n"
+                        "You stopped without completing all planned todos. "
+                        "This is incorrect. You MUST continue working:\n"
+                        "1. Call TodoUpdate(status=\"completed\") for any finished work.\n"
+                        "2. Then Spawn or execute the next pending todo.\n"
+                        "3. Repeat until ALL todos are Done.\n"
+                        "Do NOT stop. Do NOT summarise. Keep executing."
+                    )
+                    if not self.context.replace_system_section(
+                        "<!-- FORCE_CONTINUE -->", _force_body,
+                    ):
+                        self.context.add_system(_force_body)
+                    continue
                 break
 
             # Emit ToolEvents (Clawd-Code pattern) and StreamEvents for TUI
