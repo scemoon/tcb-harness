@@ -331,6 +331,7 @@ class Conversation(containers.Vertical):
             "cancel",
             "Cancel",
             tooltip="Cancel agent's turn",
+            priority=True,
         ),
         Binding(
             "ctrl+f",
@@ -2220,17 +2221,18 @@ class Conversation(containers.Vertical):
                 cursor_block.block_cursor_down()
         self.refresh_block_cursor()
 
-    @work
     async def action_cancel(self) -> None:
-        if monotonic() - self._last_escape_time < 3:
+        now = monotonic()
+        if now - self._last_escape_time < 3:
             if (agent := self.agent) is not None:
+                self._last_escape_time = 0.0
                 if await agent.cancel():
                     self.flash("Turn cancelled", style="success")
                 else:
                     self.flash("Agent declined to cancel. Please wait.", style="error")
         else:
             self.flash("Press [b]esc[/] again to cancel agent's turn")
-            self._last_escape_time = monotonic()
+            self._last_escape_time = now
 
     def focus_prompt(self, reset_cursor: bool = True, scroll_end: bool = True) -> None:
         """Focus the prompt input.

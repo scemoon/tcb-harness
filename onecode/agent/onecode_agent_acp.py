@@ -2528,12 +2528,18 @@ class JSONRPCServer:
 async def _main():
     adapter = CDHACPAdapter()
     server = JSONRPCServer(adapter)
-    prompt_task: asyncio.Task | None = None
+
+    # Track in-flight prompt tasks by request id so that:
+    # - session/cancel can target the correct task
+    # - EOF can cancel & await all remaining tasks
+    prompt_tasks: dict[str | int, asyncio.Task] = {}
 
     async def _run_prompt(req: dict):
         try:
             result = await server._handle_session_prompt(req.get("params", {}))
             return {"jsonrpc": "2.0", "result": result, "id": req.get("id")}
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
@@ -2545,6 +2551,13 @@ async def _main():
     while True:
         line = await asyncio.to_thread(sys.stdin.readline)
         if not line:
+            # EOF: cancel all in-flight prompts and exit
+            for p_req_id, p_task in prompt_tasks.items():
+                if not p_task.done():
+                    p_task.cancel()
+            if prompt_tasks:
+                await asyncio.gather(*prompt_tasks.values(), return_exceptions=True)
+                prompt_tasks.clear()
             break
 
         line = line.strip()
@@ -2575,8 +2588,11 @@ async def _main():
             if method == "session/prompt":
                 # Run prompt in background so main loop stays responsive
                 # to cancel notifications on stdin
-                prompt_task = asyncio.create_task(_run_prompt(req))
-                def _on_prompt_done(t, req=req):
+                task = asyncio.create_task(_run_prompt(req))
+                prompt_tasks[req_id] = task
+
+                def _on_prompt_done(t, req=req, rid=req_id):
+                    prompt_tasks.pop(rid, None)
                     try:
                         resp = t.result()
                     except asyncio.CancelledError:
@@ -2610,17 +2626,27 @@ async def _main():
                         except (TypeError, ValueError, OSError) as e:
                             _dump_crash("_on_prompt_done_send")
                             debug_log("_on_prompt_done send failed: %s", e)
-                prompt_task.add_done_callback(_on_prompt_done)
+                task.add_done_callback(_on_prompt_done)
             elif method == "session/cancel":
+                # session/cancel is a notification (no id), so req_id is None.
+                # prompt_tasks is keyed by request id; find any in-flight task.
+                if req_id is not None:
+                    target_task = prompt_tasks.get(req_id)
+                else:
+                    target_task = next(
+                        (t for t in prompt_tasks.values() if not t.done()),
+                        None,
+                    )
                 info_log(
-                    "[ACP-CANCEL] received session/cancel; prompt_task=%s done=%s",
-                    "exists" if prompt_task else "none",
-                    prompt_task.done() if prompt_task else "n/a",
+                    "[ACP-CANCEL] received session/cancel; "
+                    "req_id=%s task_exists=%s task_done=%s",
+                    req_id, "yes" if target_task else "no",
+                    target_task.done() if target_task else "n/a",
                 )
-                if prompt_task and not prompt_task.done():
+                if target_task and not target_task.done():
                     adapter.cancel_prompt()
                     info_log("[ACP-CANCEL] calling prompt_task.cancel() now")
-                    prompt_task.cancel()
+                    target_task.cancel()
                     info_log("[ACP-CANCEL] prompt_task.cancel() returned")
                 else:
                     info_log("[ACP-CANCEL] no in-flight prompt_task to cancel")

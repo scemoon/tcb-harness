@@ -123,7 +123,7 @@ class Agent(AgentBase):
         """
         assert self._process is not None, "Process should be present here"
 
-        logger.debug("[client] %s", request.body)
+        logger.info("[client] send: %s", request.body)
         if (stdin := self._process.stdin) is not None:
             stdin.write(b"%s\n" % request.body_json)
 
@@ -937,13 +937,33 @@ class Agent(AgentBase):
         self.post_message(tui_messages.SessionUpdate(name=name, session_pk=self.session_pk))
 
     async def acp_session_cancel(self) -> bool:
-        with self.request():
-            response = api.session_cancel(self.session_id, {})
-        try:
-            await response.wait()
-        except jsonrpc.APIError:
-            # No-op if there is nothing to cancel
+        """Send session/cancel notification to the agent subprocess.
+
+        Writes directly to stdin with drain() to ensure the message is
+        actually flushed through the pipe, unlike the Request path which
+        is synchronous and cannot drain.
+        """
+        if not self.session_id:
+            logger.info("[client] session/cancel: no session_id, skipping")
             return False
+        cancel_msg = {
+            "jsonrpc": "2.0",
+            "method": "session/cancel",
+            "params": {"sessionId": self.session_id, "_meta": {}},
+        }
+        data = json.dumps(cancel_msg).encode("utf-8") + b"\n"
+        logger.info("[client] session/cancel: sending %s", cancel_msg)
+        stdin = self._process.stdin if self._process else None
+        if stdin is None:
+            logger.info("[client] session/cancel: no stdin pipe, skipping")
+            return False
+        stdin.write(data)
+        try:
+            await stdin.drain()
+        except OSError:
+            logger.info("[client] session/cancel: drain failed", exc_info=True)
+            return False
+        logger.info("[client] session/cancel: sent successfully")
         return True
 
     async def cancel(self) -> bool:
