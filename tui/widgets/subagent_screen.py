@@ -2,21 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import ClassVar
 
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Grid, Vertical, VerticalGroup, VerticalScroll
 from textual.css.query import NoMatches
 from textual.geometry import Offset, Region, Spacing
+from textual.layouts.grid import GridLayout
 from textual.layouts.vertical import WidgetPlacement
 from textual.reactive import reactive
 from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Header, Static
 
+from rich.segment import Segment
+from textual.strip import Strip
+
 from tui.menus import MenuItem
-from tui.protocol import ExpandProtocol, MenuProtocol
+from tui.protocol import BlockProtocol, ExpandProtocol, MenuProtocol
 from tui.widgets.agent_response import AgentResponse
 from tui.widgets.agent_thought import AgentThought
 from tui.widgets.conversation import Cursor
@@ -25,6 +31,7 @@ from tui.widgets.subagent import SubAgent
 from tui.widgets.tool_call import ToolCall as ToolCallWidget
 
 _sa_logger = logging.getLogger("tui.widgets.subagent_screen")
+_DEBUG_LOG = Path.home() / ".cdh" / "logs" / "subagent_cursor_debug.log"
 
 _TODO_TOOLS: frozenset[str] = frozenset({
     "TodoCreate", "TodoGet", "TodoList", "TodoUpdate",
@@ -43,7 +50,20 @@ def _is_selectable(child: Widget) -> bool:
 
 
 class SubAgentCursorContainer(Vertical):
-    """Cursor container without full-height ▌ rendering — only Cursor border-left highlights blocks."""
+    def render_lines(self, crop: Region) -> list[Strip]:
+        rich_style = self.visual_style.rich_style
+        strips = [Strip([Segment("▌", rich_style)], cell_length=1)] * crop.height
+        if crop.y == 0 and strips:
+            strips[0] = Strip([Segment(" ", rich_style)], cell_length=1)
+        return strips
+
+
+class SubAgentContentsGrid(Grid):
+    BLANK = True
+
+    def pre_layout(self, layout) -> None:
+        assert isinstance(layout, GridLayout)
+        layout.stretch_height = True
 
 
 class SubAgentScreen(Screen):
@@ -100,15 +120,16 @@ class SubAgentScreen(Screen):
     #cursor-container {
         width: 1;
         height: auto;
+        color: $foreground 7%;
+    }
 
-        &> Cursor {
-            height: 0;
-            width: 1;
-            border-left: outer $text-accent;
-            visibility: visible;
-            &.-blink {
-                border-left: outer $text-accent 20%;
-            }
+    #cursor-container > Cursor {
+        height: 0;
+        width: 1;
+        border-left: outer $text-accent;
+        visibility: visible;
+        &.-blink {
+            border-left: outer $text-accent 20%;
         }
     }
 
@@ -200,20 +221,23 @@ class SubAgentScreen(Screen):
 
     def __init__(self, subagent: SubAgent) -> None:
         super().__init__()
+        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        _sa_logger.addHandler(logging.FileHandler(str(_DEBUG_LOG), mode="w"))
+        _sa_logger.setLevel(logging.DEBUG)
         self.subagent = subagent
         self._event_lock = asyncio.Lock()
         self._current_response: AgentResponse | None = None
         self._current_thought: AgentThought | None = None
         self._auto_follow = True
+        self._active_menu: Menu | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         with VerticalScroll(id="scroll"):
-            with Grid(id="content-grid"):
+            with SubAgentContentsGrid(id="content-grid"):
                 with SubAgentCursorContainer(id="cursor-container"):
                     yield Cursor()
-                with VerticalGroup(id="content-wrap"):
-                    yield self.Content(id="content")
+                yield self.Content(id="content")
         yield Static(
             "[$text-muted]esc[/] 返回  "
             "[$text-muted]ctrl+j/k[/] 移动  "
@@ -240,6 +264,20 @@ class SubAgentScreen(Screen):
         self._current_response = None
         self._current_thought = None
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if self._active_menu is not None and action in (
+            "select_block",
+            "scroll_up",
+            "scroll_down",
+            "scroll_page_up",
+            "scroll_page_down",
+            "scroll_home",
+            "scroll_end",
+            "app.pop_screen",
+        ):
+            return False
+        return True
+
     # ── Event processing ──
 
     async def _replay_all(self) -> None:
@@ -254,6 +292,7 @@ class SubAgentScreen(Screen):
             for event_type, data in self.subagent._events:
                 await self._handle_one(container, event_type, data)
                 await asyncio.sleep(0)
+            await self._flush_streams()
             self._post_process()
         except Exception:
             _sa_logger.exception("_replay_all failed")
@@ -343,6 +382,31 @@ class SubAgentScreen(Screen):
         except Exception:
             pass
 
+    async def _flush_streams(self) -> None:
+        """Ensure all markdown streams have finished processing before cursor navigation."""
+        try:
+            container = self.query_one("#content", VerticalGroup)
+        except Exception:
+            return
+        for child in container.children:
+            stream = getattr(child, "_stream", None)
+            if stream is not None:
+                _sa_logger.warning(
+                    "▓ flush stream | widget=%s | task_alive=%s",
+                    type(child).__name__,
+                    stream._task is not None and not stream._task.done() if stream._task else False,
+                )
+                try:
+                    await stream.stop()
+                except Exception:
+                    pass
+            else:
+                _sa_logger.warning(
+                    "▓ no stream | widget=%s | children=%s",
+                    type(child).__name__,
+                    len(child.children) if hasattr(child, 'children') else '?',
+                )
+
     # ── Block cursor ──
 
     def _selectable_children(self) -> list[Widget]:
@@ -361,6 +425,26 @@ class SubAgentScreen(Screen):
             return None
         return children[self.cursor_offset]
 
+    @property
+    def cursor_block_child(self) -> Widget | None:
+        if (block := self.cursor_block) is not None:
+            if isinstance(block, BlockProtocol):
+                inner = block.get_cursor_block()
+                if inner is not None:
+                    _sa_logger.warning(
+                        "┃  child inner=%s children=%s attached=%s",
+                        type(inner).__name__,
+                        len(block.children) if hasattr(block, 'children') else '?',
+                        inner.is_attached,
+                    )
+                    return inner
+                _sa_logger.warning(
+                    "┃  child fallback → outer=%s children=%s",
+                    type(block).__name__,
+                    len(block.children) if hasattr(block, 'children') else '?',
+                )
+        return block
+
     def _cursor_widget(self) -> Cursor | None:
         try:
             return self.query_one("#cursor-container Cursor", Cursor)
@@ -377,40 +461,84 @@ class SubAgentScreen(Screen):
         cursor = self._cursor_widget()
         if cursor is None:
             return
-        block = self.cursor_block
-        if block is None:
-            cursor.follow(None)
-            return
-        cursor.follow(block)
-        scroll = self._scroll_widget()
-        if scroll is not None:
-            self.call_after_refresh(
-                scroll.scroll_to_center, block, immediate=True
+        block = self.cursor_block_child
+        if block is not None:
+            cursor.visible = True
+            cursor.follow(block)
+            _sa_logger.warning(
+                "┃  follow | block=%s | offset=(%s,%s) | h=%s | visible=%s",
+                type(block).__name__,
+                cursor.offset.x, cursor.offset.y,
+                cursor.styles.height,
+                cursor.visible,
             )
-
-    def action_cursor_down(self) -> None:
-        children = self._selectable_children()
-        if not children:
-            return
-        if self.cursor_offset == -1:
-            self.cursor_offset = 0
-        elif self.cursor_offset < len(children) - 1:
-            self.cursor_offset += 1
+            scroll = self._scroll_widget()
+            if scroll is not None:
+                scroll.focus()
+                self.call_after_refresh(
+                    scroll.scroll_to_center, block, immediate=True
+                )
         else:
-            self.cursor_offset = -1
-        self._auto_follow = False
-        self._refresh_block_cursor()
+            cursor.visible = False
+            cursor.follow(None)
+        self.refresh_bindings()
 
     def action_cursor_up(self) -> None:
         children = self._selectable_children()
+        _sa_logger.warning(
+            "▲ cursor_up | offset=%s | num_children=%s | types=%s",
+            self.cursor_offset,
+            len(children),
+            [type(c).__name__ for c in children],
+        )
         if not children:
             return
         if self.cursor_offset == -1:
             self.cursor_offset = len(children) - 1
-        elif self.cursor_offset > 0:
-            self.cursor_offset -= 1
+            cursor_block = self.cursor_block
+            if isinstance(cursor_block, BlockProtocol):
+                cursor_block.block_cursor_clear()
+                cursor_block.block_cursor_up()
         else:
-            self.cursor_offset = -1
+            cursor_block = self.cursor_block
+            if isinstance(cursor_block, BlockProtocol):
+                if cursor_block.block_cursor_up() is None:
+                    if self.cursor_offset > 0:
+                        self.cursor_offset -= 1
+                        cursor_block = self.cursor_block
+                        if isinstance(cursor_block, BlockProtocol):
+                            cursor_block.block_cursor_clear()
+                            cursor_block.block_cursor_up()
+            else:
+                if self.cursor_offset > 0:
+                    self.cursor_offset -= 1
+                    cursor_block = self.cursor_block
+                    if isinstance(cursor_block, BlockProtocol):
+                        cursor_block.block_cursor_clear()
+                        cursor_block.block_cursor_up()
+        self._auto_follow = False
+        self._refresh_block_cursor()
+
+    def action_cursor_down(self) -> None:
+        children = self._selectable_children()
+        if not children or self.cursor_offset == -1:
+            return
+        cursor_block = self.cursor_block
+        if isinstance(cursor_block, BlockProtocol):
+            if cursor_block.block_cursor_down() is None:
+                if self.cursor_offset < len(children) - 1:
+                    self.cursor_offset += 1
+                    cursor_block = self.cursor_block
+                    if isinstance(cursor_block, BlockProtocol):
+                        cursor_block.block_cursor_clear()
+                        cursor_block.block_cursor_down()
+        else:
+            if self.cursor_offset < len(children) - 1:
+                self.cursor_offset += 1
+                cursor_block = self.cursor_block
+                if isinstance(cursor_block, BlockProtocol):
+                    cursor_block.block_cursor_clear()
+                    cursor_block.block_cursor_down()
         self._auto_follow = False
         self._refresh_block_cursor()
 
@@ -420,7 +548,6 @@ class SubAgentScreen(Screen):
             return
         menu_options: list[MenuItem] = [
             MenuItem("[u]C[/]opy to clipboard", "copy_to_clipboard", "c"),
-            MenuItem("Co[u]p[/u]y to prompt", "copy_to_prompt", "p"),
         ]
         if getattr(block, "ALLOW_MAXIMIZE", False):
             menu_options.append(MenuItem("[u]M[/u]aximize", "maximize_block", "m"))
@@ -441,8 +568,26 @@ class SubAgentScreen(Screen):
             )
         except Exception:
             pass
-        await self.app.mount(menu)
+        await self.mount(menu)
         menu.focus()
+        self._active_menu = menu
+
+    @on(Menu.OptionSelected)
+    async def on_menu_option_selected(self, event: Menu.OptionSelected) -> None:
+        event.stop()
+        event.menu.display = False
+        if event.action is not None:
+            await self.run_action(event.action, {"block": event.owner})
+        self._active_menu = None
+        self.call_after_refresh(event.menu.remove)
+
+    @on(Menu.Dismissed)
+    async def on_menu_dismissed(self, event: Menu.Dismissed) -> None:
+        event.stop()
+        if event.menu.has_focus:
+            self.query_one("#scroll", VerticalScroll).focus(scroll_visible=False)
+        self._active_menu = None
+        await event.menu.remove()
 
     def action_copy_to_clipboard(self, block: Widget | None = None) -> None:
         if block is None:
@@ -454,16 +599,6 @@ class SubAgentScreen(Screen):
         if text:
             self.app.copy_to_clipboard(text)
             self.flash("Copied to clipboard")
-
-    def action_copy_to_prompt(self) -> None:
-        block = self.cursor_block
-        if isinstance(block, MenuProtocol):
-            text = block.get_block_content("prompt")
-        else:
-            text = None
-        if text:
-            self.flash("Copied to prompt")
-            self.app.pop_screen()
 
     def action_maximize_block(self) -> None:
         if (block := self.cursor_block) is not None:
