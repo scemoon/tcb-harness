@@ -8,5 +8,9 @@ uv.lock
 .opencode
 .idea
 .cdh/
-npm/npm_pkg/*
 dist/
+npm/npm_pkg/*
+node_modules/
+package.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
