@@ -242,10 +242,88 @@ AGENTS_MD_TEMPLATE = """# AGENTS.md — Project Constitution
 Hard rules every AI agent must follow when working in this repo.
 Read once per session; behavior is enforced by the agent runtime.
 
-## Project
+## Project Overview
 
 - **Name**: {project_name}
 - **Description**: {description}
+- **Type**: monorepo — AI-DLC multi-component stack
+{component_list}
+
+## AI-DLC Core Cycle
+
+```
+① Understand (SDD+BDD)   Intent → Spec Delta → BDD Feature Files
+② Plan (SDD+TDD)         Design Doc → Task DAG → Test Plan
+③ Verify (BDD+TDD)       Red → Green → Refactor per scenario
+④ Deliver (SDD+Cloud)    Stack Preview → e2e → Production + BVT
+```
+
+Reference skill: `~/.cdh/skills/ai-dlc-skill/SKILL.md` (full AI-DLC methodology; installed by cdh platform bootstrap).
+
+## Component Mapping
+
+Work is partitioned by component prefix. Place new code in the matching directory:
+
+| Prefix | Component | Directory |
+|--------|-----------|-----------|
+{component_table}
+
+> **Note**: FR namespaces are used in AI-DLC lifecycle only.
+
+## Quality Gates
+
+Hard thresholds every agent must respect:
+
+| Gate | Threshold |
+|------|-----------|
+| Unit/integration coverage | >= 80% |
+| BDD scenarios pass | 100% |
+| Contract tests pass | 100% |
+| Cross-stack e2e pass | 100% |
+| Security vulns | 0 |
+
+## File / Path Hygiene
+
+**Never read, write, or modify** any of these (they're local-only / secrets / build artifacts):
+
+- `.cdh/` — project-level runtime state (managed by CLI; never hand-edit)
+- `.opencode/`, `.claude/`, `.agents/` — tool configs (owned by user)
+- `.qwen/`, `.idea/` — IDE / tool caches
+- `dist/`, `*.egg-info/`, `__pycache__/`, `build/`, `.venv/`
+- `node_modules/`, `.next/`, `.nuxt/`
+- `.python-version`, `uv.lock` — Python toolchain pinning (user-managed)
+- `aidlc/contracts/CHANGELOG.md` — contract changelog (managed by CLI)
+- `aidlc/providers/` — provider config (managed by CLI)
+
+**Global state directories** (managed at runtime, do not hand-edit):
+- `~/.cdh/` — cdh platform global state (projects/, skills/, mcps/, state/, logs/, sessions/)
+- `~/.onecode/` — onecode engine private state (traces, memory, mcps, skills, config)
+
+## Forbidden Actions
+
+- Commit secrets (API keys, tokens, passwords) — use env vars or vault
+- Force-push to `main` / `master`
+- Modify files outside the project root
+- Run `npm publish` / `pip upload` without explicit user approval
+- Hand-edit `.cdh/state.json`, `.cdh/todos.json`, `.cdh/last_session.json` — use CLI / slash commands
+- Delete tracked files outside `dist/`, `build/`, `__pycache__/` without confirmation
+
+## Working Conventions
+
+This project follows the **AI-DLC (AI-Driven Lifecycle)** methodology shown above.
+
+- **Plan first**: Use task management (TodoCreate) for any non-trivial task (3+ steps)
+- **Route execution**:
+  - Single-step (1 tool, 1 file) → direct tool call
+  - Multi-step / multi-file / research → delegate to sub-agent
+- **Language**: Chinese for explanations to user, English for code / comments / commit messages
+- **Verification**: After non-trivial edits, run applicable lint/typecheck/test commands before declaring done
+
+## Where to Find More
+
+- **AI-DLC methodology**: `~/.cdh/skills/ai-dlc-skill/SKILL.md` (load via Skill tool; installed by cdh bootstrap)
+- **Human-readable README**: `README.md`
+- **Architecture / practices**: `docs/` if present, or ask the user
 """
 
 REQUIREMENTS_MD = """# {project_name}
@@ -296,12 +374,35 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content.lstrip("\n"), encoding="utf-8")
 
 
-def _write_agents_md(root: Path, project_name: str, description: str) -> None:
+def _build_agents_component_list(active: list[ComponentSpec]) -> str:
+    if not active:
+        return ""
+    items = (f"  - **{c.label}** (`{c.owns}`)" for c in active)
+    return "- **Components**:\n" + "\n".join(items)
+
+
+def _build_agents_component_table(active: list[ComponentSpec]) -> str:
+    rows = []
+    for c in active:
+        rows.append(f"| {c.fr_prefix:7s} | {c.label:14s} | {c.owns:20s} |")
+    rows.append("| INT      | Contracts, Shared | aidlc/contracts/, packages/shared/ |")
+    return "\n".join(rows)
+
+
+def _write_agents_and_claude_md(
+    root: Path,
+    project_name: str,
+    description: str,
+    active: list[ComponentSpec],
+) -> None:
     content = AGENTS_MD_TEMPLATE.format(
         project_name=project_name,
         description=description or f"AI-DLC monorepo project: {project_name}",
+        component_list=_build_agents_component_list(active),
+        component_table=_build_agents_component_table(active),
     )
     _write(root / "AGENTS.md", content)
+    _write(root / "CLAUDE.md", content)
 
 
 def _component_to_dict(c: ComponentSpec) -> dict:
@@ -315,19 +416,27 @@ def _component_to_dict(c: ComponentSpec) -> dict:
     return out
 
 
-def _build_project_yaml(active: list[ComponentSpec], cross_cutting_ids: list[str]) -> dict:
+def _build_project_yaml(
+    active: list[ComponentSpec],
+    cross_cutting_ids: list[str],
+    name: str = "",
+    description: str = "",
+) -> dict:
     cross_cutting: dict = {"fr_prefix": "INT"}
     if "contracts" in cross_cutting_ids:
         cross_cutting["contracts"] = "aidlc/contracts/"
     if "shared" in cross_cutting_ids:
         cross_cutting["shared_types"] = "packages/shared/"
-    return {
+    doc: dict = {
+        "name": name,
+        "description": description,
         "stack": {
             "topology": "monorepo",
             "components": [_component_to_dict(c) for c in active],
             "cross_cutting": cross_cutting,
-        }
+        },
     }
+    return doc
 
 
 def _build_component_table(active: list[ComponentSpec]) -> str:
@@ -387,7 +496,10 @@ def _write_project_yaml(
 ) -> None:
     _write(
         root / "project.yaml",
-        yaml.dump(_build_project_yaml(active, cross_cutting_ids), default_flow_style=False),
+        yaml.dump(
+            _build_project_yaml(active, cross_cutting_ids, name=project_name, description=description),
+            default_flow_style=False,
+        ),
     )
     _write(
         root / "requirements.md",
@@ -432,7 +544,7 @@ def init_dlc_project(
         cross_cutting_ids=[],
         description=description,
     )
-    _write_agents_md(root, project_name, description)
+    _write_agents_and_claude_md(root, project_name, description, [])
     return True
 
 
@@ -491,9 +603,25 @@ def scaffold_dlc_project(
         _scaffold_component(c, root)
 
     _scaffold_cross_cutting(all_cross_ids, root)
-    _write_agents_md(root, project_name, description)
+    _write_agents_and_claude_md(root, project_name, description, active)
 
     return True
+
+
+def _regenerate_agents_and_claude_md(root: Path) -> None:
+    project_yaml = root / "project.yaml"
+    if not project_yaml.exists():
+        return
+    data = yaml.safe_load(project_yaml.read_text(encoding="utf-8")) or {}
+    name = data.get("name", root.name)
+    description = data.get("description", "")
+    components = data.get("stack", {}).get("components", []) or []
+    active = []
+    for c in components:
+        spec = COMPONENT_BY_ID.get(c.get("id", ""))
+        if spec:
+            active.append(spec)
+    _write_agents_and_claude_md(root, name, description, active)
 
 
 def add_component(
@@ -535,6 +663,7 @@ def add_component(
         yaml.dump(data, default_flow_style=False),
         encoding="utf-8",
     )
+    _regenerate_agents_and_claude_md(root)
     return True
 
 
@@ -581,6 +710,7 @@ def add_cross_cutting(
         yaml.dump(data, default_flow_style=False),
         encoding="utf-8",
     )
+    _regenerate_agents_and_claude_md(root)
     return True
 
 
