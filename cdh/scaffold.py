@@ -246,8 +246,6 @@ Read once per session; behavior is enforced by the agent runtime.
 
 - **Name**: {project_name}
 - **Description**: {description}
-
-<!-- CDH_SKILL ~/.cdh/skills/ai-dlc-skill/SKILL.md -->
 """
 
 REQUIREMENTS_MD = """# {project_name}
