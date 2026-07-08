@@ -5,7 +5,7 @@ import subprocess
 
 from textual import work
 from textual.app import ComposeResult
-from textual.binding import Binding, Group
+from textual.binding import Binding
 from textual.message import Message
 from textual.reactive import reactive
 from textual.timer import Timer
@@ -79,8 +79,8 @@ class ModifiedFiles(containers.Vertical, can_focus=True):
     """
 
     BINDINGS = [
-        Binding("up", "cursor_up", "Up", group=Group("Files")),
-        Binding("down", "cursor_down", "Down", group=Group("Files")),
+        Binding("up", "cursor_up", "Up", group=Binding.Group("Files")),
+        Binding("down", "cursor_down", "Down", group=Binding.Group("Files")),
         Binding("enter", "select", "Select"),
     ]
 
