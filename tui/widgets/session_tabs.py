@@ -135,15 +135,21 @@ class SessionsTabs(Widget):
                 underline.highlight_end = end
                 self.scroll_to_center(current_label, animate=False)
 
+    MAX_TAB_TITLE = 30
+
+    def _truncate(self, text: str) -> str:
+        return text[: self.MAX_TAB_TITLE] + "…" if len(text) > self.MAX_TAB_TITLE else text
+
     def render_session_label(self, session: SessionDetails) -> Content:
+        title = self._truncate(session.title)
         match session.state:
             case "asking":
                 return Content.assemble(
-                    ("❯ ", "not dim $text-secondary"), session.title
+                    ("❯ ", "not dim $text-secondary"), title
                 )
             case "busy":
-                return Content(f"⌛ {session.title}")
-        return Content(session.title)
+                return Content(f"⌛ {title}")
+        return Content(title)
 
     def compose(self) -> ComposeResult:
         with containers.HorizontalGroup(id="title-container"):

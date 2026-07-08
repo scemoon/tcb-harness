@@ -26,6 +26,21 @@ logger = logging.getLogger("onecode.agent.engine")
 _MAX_SUBAGENT_DEPTH = 1
 
 
+def _get_block_type(block: Any) -> str:
+    """Get content block type string, handling both dict and ContentBlock."""
+    if isinstance(block, dict):
+        return block.get("type", "")
+    return str(getattr(block, "type", "") or "")
+
+
+def _get_block_text(block: Any) -> str:
+    """Get content block text, handling both dict and ContentBlock."""
+    if isinstance(block, dict):
+        return str(block.get("text", "") or block.get("content", "") or "")
+    text = getattr(block, "text", None) or getattr(block, "content", None)
+    return str(text or "")
+
+
 @dataclass(frozen=True)
 class ToolEvent:
     """Event emitted during the agent loop lifecycle (Clawd-Code style)."""
@@ -1357,12 +1372,50 @@ class AgentEngine:
         # ── Agent loop: 思考 → Todo → 行动 (per-Round) ──
         is_anthropic = provider.is_anthropic_style()
         max_turns = self.current_agent.max_turns or 10
+        hard_limit = max_turns
 
         cot_phase_init = "<!-- REACT_PHASE -->\n## Round 1 — 思考 → Todo → 行动\n"
         if not self.context.replace_system_section("REACT_PHASE", cot_phase_init):
             self.context.add_system(cot_phase_init)
 
-        for turn in range(max_turns):
+        def _infinite_turns():
+            t = 0
+            while True:
+                yield t
+                t += 1
+
+        for turn in _infinite_turns():
+            # Absolute ceiling: never exceed max_iterations (safety net)
+            absolute_ceiling = self.app.config.agent.max_iterations
+            if turn >= absolute_ceiling:
+                logger.warning(
+                    "Absolute ceiling (%d) reached at turn %d — stopping "
+                    "regardless of pending todos",
+                    absolute_ceiling, turn,
+                )
+                break
+            # Dynamic extension: if hard_limit reached but todos remain, keep going
+            if turn >= hard_limit:
+                if self._has_pending_todos():
+                    pending = sum(1 for t in self._todo_manager.list_todos()
+                                  if t.get("status") in ("pending", "in_progress"))
+                    logger.info(
+                        "hard_limit (%d) reached at turn %d with %d pending todos — "
+                        "extending dynamically",
+                        hard_limit, turn, pending,
+                    )
+                    hard_limit += 5
+                    lines = [
+                        "<!-- FORCE_CONTINUE -->",
+                        f"## {turn} rounds completed, {pending} todos still pending",
+                        "Continue executing the next todo. Do NOT stop or summarise.",
+                    ]
+                    self.context.add_message(
+                        "user",
+                        [{"type": "text", "text": "\n".join(lines)}],
+                    )
+                else:
+                    break
             if self._cancelled:
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                 return
@@ -2040,17 +2093,20 @@ class AgentEngine:
         # <thinking>), emit a deterministic summary so the user always sees
         # a completion report — no extra LLM round-trip needed.
         if not self._cancelled:
-            last_msg = self.context.messages[-1] if self.context.messages else None
-            has_visible = False
-            if last_msg and last_msg.role == "assistant":
-                has_visible = any(
-                    block.text and block.text.strip()
-                    for block in last_msg.content
-                    if block.type == ContentBlockType.TEXT
-                )
-            if not has_visible:
-                summary = self._build_completion_summary()
-                yield StreamEvent.text_delta(summary)
+            try:
+                last_msg = self.context.messages[-1] if self.context.messages else None
+                has_visible = False
+                if last_msg and last_msg.role == "assistant":
+                    has_visible = any(
+                        _get_block_text(block) and _get_block_text(block).strip()
+                        for block in (last_msg.content if isinstance(last_msg.content, list) else [])
+                        if _get_block_type(block) in ("text", ContentBlockType.TEXT)
+                    )
+                if not has_visible:
+                    summary = self._build_completion_summary()
+                    yield StreamEvent.text_delta(summary)
+            except Exception as e:
+                logger.warning("Final summary fallback failed: %s", e, exc_info=True)
 
     def has_pending_approval(self) -> bool:
         """Check if there's a pending approval request from ASK permission."""

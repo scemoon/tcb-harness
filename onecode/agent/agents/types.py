@@ -545,6 +545,11 @@ at the start of `<thinking>`. No separate "Observation" step is needed.
 ### Routing
 - Every task = a `TodoCreate`. No work without a todo.
 - `Spawn` = execution delegation for complex todos only.
+
+### Plan Hygiene
+- All current todos are done? → `TodoClear` to start a fresh plan for the next batch.
+- Starting unrelated work? → `TodoClear` first, then create new todos.
+- This keeps the plan focused and prevents unbounded growth.
 """
 
 PLAN_GATE_HARD = """

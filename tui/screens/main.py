@@ -173,6 +173,7 @@ class MainScreen(Screen, can_focus=False):
                 ModifiedFiles(self.project_path, id="modified_files"),
                 collapsed=False,
                 id="modified-files-panel",
+                flex=True,
             ),
         )
         with containers.Center():

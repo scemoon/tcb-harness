@@ -104,6 +104,9 @@ class ContextManager:
     # -- message management (incremental token counters) --
 
     def add_message(self, role: str, content: Union[str, list], name: Optional[str] = None) -> None:
+        if isinstance(content, list):
+            block_types = [b.get("type", type(b).__name__) if isinstance(b, dict) else type(b).__name__ for b in content]
+            logger.debug("add_message role=%s block_types=%s", role, block_types)
         msg = Message(role=role, content=content, name=name)
         self.messages.append(msg)
         self._token_count += self._estimate_message_tokens(msg)
@@ -144,6 +147,8 @@ class ContextManager:
 
     def add_tool_result(self, tool_call_id: str, content: Union[str, dict, list], is_error: bool = False) -> None:
         if isinstance(content, (dict, list)):
+            logger.debug("add_tool_result raw content type=%s is_error=%s call_id=%s",
+                         type(content).__name__, is_error, tool_call_id)
             self.add_message("tool", content, name=tool_call_id)
         else:
             self.add_message("tool", [{"type": "tool_result", "tool_use_id": tool_call_id, "content": content, "is_error": is_error}], name=tool_call_id)

@@ -63,7 +63,7 @@ def _tag_color(added: int, deleted: int) -> str:
 class ModifiedFiles(containers.Vertical, can_focus=True):
     DEFAULT_CSS = """
     ModifiedFiles {
-        height: auto;
+        height: 1fr;
         overflow-y: auto;
         padding: 0 0 0 0;
 
@@ -269,8 +269,17 @@ class ModifiedFiles(containers.Vertical, can_focus=True):
         self.call_after_refresh(self._scroll_to_highlighted)
 
     def _scroll_to_highlighted(self) -> None:
-        if self.highlighted is not None:
-            self.scroll_to(y=self.highlighted, animate=False)
+        if self.highlighted is None:
+            return
+        # y position: status line (1 row) + highlighted index
+        target_y = 1 + self.highlighted
+        scroll_y = self.scroll_y
+        view_height = self.scrollable_content_region.height
+
+        if target_y < scroll_y:
+            self.scroll_to(y=target_y, animate=False)
+        elif target_y >= scroll_y + view_height:
+            self.scroll_to(y=target_y - view_height + 1, animate=False)
 
     def action_cursor_up(self) -> None:
         if not self._filepaths:

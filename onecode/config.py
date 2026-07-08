@@ -46,8 +46,8 @@ class AttachmentsConfig:
 
 @dataclass
 class AgentConfig:
-    max_iterations: int = 20
-    timeout_seconds: int = 300
+    max_iterations: int = 100
+    timeout_seconds: int = 600
     allow_shell_commands: bool = True
     shell_command_whitelist: list[str] = field(default_factory=list)
 
@@ -238,8 +238,8 @@ def _write_default_config():
             "sandbox_read": True,
         },
         "agent": {
-            "max_iterations": 20,
-            "timeout_seconds": 300,
+            "max_iterations": 100,
+            "timeout_seconds": 600,
             "allow_shell_commands": True,
             "shell_command_whitelist": [],
         },
