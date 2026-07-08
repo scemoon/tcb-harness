@@ -2042,17 +2042,12 @@ class AgentEngine:
         if not self._cancelled:
             last_msg = self.context.messages[-1] if self.context.messages else None
             has_visible = False
-            if last_msg and last_msg.get("role") == "assistant":
-                content = last_msg.get("content", "")
-                if isinstance(content, str):
-                    has_visible = bool(content.strip())
-                elif isinstance(content, list):
-                    has_visible = any(
-                        isinstance(block, dict)
-                        and block.get("type") == "text"
-                        and block.get("text", "").strip()
-                        for block in content
-                    )
+            if last_msg and last_msg.role == "assistant":
+                has_visible = any(
+                    block.text and block.text.strip()
+                    for block in last_msg.content
+                    if block.type == ContentBlockType.TEXT
+                )
             if not has_visible:
                 summary = self._build_completion_summary()
                 yield StreamEvent.text_delta(summary)
