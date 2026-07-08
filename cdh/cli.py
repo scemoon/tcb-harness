@@ -14,6 +14,7 @@ from cdh.scaffold import (
 from onecode.cli import cli as onecode_cli
 from onecode.cli import setup_logging
 from onecode.config import ensure_dirs, load_config, save_config
+from onecode import __version__ as _VERSION
 
 
 _CDH_DIR = Path.home() / ".cdh"
@@ -26,6 +27,7 @@ Usage:
   cdh onecode <sub>                onecode CLI surface (config / codebase / skill / mcp / help)
   cdh project                      Project management
   cdh session list|load            Session management
+  cdh uninstall                    Remove ~/.cdh/ global state
   cdh version                      Show version information
 
 \b
@@ -43,7 +45,7 @@ Paths:
     short_help="Cloud Dev Harness - AI agent framework with TUI.",
     epilog=_COMMON_HELP,
 )
-@click.version_option(version="1.0.0", prog_name="cdh")
+@click.version_option(version=_VERSION, prog_name="cdh")
 @click.pass_context
 def cli(ctx):
     """
@@ -736,6 +738,53 @@ def help_cmd(command):
 
 
 # --- version command ---
+
+@cli.command(short_help="Remove ~/.cdh/ global state")
+def uninstall():
+    """Remove CDH global state (~/.cdh/) and Python environment.
+
+    \b
+    After running this, uninstall the package itself:
+      pip uninstall cloud-dev-harness   (if installed via pip)
+      pnpm remove -g @scemoon/cdh       (if installed via pnpm)
+      npm uninstall -g @scemoon/cdh     (if installed via npm)
+
+    \b
+    Also check your shell config (~/.zshrc, ~/.bashrc, etc.) for
+    PATH entries pointing to ~/.cdh/python/bin and remove them.
+    """
+    import shutil
+
+    cdh_dir = Path.home() / ".cdh"
+
+    removed_anything = False
+
+    python_dir = cdh_dir / "python"
+    if python_dir.exists():
+        click.echo(f"Removing Python environment at {python_dir}...")
+        shutil.rmtree(python_dir, ignore_errors=True)
+        removed_anything = True
+
+    if cdh_dir.exists():
+        click.echo(f"Removing global state at {cdh_dir}...")
+        shutil.rmtree(cdh_dir, ignore_errors=True)
+        removed_anything = True
+
+    if not removed_anything:
+        click.echo("Nothing to remove (~/.cdh/ not found).")
+    else:
+        click.echo("")
+        click.echo("Cleanup complete. To finish uninstall:")
+        click.echo("")
+        click.echo("  1. Remove the package:")
+        click.echo("     pip uninstall cloud-dev-harness")
+        click.echo("     # or: pnpm remove -g @scemoon/cdh")
+        click.echo("     # or: npm uninstall -g @scemoon/cdh")
+        click.echo("")
+        click.echo("  2. Check your shell config (~/.zshrc, ~/.bashrc, etc.) for:")
+        click.echo('     export PATH="$HOME/.cdh/python/bin:$PATH"')
+        click.echo("     Remove this line if present.")
+
 
 @cli.command(short_help="Show version info")
 def version():
