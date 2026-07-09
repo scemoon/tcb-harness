@@ -32,7 +32,7 @@ class TestPermissionStore:
         store = PermissionStore()
         store.set_override("edit", AgentPermission.DENY)
         agent = SoloAgent()
-        assert agent.permission_edit == AgentPermission.ALLOW  # default
+        assert agent.permission_edit == AgentPermission.ASK  # SoloAgent defaults
         store.apply_to(agent)
         assert agent.permission_edit == AgentPermission.DENY
 
@@ -90,7 +90,7 @@ class TestPermissionStore:
 
         # Simulate mode switch: create a new agent
         agent2 = PlanAgent()
-        assert agent2.permission_edit == AgentPermission.ASK  # PlanAgent defaults
+        assert agent2.permission_edit == AgentPermission.DENY  # PlanAgent defaults to DENY
 
         store.apply_to(agent2)
         assert agent2.permission_edit == AgentPermission.ALLOW  # restored!

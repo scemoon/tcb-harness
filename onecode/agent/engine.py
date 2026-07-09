@@ -578,7 +578,6 @@ class AgentEngine:
         # "soft" (build/solo mode) suggests planning but doesn't block
         # "off" (agents with permission_task=DENY) no enforcement
         self._plan_gate_mode: str = "off"
-        self._plan_gate_fired: bool = False
 
         # ReAct state tracking
         self._react_phase: str = "thought"  # "thought" | "action" | "observation"
@@ -678,16 +677,11 @@ class AgentEngine:
             return "hard"
         return "soft"
 
-    def _plan_gate_first_turn(self) -> bool:
-        """Returns True only on the first turn where no plan exists yet.
-        
-        Once tasks are created or the gate has fired, subsequent turns
-        proceed without gate intervention.
-        """
-        if self._plan_gate_fired:
-            return False
-        self._plan_gate_fired = True
-        return True
+    def _has_pending_todos(self) -> bool:
+        return any(
+            t.get("status") in ("pending", "in_progress")
+            for t in self._todo_manager.list_todos()
+        )
 
     def _notify_event(self, event: ToolEvent) -> None:
         """Emit a ToolEvent to the registered callback (Clawd-Code pattern)."""
@@ -738,13 +732,6 @@ class AgentEngine:
             for (c, s, p) in entries
         ]
         return [StreamEvent.plan(wire_entries)]
-
-    def _has_pending_todos(self) -> bool:
-        """Return True if there are any pending or in-progress todos."""
-        return any(
-            t.get("status") in ("pending", "in_progress")
-            for t in self._todo_manager.list_todos()
-        )
 
     def _build_completion_summary(self) -> str:
         """Build a deterministic completion summary from todo state.
@@ -1860,9 +1847,8 @@ class AgentEngine:
                         if not is_failed:
                             self._auto_advance_after_spawn(subagent_prompt)
                 elif (self._plan_gate_mode != "off"
-                      and not self._todo_manager.list_todos()
-                      and tu["name"] in _EXECUTION_TOOLS
-                      and self._plan_gate_first_turn()):
+                      and not self._has_pending_todos()
+                      and tu["name"] in _EXECUTION_TOOLS):
                     if self._plan_gate_mode == "hard":
                         result = {
                             "tool_use_id": tu["id"],
@@ -2181,7 +2167,6 @@ class AgentEngine:
         self._react_phase = "thought"
         self._direct_execution_count = 0
         self._empty_tool_turns = 0
-        self._plan_gate_fired = False
         # Invalidate the plan-emit dedupe cache so the next chat_stream
         # always produces a fresh snapshot for the TUI.
         self._last_emitted_plan = ()

@@ -144,8 +144,8 @@ class PlanAgent(AgentConfig):
                 "Human-in-the-loop."
             ),
             mode=AgentMode.PRIMARY,
-            permission_edit=AgentPermission.ASK,
-            permission_bash=AgentPermission.ASK,
+            permission_edit=AgentPermission.DENY,
+            permission_bash=AgentPermission.DENY,
             permission_read=AgentPermission.ALLOW,
             permission_webfetch=AgentPermission.ALLOW,
             permission_websearch=AgentPermission.ALLOW,
@@ -166,7 +166,7 @@ class SoloAgent(AgentConfig):
                 "subagent. Shell commands require user approval."
             ),
             mode=AgentMode.PRIMARY,
-            permission_edit=AgentPermission.ALLOW,
+            permission_edit=AgentPermission.ASK,
             permission_bash=AgentPermission.ASK,
             permission_read=AgentPermission.ALLOW,
             permission_webfetch=AgentPermission.ALLOW,
