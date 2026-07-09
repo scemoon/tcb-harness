@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import click
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
+from typing import Optional
 
 from onecode.config import load_config, save_config
 
@@ -500,6 +503,91 @@ def mcp():
     pass
 
 
+def _format_mcp_servers(servers: list[dict]) -> list[str]:
+    lines = []
+    if not servers:
+        return lines
+    for s in servers:
+        name = s.get("name", "unknown")
+        transport = s.get("transport", "sse")
+        enabled = s.get("enabled", True)
+        status = "[enabled]" if enabled else "[disabled]"
+        if transport == "sse":
+            url = s.get("url", "")
+            lines.append(f"  {status} {name} (SSE)")
+            if url:
+                lines.append(f"         URL: {url}")
+        elif transport == "http":
+            url = s.get("url", "")
+            headers = s.get("headers", {})
+            lines.append(f"  {status} {name} (HTTP)")
+            if url:
+                lines.append(f"         URL: {url}")
+            if headers:
+                hdr_str = ", ".join(f"{k}={v}" for k, v in headers.items())
+                lines.append(f"         Headers: {hdr_str}")
+        else:
+            cmd = s.get("command", "")
+            cmd_args = " ".join(s.get("args", []))
+            env = s.get("env", {})
+            lines.append(f"  {status} {name} (stdio)")
+            if cmd:
+                lines.append(f"         Command: {cmd} {cmd_args}".rstrip())
+            if env:
+                env_str = ", ".join(f"{k}=***" for k in env)
+                lines.append(f"         Env: {env_str}")
+    return lines
+
+
+def _parse_kv_pairs(raw: Optional[str]) -> dict[str, str]:
+    """Parse comma-separated KEY=VALUE pairs into a dict."""
+    result = {}
+    if not raw:
+        return result
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            continue
+        key, _, val = pair.partition("=")
+        result[key.strip()] = val.strip()
+    return result
+
+
+def _mcp_add_impl(name, url, transport, command, args, env, headers, explicit_url):
+    from onecode.mcp.manager import MCPManager
+
+    mgr = MCPManager()
+    if mgr.get(name):
+        click.echo(f"Error: MCP server '{name}' already exists")
+        return
+
+    if transport == "http":
+        final_url = explicit_url or url
+        if not final_url:
+            click.echo("Error: --url required for http transport")
+            return
+        hdrs = _parse_kv_pairs(headers)
+        mgr.add_http(name, final_url, headers=hdrs)
+        click.echo(f"MCP server '{name}' added (HTTP) at {final_url}")
+    elif transport == "stdio":
+        if not command:
+            click.echo("Error: --command required for stdio transport")
+            return
+        cmd_args = [a.strip() for a in args.split(",")] if args else []
+        env_dict = _parse_kv_pairs(env)
+        mgr.add_stdio(name, command, cmd_args, env=env_dict)
+        click.echo(f"MCP server '{name}' added (stdio)")
+    else:
+        final_url = explicit_url or url
+        if not final_url:
+            click.echo("Error: URL is required for SSE transport")
+            return
+        mgr.add(name, final_url, transport="sse")
+        click.echo(f"MCP server '{name}' added (SSE) at {final_url}")
+
+
 @mcp.command("list")
 def mcp_list():
     """List all configured MCP servers."""
@@ -513,32 +601,21 @@ def mcp_list():
         return
 
     click.echo("Configured MCP servers:")
-    for s in servers:
-        name = s.get("name", "unknown")
-        transport = s.get("transport", "sse")
-        enabled = s.get("enabled", True)
-        status = "[enabled]" if enabled else "[disabled]"
-        if transport == "sse":
-            url = s.get("url", "")
-            click.echo(f"  {status} {name} (SSE)")
-            if url:
-                click.echo(f"         URL: {url}")
-        else:
-            cmd = s.get("command", "")
-            args = " ".join(s.get("args", []))
-            click.echo(f"  {status} {name} (stdio)")
-            if cmd:
-                click.echo(f"         Command: {cmd} {args}")
+    for line in _format_mcp_servers(servers):
+        click.echo(line)
     click.echo(f"\nTotal: {len(servers)} server(s)")
 
 
 @mcp.command("add")
 @click.argument("name")
-@click.argument("url")
-@click.option("--type", "transport", default="sse", help="Transport type: sse or stdio")
+@click.argument("url", required=False, default="")
+@click.option("--type", "transport", default="sse", help="Transport type: sse, stdio, or http")
 @click.option("--command", help="Command for stdio transport")
 @click.option("--args", help="Arguments for stdio transport (comma-separated)")
-def mcp_add(name, url, transport, command, args):
+@click.option("--env", help="Environment variables for stdio transport (comma-separated KEY=VALUE pairs)")
+@click.option("--headers", help="HTTP headers for http transport (comma-separated Key=Value pairs)")
+@click.option("--url", "explicit_url", help="URL for http/sse transport (alternative to positional argument)")
+def mcp_add(name, url, transport, command, args, env, headers, explicit_url):
     """Add an MCP server configuration.
 
     \b
@@ -547,25 +624,13 @@ def mcp_add(name, url, transport, command, args):
 
     \b
     For stdio transport:
-      cdh mcp add my-server --type stdio --command npx --args "server-name"
+      cdh mcp add my-server --type stdio --command npx --args server-name --env KEY=VAL
+
+    \b
+    For HTTP transport:
+      cdh mcp add my-server --type http --url https://example.com/mcp --headers Key=Val
     """
-    from onecode.mcp.manager import MCPManager
-
-    mgr = MCPManager()
-    if mgr.get(name):
-        click.echo(f"Error: MCP server '{name}' already exists")
-        return
-
-    if transport == "stdio":
-        if not command:
-            click.echo("Error: --command required for stdio transport")
-            return
-        cmd_args = [a.strip() for a in args.split(",")] if args else []
-        mgr.add_stdio(name, command, cmd_args)
-        click.echo(f"MCP server '{name}' added (stdio)")
-    else:
-        mgr.add(name, url, transport="sse")
-        click.echo(f"MCP server '{name}' added (SSE) at {url}")
+    _mcp_add_impl(name, url, transport, command, args, env, headers, explicit_url)
 
 
 @mcp.command("remove")
@@ -629,50 +694,23 @@ def config_mcp_list():
         return
 
     click.echo("Configured MCP servers:")
-    for s in servers:
-        name = s.get("name", "unknown")
-        transport = s.get("transport", "sse")
-        enabled = s.get("enabled", True)
-        status = "[enabled]" if enabled else "[disabled]"
-        if transport == "sse":
-            url = s.get("url", "")
-            click.echo(f"  {status} {name} (SSE)")
-            if url:
-                click.echo(f"         URL: {url}")
-        else:
-            cmd = s.get("command", "")
-            args = " ".join(s.get("args", []))
-            click.echo(f"  {status} {name} (stdio)")
-            if cmd:
-                click.echo(f"         Command: {cmd} {args}")
+    for line in _format_mcp_servers(servers):
+        click.echo(line)
     click.echo(f"\nTotal: {len(servers)} server(s)")
 
 
 @config_mcp.command("add")
 @click.argument("name")
-@click.argument("url")
-@click.option("--type", "transport", default="sse", help="Transport type: sse or stdio")
+@click.argument("url", required=False, default="")
+@click.option("--type", "transport", default="sse", help="Transport type: sse, stdio, or http")
 @click.option("--command", help="Command for stdio transport")
 @click.option("--args", help="Arguments for stdio transport (comma-separated)")
-def config_mcp_add(name, url, transport, command, args):
+@click.option("--env", help="Environment variables for stdio transport (comma-separated KEY=VALUE pairs)")
+@click.option("--headers", help="HTTP headers for http transport (comma-separated Key=Value pairs)")
+@click.option("--url", "explicit_url", help="URL for http/sse transport (alternative to positional argument)")
+def config_mcp_add(name, url, transport, command, args, env, headers, explicit_url):
     """Add an MCP server configuration."""
-    from onecode.mcp.manager import MCPManager
-
-    mgr = MCPManager()
-    if mgr.get(name):
-        click.echo(f"Error: MCP server '{name}' already exists")
-        return
-
-    if transport == "stdio":
-        if not command:
-            click.echo("Error: --command required for stdio transport")
-            return
-        cmd_args = [a.strip() for a in args.split(",")] if args else []
-        mgr.add_stdio(name, command, cmd_args)
-        click.echo(f"MCP server '{name}' added (stdio)")
-    else:
-        mgr.add(name, url, transport="sse")
-        click.echo(f"MCP server '{name}' added (SSE) at {url}")
+    _mcp_add_impl(name, url, transport, command, args, env, headers, explicit_url)
 
 
 @config_mcp.command("remove")

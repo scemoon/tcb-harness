@@ -392,8 +392,9 @@ async def _mcp(conversation: "Conversation", parameters: str) -> None:
             await _post(
                 conversation,
                 "**MCP Servers**\n\n_None configured._\n\n"
-                "Use `/onecode:mcp add <name> <url>` for an SSE server, or "
-                "`/onecode:mcp add <name> --type stdio --command <cmd>` for stdio.",
+                "Use `/onecode:mcp add <name> <url>` for an SSE server, "
+                "`/onecode:mcp add <name> --type stdio --command <cmd>` for stdio, or "
+                "`/onecode:mcp add <name> --type http --url <url>` for HTTP.",
             )
             return
         lines = ["**MCP Servers**\n"]
@@ -404,10 +405,21 @@ async def _mcp(conversation: "Conversation", parameters: str) -> None:
             marker = "✓" if enabled else "✗"
             if transport == "sse":
                 lines.append(f"- `{i}) {marker}` **{name}** (SSE) — `{s.get('url', '')}`")
+            elif transport == "http":
+                url = s.get("url", "")
+                headers = s.get("headers", {})
+                line = f"- `{i}) {marker}` **{name}** (HTTP) — `{url}`"
+                if headers:
+                    line += f" headers: {', '.join(headers.keys())}"
+                lines.append(line)
             else:
                 cmd = s.get("command", "")
-                args = " ".join(s.get("args") or [])
-                lines.append(f"- `{i}) {marker}` **{name}** (stdio) — `{cmd} {args}`".rstrip())
+                cmd_args = " ".join(s.get("args") or [])
+                env = s.get("env", {})
+                line = f"- `{i}) {marker}` **{name}** (stdio) — `{cmd} {cmd_args}`".rstrip()
+                if env:
+                    line += f" env: {', '.join(env.keys())}"
+                lines.append(line)
         lines += [
             "\n**How to manage**",
             "- `/onecode:mcp enable <name|n>`",
@@ -434,26 +446,81 @@ async def _mcp(conversation: "Conversation", parameters: str) -> None:
         return
 
     if sub == "add":
-        args_parts = rest.split()
-        if len(args_parts) < 2:
+        parts_shlex = rest.split()
+        if len(parts_shlex) < 2:
             await _post(
                 conversation,
                 "**/onecode:mcp add** — register a new MCP server\n\n"
                 "- **SSE** (default): `/onecode:mcp add <name> <url>`\n"
-                "- **stdio**: `/onecode:mcp add <name> --type stdio --command <cmd> --args a,b`",
+                "- **stdio**: `/onecode:mcp add <name> --type stdio --command <cmd> --args a,b --env K=V`\n"
+                "- **HTTP**: `/onecode:mcp add <name> --type http --url <url> --headers K=V`",
             )
             return
-        name = args_parts[0]
-        url = args_parts[1]
+        name = parts_shlex[0]
+        pos_url = parts_shlex[1] if not parts_shlex[1].startswith("--") else ""
+
+        transport = "sse"
+        command = ""
+        cmd_args = []
+        env_dict = {}
+        headers_dict = {}
+        explicit_url = ""
+
+        i = 1
+        while i < len(parts_shlex):
+            tok = parts_shlex[i]
+            if tok == "--type" and i + 1 < len(parts_shlex):
+                transport = parts_shlex[i + 1]
+                i += 2
+            elif tok == "--command" and i + 1 < len(parts_shlex):
+                command = parts_shlex[i + 1]
+                i += 2
+            elif tok == "--args" and i + 1 < len(parts_shlex):
+                cmd_args = [a.strip() for a in parts_shlex[i + 1].split(",")]
+                i += 2
+            elif tok == "--env" and i + 1 < len(parts_shlex):
+                for pair in parts_shlex[i + 1].split(","):
+                    if "=" in pair:
+                        k, _, v = pair.partition("=")
+                        env_dict[k.strip()] = v.strip()
+                i += 2
+            elif tok == "--url" and i + 1 < len(parts_shlex):
+                explicit_url = parts_shlex[i + 1]
+                i += 2
+            elif tok == "--headers" and i + 1 < len(parts_shlex):
+                for pair in parts_shlex[i + 1].split(","):
+                    if "=" in pair:
+                        k, _, v = pair.partition("=")
+                        headers_dict[k.strip()] = v.strip()
+                i += 2
+            else:
+                i += 1
+
         mgr = MCPManager()
         if mgr.get(name):
             conversation.notify(f"MCP server '{name}' already exists", title="/onecode:mcp add", severity="error")
             return
-        mgr.add(name, url, transport="sse")
-        await _post(
-            conversation,
-            f"**MCP Server '{name}' added**\n\n- transport: SSE\n- URL: `{url}`\n\nUse `/onecode:mcp list` to confirm.",
-        )
+
+        final_url = explicit_url or pos_url
+
+        if transport == "http":
+            if not final_url:
+                conversation.notify("Error: --url required for http transport", title="/onecode:mcp add", severity="error")
+                return
+            mgr.add_http(name, final_url, headers=headers_dict)
+            await _post(conversation, f"**MCP Server '{name}' added**\n\n- transport: HTTP\n- URL: `{final_url}`\n\nUse `/onecode:mcp list` to confirm.")
+        elif transport == "stdio":
+            if not command:
+                conversation.notify("Error: --command required for stdio transport", title="/onecode:mcp add", severity="error")
+                return
+            mgr.add_stdio(name, command, args=cmd_args, env=env_dict)
+            await _post(conversation, f"**MCP Server '{name}' added**\n\n- transport: stdio\n- command: `{command}`\n\nUse `/onecode:mcp list` to confirm.")
+        else:
+            if not final_url:
+                conversation.notify("Error: URL is required for SSE transport", title="/onecode:mcp add", severity="error")
+                return
+            mgr.add(name, final_url, transport="sse")
+            await _post(conversation, f"**MCP Server '{name}' added**\n\n- transport: SSE\n- URL: `{final_url}`\n\nUse `/onecode:mcp list` to confirm.")
         return
 
     if sub == "remove":
@@ -476,12 +543,16 @@ _HELP_MCP = (
     "**/onecode:mcp** — manage MCP (Model Context Protocol) servers\n\n"
     "**Sub-commands**\n"
     "- `(none)` or `list` — show configured servers\n"
-    "- `add <name> <url>` — add an SSE server\n"
+    "- `add <name> <url>` — add an SSE server (default)\n"
+    "- `add <name> --type stdio --command <cmd> [--args a,b] [--env K=V]` — stdio\n"
+    "- `add <name> --type http --url <url> [--headers K=V]` — HTTP\n"
     "- `enable <name|n>` / `disable <name|n>`\n"
     "- `remove <name|n>`\n\n"
     "**Examples**\n"
     "- `/onecode:mcp` — list servers\n"
-    "- `/onecode:mcp add my-server https://example.com/mcp`\n"
+    "- `/onecode:mcp add my-server https://example.com/mcp` — SSE\n"
+    "- `/onecode:mcp add cloudbase --type stdio --command npx --args @cloudbase/cloudbase-mcp@latest --env TENCENTCLOUD_SECRETID=xxx,TENCENTCLOUD_SECRETKEY=xxx` — stdio\n"
+    "- `/onecode:mcp add cloudbase --type http --url https://tcb-api.cloud.tencent.com/mcp/v1?env_id=xxx --headers X-TencentCloud-SecretId=xxx` — HTTP\n"
     "- `/onecode:mcp disable 1` — disable the first server in the list"
 )
 

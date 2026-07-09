@@ -80,6 +80,69 @@ class MCPSSEClient:
         return self._tools
 
 
+class MCPHTTPClient:
+    """HTTP-based MCP client (Streamable HTTP transport).
+
+    Sends JSON-RPC requests as HTTP POST and receives JSON-RPC responses.
+    Used by services like TCB CloudBase hosted mode.
+    """
+
+    def __init__(self, name: str, url: str, headers: Optional[dict[str, str]] = None):
+        self.name = name
+        self.url = url
+        self._headers = headers or {}
+        self._client = httpx.AsyncClient(timeout=30)
+        self._tools: list[MCPTool] = []
+        self._running = False
+
+    async def start(self) -> bool:
+        try:
+            await self.list_tools()
+            self._running = True
+            return True
+        except Exception as e:
+            logger.error(f"MCP HTTP start failed: {e}")
+            return False
+
+    async def list_tools(self) -> list[MCPTool]:
+        resp = await self._client.post(
+            self.url,
+            headers=self._headers,
+            json={"jsonrpc": "2.0", "method": "tools/list", "id": 1},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        tools_data = data.get("result", {}).get("tools", [])
+        self._tools = [
+            MCPTool(name=t["name"], description=t.get("description", ""), input_schema=t.get("inputSchema", {}))
+            for t in tools_data
+        ]
+        return self._tools
+
+    async def call_tool(self, name: str, args: dict) -> Any:
+        try:
+            resp = await self._client.post(
+                self.url,
+                headers=self._headers,
+                json={"jsonrpc": "2.0", "method": "tools/call", "params": {"name": name, "arguments": args}, "id": 2},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("result")
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def stop(self):
+        self._running = False
+        await self._client.aclose()
+
+    def is_running(self) -> bool:
+        return self._running
+
+    def get_tools(self) -> list[MCPTool]:
+        return self._tools
+
+
 class MCPManager:
     def __init__(self):
         self.config_dir = ONECODE_DIR / "mcps"
@@ -94,8 +157,18 @@ class MCPManager:
         self._data[name] = {"url": url, "transport": transport, "enabled": True}
         self._save()
 
-    def add_stdio(self, name: str, command: str, args: list[str] = None):
-        self._data[name] = {"command": command, "args": args or [], "transport": "stdio", "enabled": True}
+    def add_stdio(self, name: str, command: str, args: Optional[list[str]] = None, env: Optional[dict[str, str]] = None):
+        entry: dict[str, Any] = {"command": command, "args": args or [], "transport": "stdio", "enabled": True}
+        if env:
+            entry["env"] = env
+        self._data[name] = entry
+        self._save()
+
+    def add_http(self, name: str, url: str, headers: Optional[dict[str, str]] = None):
+        entry: dict[str, Any] = {"url": url, "transport": "http", "enabled": True}
+        if headers:
+            entry["headers"] = headers
+        self._data[name] = entry
         self._save()
 
     def list(self) -> list[dict]:
@@ -136,14 +209,18 @@ class MCPManager:
             return False
         transport = cfg.get("transport", "sse")
 
+        client: Any = None
         if transport == "stdio":
             client = MCPClient(
                 name=name,
                 command=cfg["command"],
                 args=cfg.get("args", []),
+                env=cfg.get("env", {}),
             )
         elif transport == "sse":
             client = MCPSSEClient(name=name, url=cfg["url"])
+        elif transport == "http":
+            client = MCPHTTPClient(name=name, url=cfg["url"], headers=cfg.get("headers", {}))
         else:
             logger.warning(f"Unknown MCP transport: {transport}")
             return False
