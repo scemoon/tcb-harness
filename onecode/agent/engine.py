@@ -915,7 +915,6 @@ class AgentEngine:
             create_agent,
             PLAN_GATE_HARD,
             PLAN_GATE_SOFT,
-            REACT_WORKFLOW,
             filter_tool_descriptions,
         )
         self.current_agent = create_agent(agent_type)
@@ -935,7 +934,6 @@ class AgentEngine:
             system_parts.append(SUBAGENT_CONSTRAINTS)
 
         if self.current_agent.permission_task != AgentPermission.DENY:
-            system_parts.append(REACT_WORKFLOW)
             if self.current_agent.mode.name == "SUBAGENT":
                 pass  # subagents don't need plan gate
             elif self.current_agent.permission_edit == AgentPermission.DENY and self.current_agent.permission_bash == AgentPermission.DENY:
@@ -948,51 +946,63 @@ class AgentEngine:
 
         # Response style with CoT reasoning guidance.
         if self.current_agent.mode == AgentMode.SUBAGENT:
-            # Subagents: simple CoT guidance without Todo/Spawn instructions.
             system_parts.append(
                 "\n## Response style\n"
-                "- **Every round must start with Chain of Thought reasoning** "
-                "inside `<thinking>`. Review the last round's tool results, "
-                "assess progress, and decide the next action.\n"
+                "- **Every round starts with Chain of Thought reasoning** "
+                "inside `<thinking>`:\n"
+                "  1. Review what the last round's tools produced — any errors?\n"
+                "  2. Assess progress against the task — what remains?\n"
+                "  3. Decide the next action.\n"
                 "- If you need to reason between tool calls, wrap your "
-                "reasoning in `<thinking>...</thinking>`.  The TUI will "
-                "render the wrapped block as a collapsible thought and "
-                "keep it out of the main answer.\n"
+                "reasoning in `<thinking>...</thinking>`.\n"
                 "- **Intermediate rounds**: visible text is for progress "
-                "updates, status reports, and questions.  Do NOT announce "
+                "updates only.  Do NOT announce "
                 '"done" or "complete" unless ALL work is actually finished.\n'
                 "- **FINAL round** (all work done): output a visible summary "
                 "describing what was accomplished, changed, or decided.\n"
             )
-        else:
+        elif self.current_agent.permission_task != AgentPermission.DENY:
             system_parts.append(
                 "\n## Response style\n"
-                "- **Every round must start with Chain of Thought reasoning** "
-                "inside `<thinking>`. Review the last round's tool results, "
-                "assess progress against todos, and decide the next action. "
-                "Then plan with `TodoCreate` and route execution by complexity.\n"
-                "- **Plan + execution routing**:\n"
-                "  - Every task is a `TodoCreate` (persisted to .cdh/todos.json, "
-                "sidebar Plan). No work without a todo.\n"
+                "- **Every round starts with Chain of Thought reasoning** "
+                "inside `<thinking>`:\n"
+                "  1. Review what the last round's tools produced — any errors?\n"
+                "  2. Assess progress against todos — done / pending?\n"
+                "  3. Decide the next single action — direct tool or `Spawn`?\n"
+                "- **Todo-driven execution**:\n"
+                "  - No todo for this work? → `TodoCreate` first.\n"
                 "  - Simple / single-step todo → execute directly, then "
                 "`TodoUpdate(status=\"completed\")`.\n"
                 "  - Complex / multi-step todo → `Spawn(agent_type, prompt)` to "
-                "delegate execution to an isolated subagent, then "
-                "`TodoUpdate(status=\"completed\")`.\n"
-                "  - Use `TodoClear` to reset the entire plan and start fresh.\n"
+                "delegate execution, then `TodoUpdate(status=\"completed\")`.\n"
+                "  - New task batch? → `TodoClear` then `TodoCreate`. "
+                "Never append new todos to an old plan.\n"
                 "- If you need to reason between tool calls, wrap your "
-                "reasoning in `<thinking>...</thinking>`.  The TUI will "
-                "render the wrapped block as a collapsible thought and "
-                "keep it out of the main answer.\n"
+                "reasoning in `<thinking>...</thinking>`.\n"
                 "- **Intermediate rounds**: visible text is for progress "
-                "updates, status reports, and user questions.  Do NOT "
-                'announce "done", "complete", or "task finished" unless '
-                "ALL todos are actually completed.\n"
+                "updates only.  Do NOT announce "
+                '"done" or "complete" unless ALL todos are actually completed.\n'
                 "- Do NOT call `TodoUpdate(status=\"completed\")` unless you "
                 "have actually executed the work (tool calls or Spawn).\n"
                 "- **FINAL round** (all todos completed, all work done): "
                 "output a visible summary describing what was accomplished, "
                 "what was changed, and any important outcomes or limitations.\n"
+            )
+        else:
+            system_parts.append(
+                "\n## Response style\n"
+                "- **Every round starts with Chain of Thought reasoning** "
+                "inside `<thinking>`:\n"
+                "  1. Review what the last round's tools produced — any errors?\n"
+                "  2. Assess progress — what remains?\n"
+                "  3. Decide the next action.\n"
+                "- If you need to reason between tool calls, wrap your "
+                "reasoning in `<thinking>...</thinking>`.\n"
+                "- **Intermediate rounds**: visible text is for progress "
+                "updates only.  Do NOT announce "
+                '"done" or "complete" unless ALL work is actually finished.\n'
+                "- **FINAL round** (all work done): output a visible summary "
+                "describing what was accomplished, changed, or decided.\n"
             )
 
         tagged_content = "<!-- AGENT_CONFIG -->\n" + "\n".join(system_parts)

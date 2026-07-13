@@ -2561,19 +2561,7 @@ class Conversation(containers.Vertical):
         arg = parts[1] if len(parts) > 1 else ""
 
         if sub_cmd == "list":
-            from tui.db import DB
-            db = DB()
-            recent = await db.session_get_recent(max_results=20)
-            if not recent:
-                self.notify("No sessions found", title="/session list")
-                return True
-            lines = ["Recent sessions:"]
-            for s in recent:
-                title = s.get("title", "Untitled") or "Untitled"
-                aid = s.get("agent_identity", "unknown")
-                sid = s.get("agent_session_id", "")[:8]
-                lines.append(f"  [{s['id']}] {title} ({aid[:20]}... {sid})")
-            self.notify("\n".join(lines), title="/session list")
+            self.app.push_screen("sessions")
             return True
         elif sub_cmd == "load":
             if not arg:

@@ -4,6 +4,7 @@ import fnmatch
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 
@@ -319,7 +320,18 @@ def get_agent_by_name(name: str) -> Optional[AgentConfig]:
     return None
 
 
-SUBAGENT_CONSTRAINTS = """
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
+
+
+def _load_prompt(name: str, fallback: str) -> str:
+    path = _PROMPTS_DIR / f"{name}.md"
+    try:
+        return path.read_text("utf-8")
+    except Exception:
+        return fallback
+
+
+SUBAGENT_CONSTRAINTS = _load_prompt("subagent-constraints", """
 ### Constraints (subagent)
 You are running as a subagent spawned by a parent agent via the Spawn tool.
 - You CANNOT spawn subagents (Spawn tool is disabled).
@@ -329,7 +341,7 @@ You are running as a subagent spawned by a parent agent via the Spawn tool.
 - You are a leaf node in the agent hierarchy. Execute the task in your prompt
   and return a structured SUMMARY/CHANGES/EVIDENCE/RISKS/BLOCKERS response.
 - Do not narrate "I will now..." in visible text; all reasoning in <thinking>.
-"""
+""")
 
 
 def get_system_prompt(agent_type: str) -> str:
@@ -350,7 +362,7 @@ def get_system_prompt(agent_type: str) -> str:
     return "\n".join(lines)
 
 
-TOOL_DESCRIPTIONS = """
+TOOL_DESCRIPTIONS = _load_prompt("tool-descriptions", """
 ## Available Tools
 
 ### Tool Call Format (REQUIRED)
@@ -479,7 +491,7 @@ Rules:
 - **TodoStop**: todo_stop(taskId) - Stop a running todo.
 - **TodoClear**: todo_clear() - Clear ALL todos and start a fresh blank plan.
 - **Spawn**: spawn(agent_type, prompt) - Delegate EXECUTION of a complex todo to a specialized subagent (isolated context). Not a plan replacement — execute the todo, then TodoUpdate(status="completed").
-"""
+""")
 
 def filter_tool_descriptions(
     allowlist: list[str] | None = None,
@@ -520,53 +532,18 @@ def filter_tool_descriptions(
     return "\n".join(result_lines)
 
 
-REACT_WORKFLOW = """
-## Workflow: 思考 → Todo → 行动 (per-Round)
-
-Each round: `<thinking>` → Todo ops → tool execution → TodoUpdate.
-Tool results from the previous round are already in context — review them
-at the start of `<thinking>`. No separate "Observation" step is needed.
-
-### Round Structure
-
-**思考** (inside `<thinking>`):
-1. Review: what did the last round's tools produce? Any errors to address?
-2. Progress: which todos are done, which are pending?
-3. Decide: what is the single next action? Pick: direct tool or `Spawn`?
-
-**Todo** (before acting):
-- No todo for this work? → `TodoCreate` first.
-- Todo exists? → advance it (`in_progress`).
-- Completed work? → `TodoUpdate(status="completed")` immediately.
-- Do NOT mark a todo as completed unless its work was actually executed.
-
-**行动** (execute):
-- Simple (1 tool, 1 file) → call the tool directly.
-- Complex (multi-step/research) → `Spawn(agent_type, prompt)` to delegate.
-- Spawn executes a todo — it does not replace one.
-
-### Routing
-- Every task = a `TodoCreate`. No work without a todo.
-- `Spawn` = execution delegation for complex todos only.
-
-### Plan Hygiene (strict)
-- **Every new task batch MUST start with `TodoClear`** to wipe stale todos, even if previous ones are completed.
-- If existing todos don't cover the current request → `TodoClear` then `TodoCreate`.
-- Never append new todos to an old plan — it causes unbounded growth and loses focus.
-"""
-
-PLAN_GATE_HARD = """
+PLAN_GATE_HARD = _load_prompt("plan-gate-hard", """
 ### plan mode: hard gate
 Execution tools (Write/Edit/Insert/ApplyPatch/Bash) are BLOCKED until a todo plan exists.
 Create ALL todos upfront with `TodoCreate`, present for user review, then execute.
-"""
+""")
 
-PLAN_GATE_SOFT = """
+PLAN_GATE_SOFT = _load_prompt("plan-gate-soft", """
 ### build/solo mode: soft gate
 Execution is allowed but planning is encouraged. Create todos first via `TodoCreate`.
-"""
+""")
 
-COMPACTION_INSTRUCTIONS = """
+COMPACTION_INSTRUCTIONS = _load_prompt("compaction-instructions", """
 ## Context Compaction
 
 You are a compaction agent. Your job is to summarize the conversation history into a concise format that preserves key information while minimizing token usage.
@@ -578,15 +555,15 @@ Output a summary with these sections:
 - **Context Needed**: Information required to continue the work
 
 Keep each section concise. Use bullet points where possible.
-"""
+""")
 
-TITLE_INSTRUCTIONS = """
+TITLE_INSTRUCTIONS = _load_prompt("title-instructions", """
 Generate a short, descriptive title (max 5 words) for this conversation. 
 The title should capture the main topic or task being worked on.
 Only output the title, nothing else.
-"""
+""")
 
-SUMMARY_INSTRUCTIONS = """
+SUMMARY_INSTRUCTIONS = _load_prompt("summary-instructions", """
 Create a summary of this conversation session. Include:
 - What was the user trying to accomplish
 - What was done
@@ -594,4 +571,4 @@ Create a summary of this conversation session. Include:
 - Any important notes for future sessions
 
 Keep it concise but informative.
-"""
+""")

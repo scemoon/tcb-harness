@@ -55,6 +55,7 @@ tui = [
 ]
 onecode = [
     "builtin_skills/**/*",
+    "agent/agents/prompts/**/*",
 ]
 
 [tool.ruff]
