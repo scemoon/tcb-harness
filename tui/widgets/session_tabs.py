@@ -135,7 +135,7 @@ class SessionsTabs(Widget):
                 underline.highlight_end = end
                 self.scroll_to_center(current_label, animate=False)
 
-    MAX_TAB_TITLE = 30
+    MAX_TAB_TITLE = 10
 
     def _truncate(self, text: str) -> str:
         return text[: self.MAX_TAB_TITLE] + "…" if len(text) > self.MAX_TAB_TITLE else text

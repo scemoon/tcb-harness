@@ -303,14 +303,14 @@ class Conversation(containers.Vertical):
         Binding(
             "ctrl+j",
             "cursor_down",
-            "Block cursor down",
+            "Down",
             priority=True,
             group=CURSOR_BINDING_GROUP,
         ),
         Binding(
             "ctrl+k",
             "cursor_up",
-            "Block cursor up",
+            "Up",
             priority=True,
             group=CURSOR_BINDING_GROUP,
         ),
@@ -319,11 +319,12 @@ class Conversation(containers.Vertical):
             "select_block",
             "Select",
             tooltip="Select this block",
+            show=False,
         ),
         Binding(
             "ctrl+x",
             "toggle_expand",
-            "Toggle expand",
+            "Toggle",
             tooltip="Toggle expand/collapse cursor block",
             priority=True,
         ),
@@ -333,6 +334,7 @@ class Conversation(containers.Vertical):
             "Cancel",
             tooltip="Cancel agent's turn",
             priority=True,
+            show=False,
         ),
         Binding(
             "ctrl+f",
@@ -350,7 +352,7 @@ class Conversation(containers.Vertical):
         Binding(
             "ctrl+n",
             "fullscreen_block",
-            "Full screen",
+            "Full",
             tooltip="Open full-screen view of the cursor block",
         ),
         Binding(
@@ -432,6 +434,7 @@ class Conversation(containers.Vertical):
         self._turn_count = 0
         self._shell_count = 0
         self._tool_call_total = 0
+
         self._tool_call_success = 0
         self._tool_call_failed = 0
         self._tool_call_finalized: set[str] = set()
@@ -446,6 +449,7 @@ class Conversation(containers.Vertical):
 
         self._post_lock = asyncio.Lock()
         self._auto_named_session = False
+        self._pending_prompts: list[str] = []
 
         self._total_messages: int = 0
         self._visible_count: int = 0
@@ -947,6 +951,12 @@ class Conversation(containers.Vertical):
             if text.startswith("/") and await self.slash_command(text):
                 # A2TUI has processed the slash command.
                 return
+
+            if self.turn == "agent":
+                self._pending_prompts.append(text)
+                self.prompt.pending_prompts = list(self._pending_prompts)
+                return
+
             await self.post(UserInput(text))
             self.window.scroll_end(animate=False)
             self._loading = await self.post(Loading("Please wait..."), loading=True)
@@ -1065,6 +1075,17 @@ class Conversation(containers.Vertical):
                 title="Waiting for input",
                 sound="turn-over",
             )
+
+        if self._pending_prompts:
+            next_prompt = self._pending_prompts.pop(0)
+            self.prompt.pending_prompts = list(self._pending_prompts)
+            await self.post(UserInput(next_prompt))
+            self.window.scroll_end(animate=False)
+            self._loading = await self.post(Loading("Please wait..."), loading=True)
+            await asyncio.sleep(0)
+            if self._msg_log is not None:
+                self._msg_log.user_input(next_prompt, self._turn_count)
+            self.send_prompt_to_agent(next_prompt)
 
     @on(Menu.OptionSelected)
     async def on_menu_option_selected(self, event: Menu.OptionSelected) -> None:
@@ -1881,9 +1902,26 @@ class Conversation(containers.Vertical):
                 "<list|load|new|close|rename> [args]",
             ),
             SlashCommand(
-                "/project",
-                "Project commands: list, load, new",
-                "<list|load|new> [args]",
+                "/aidc",
+                "AIDC commands: new, init, check, list, load, show",
+                "<new|init|check|list|load|show> [args]",
+            ),
+            SlashCommand(
+                "/logs",
+                "Open the real-time log screen",
+            ),
+            SlashCommand(
+                "/home",
+                "Open the agent/home selection screen",
+            ),
+            SlashCommand(
+                "/diff",
+                "Show project diff (git working tree changes)",
+            ),
+            SlashCommand(
+                "/ide",
+                "Open built-in code editor",
+                "[filepath]",
             ),
         ]
 
@@ -2453,7 +2491,23 @@ class Conversation(containers.Vertical):
                     severity="error",
                 )
                 return True
-            await self.prune_window(line_count, line_count)
+            if line_count == 0:
+                contents = self.contents
+                self.cursor_offset = -1
+                self.cursor.visible = False
+                self.cursor.follow(None)
+                contents.refresh()
+                await contents.remove_children(list(contents.children))
+                if self.window.scroll_y >= self.window.max_scroll_y:
+                    self.call_later(self.window.anchor)
+            else:
+                await self.prune_window(line_count, line_count)
+            return True
+        elif command == "logs":
+            self.app.action_logs()
+            return True
+        elif command == "home":
+            self.app.push_screen("store")
             return True
         elif command == "exit":
             if self.session_start_time is not None:
@@ -2473,9 +2527,26 @@ class Conversation(containers.Vertical):
             return True
         elif command == "session":
             return await self._handle_session_command(parameters)
-        elif command == "project":
-            return await self._handle_project_command(parameters)
+        elif command == "aidc":
+            return await self._handle_aidc_command(parameters)
+        elif command == "diff":
+            return await self._handle_diff_command()
+        elif command == "ide":
+            return await self._handle_ide_command(parameters)
         return await self._handle_tui_session_project_dispatch(command, parameters)
+
+    async def _handle_diff_command(self) -> bool:
+        from tui.screens.diff_explorer_screen import DiffExplorerScreen
+        self.app.push_screen(DiffExplorerScreen(project_dir=self.project_path))
+        return True
+
+    async def _handle_ide_command(self, parameters: str) -> bool:
+        from tui.screens.ide_screen import IdeScreen
+        filepath = parameters.strip() if parameters.strip() else None
+        self.app.push_screen(
+            IdeScreen(project_dir=self.project_path, filepath=filepath)
+        )
+        return True
 
     async def _handle_tui_session_project_dispatch(
         self, command: str, parameters: str
@@ -2555,7 +2626,7 @@ class Conversation(containers.Vertical):
             )
             return True
 
-    async def _handle_project_command(self, parameters: str) -> bool:
+    async def _handle_aidc_command(self, parameters: str) -> bool:
         parts = parameters.strip().split(maxsplit=2)
         sub_cmd = parts[0] if parts else ""
         name = parts[1] if len(parts) > 1 else ""
@@ -2565,23 +2636,24 @@ class Conversation(containers.Vertical):
             from pathlib import Path
             projects_dir = Path.home() / ".cdh" / "projects"
             if not projects_dir.exists():
-                self.notify("No projects found", title="/project list")
+                self.notify("No projects found", title="/aidc list")
                 return True
             project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
             if not project_files:
-                self.notify("No projects found", title="/project list")
+                self.notify("No projects found", title="/aidc list")
                 return True
             lines = ["Projects:"]
             for pf in sorted(project_files):
                 lines.append(f"  {pf.stem}")
-            self.notify("\n".join(lines), title="/project list")
+            self.notify("\n".join(lines), title="/aidc list")
             return True
+
         elif sub_cmd == "load":
             if not name:
-                self.notify("Project name required", title="/project load", severity="error")
+                self.notify("Project name required", title="/aidc load", severity="error")
                 return True
             from pathlib import Path
-            from onecode.config import load_config, save_config
+            from cdh.config import write_active_project
             projects_dir = Path.home() / ".cdh" / "projects"
             project_file = None
             for ext in ["yaml", "yml", "json"]:
@@ -2590,27 +2662,25 @@ class Conversation(containers.Vertical):
                     project_file = pf
                     break
             if not project_file:
-                self.notify(f"Project '{name}' not found", title="/project load", severity="error")
+                self.notify(f"Project '{name}' not found", title="/aidc load", severity="error")
                 return True
             import yaml
             proj_data = yaml.safe_load(project_file.read_text()) if project_file.suffix in [".yaml", ".yml"] else __import__("json").loads(project_file.read_text())
             project_path = proj_data.get("path", ".")
-            cfg = load_config()
-            cfg.current_project = name
-            cfg.current_project_path = project_path
-            save_config(cfg)
+            write_active_project(name, project_path)
             new_project_dir = Path(project_path) if project_path else Path.cwd()
             self.app.project_dir = new_project_dir
             self.post_message(messages.ProjectDirectoryUpdated(project_dir=new_project_dir))
             self.flash(f"Switched to project: {name}", style="success")
             return True
+
         elif sub_cmd == "new":
             if not name:
-                self.notify("Usage: /project new <name> [path]", title="/project new", severity="error")
+                self.notify("Usage: /aidc new <name> [path]", title="/aidc new", severity="error")
                 return True
             from pathlib import Path
-            from onecode.config import load_config, save_config
-            from onecode.agent.cdh_loader import CdhProjectLoader
+            from cdh.config import write_active_project
+            from cdh.project_loader import CdhProjectLoader
             from cdh.scaffold import scaffold_dlc_project
             import yaml
             projects_dir = Path.home() / ".cdh" / "projects"
@@ -2622,18 +2692,71 @@ class Conversation(containers.Vertical):
             proj_data = {"name": name, "path": str(ws), "description": ""}
             project_file = projects_dir / f"{name}.yaml"
             project_file.write_text(yaml.dump(proj_data))
-            cfg = load_config()
-            cfg.current_project = name
-            cfg.current_project_path = str(ws)
-            save_config(cfg)
+            write_active_project(name, str(ws))
             self.app.project_dir = ws
             self.post_message(messages.ProjectDirectoryUpdated(project_dir=ws))
-            self.flash(f"Created and switched to project: {name}", style="success")
+            self.flash(f"Created and switched to AIDC project: {name}", style="success")
             return True
+
+        elif sub_cmd == "init":
+            from pathlib import Path
+            from cdh.config import write_active_project
+            from cdh.project_loader import CdhProjectLoader
+            from cdh.scaffold import init_dlc_project
+            import yaml
+            target = Path(name or ".").expanduser().resolve()
+            project_name = target.name
+            projects_dir = Path.home() / ".cdh" / "projects"
+            projects_dir.mkdir(parents=True, exist_ok=True)
+            proj_file = projects_dir / f"{project_name}.yaml"
+            if proj_file.exists():
+                self.notify(
+                    f"Project '{project_name}' already exists",
+                    title="/aidc init",
+                    severity="error",
+                )
+                return True
+            init_dlc_project(target, project_name)
+            CdhProjectLoader.init_project(target, project_name)
+            proj_data = {"name": project_name, "path": str(target), "description": ""}
+            proj_file.write_text(yaml.dump(proj_data))
+            write_active_project(project_name, str(target))
+            self.app.project_dir = target
+            self.post_message(messages.ProjectDirectoryUpdated(project_dir=target))
+            self.flash(f"Initialized AIDC project in: {target}", style="success")
+            return True
+
+        elif sub_cmd == "check":
+            from pathlib import Path
+            from cdh.scaffold import check_dlc_project
+            target = Path(name or ".").expanduser().resolve()
+            result = check_dlc_project(target)
+            if result["valid"]:
+                lines = [f"\u2713 Valid AIDC project: {result['name']}"]
+                lines.append(f"  Location: {result['path']}")
+                if result["components"]:
+                    lines.append(f"  Components: {', '.join(result['components'])}")
+                else:
+                    lines.append("  Components: (none)")
+                lines.append(
+                    f"  CDH state: \u2713 initialized" if result["has_cdh"]
+                    else "  CDH state: \u2717 not initialized"
+                )
+            else:
+                lines = [f"\u2717 Not a valid AIDC project: {target}"]
+            for s in result["suggestions"]:
+                lines.append(f"  \u2022 {s}")
+            self.notify("\n".join(lines), title="/aidc check")
+            return True
+
+        elif sub_cmd == "show":
+            self.app.action_projects()
+            return True
+
         else:
             self.notify(
-                "Usage: /project <list|load|new> [name] [path]",
-                title="/project",
+                "Usage: /aidc <new|init|check|list|load|show> [args]",
+                title="/aidc",
                 severity="error",
             )
             return True

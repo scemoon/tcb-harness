@@ -17,7 +17,7 @@ globs: ["*"]
 ---
 # AI-DLC Core Rules
 
-See `.opencode/skills/ai-dlc-skill/SKILL.md` for full methodology.
+See `ai-dlc-skill/SKILL.md` for full methodology.
 
 Key rules:
 1. Intent → Spec → BDD → Code pipeline

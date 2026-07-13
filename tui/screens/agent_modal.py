@@ -28,7 +28,7 @@ class AgentModal(ModalScreen):
 
     BINDINGS = [
         Binding("escape", "dismiss(None)", "Dismiss", show=False),
-        Binding("space", "dismiss('launch')", "Launch agent", priority=True),
+        Binding("space", "dismiss('launch')", "Launch", priority=True),
     ]
 
     action = var("")

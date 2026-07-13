@@ -8,8 +8,8 @@ from textual import getters
 
 class CommandEditModal(ModalScreen[str | None]):
     BINDINGS = [
-        ("ctrl+c", "copy", "Copy to clipboard"),
-        ("escape", "dismiss", "Dismiss"),
+        ("ctrl+c", "copy", "Copy"),
+        ("escape", "dismiss", "Dismiss", False),
     ]
     AUTO_FOCUS = "Button"
 

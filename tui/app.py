@@ -256,8 +256,6 @@ class A2TUIApp(App, inherit_bindings=False):
         ),
         Binding("ctrl+c", "help_quit", show=False, system=True),
         Binding("ctrl+s", "sessions", "Sessions"),
-        Binding("f3", "projects", "Projects"),
-
         Binding("f1", "toggle_help_panel", "Help", priority=True),
         Binding(
             "f2,ctrl+comma",
@@ -265,7 +263,6 @@ class A2TUIApp(App, inherit_bindings=False):
             "Settings",
             tooltip="Settings screen",
         ),
-        Binding("f4", "logs", "Logs"),
     ]
     ALLOW_IN_MAXIMIZED_VIEW = ""
 
@@ -322,16 +319,13 @@ class A2TUIApp(App, inherit_bindings=False):
         if project_dir:
             self.project_dir = Path(project_dir).expanduser().resolve()
         else:
-            from onecode.config import load_config, save_config
-            cfg = load_config()
-            if cfg.current_project_path:
-                project_path = Path(cfg.current_project_path).expanduser().resolve()
+            from cdh.config import read_active_project
+            proj = read_active_project()
+            if proj and proj.get("path"):
+                project_path = Path(proj["path"]).expanduser().resolve()
                 if project_path.is_dir():
                     self.project_dir = project_path
                 else:
-                    cfg.current_project = ""
-                    cfg.current_project_path = ""
-                    save_config(cfg)
                     self.project_dir = Path("./").expanduser().resolve()
             else:
                 self.project_dir = Path("./").expanduser().resolve()
@@ -646,9 +640,7 @@ class A2TUIApp(App, inherit_bindings=False):
                 self.settings.up_to_date()
 
     def setting_updated(self, key: str, value: object) -> None:
-        if key.startswith("cdh."):
-            self._sync_cdh_config(key, value)
-        elif key == "ui.column":
+        if key == "ui.column":
             if isinstance(value, bool):
                 self.column = value
         elif key == "ui.column-width":
@@ -686,26 +678,6 @@ class A2TUIApp(App, inherit_bindings=False):
             self.update_show_sessions()
 
         self.settings_changed_signal.publish((key, value))
-
-    def _sync_cdh_config(self, key: str, value: object) -> None:
-        """Sync cdh config to GlobalConfig when tui settings change."""
-        try:
-            from onecode.config import load_config, save_config
-            cfg = load_config()
-            cdh_key = key[4:]
-            if cdh_key == "mode":
-                cfg.default_mode = value
-            elif cdh_key == "provider":
-                cfg.default_provider = value
-            elif cdh_key == "model":
-                cfg.default_model = value
-            elif cdh_key == "log_level":
-                cfg.log_level = value
-            elif cdh_key == "session_auto_save":
-                cfg.session_auto_save = value
-            save_config(cfg)
-        except Exception:
-            pass
 
     def _start_system_theme_polling(self) -> None:
         if self._system_theme_timer is not None:
@@ -767,24 +739,6 @@ class A2TUIApp(App, inherit_bindings=False):
                 pass
         return "dracula"
 
-    def _load_cdh_config(self) -> None:
-        """Load cdh config into tui settings on startup."""
-        try:
-            from onecode.config import load_config
-            cfg = load_config()
-            cdh_settings = {
-                "cdh.mode": cfg.default_mode,
-                "cdh.provider": cfg.default_provider,
-                "cdh.model": cfg.default_model,
-                "cdh.log_level": cfg.log_level,
-                "cdh.session_auto_save": cfg.session_auto_save,
-            }
-            for key, value in cdh_settings.items():
-                if not self.settings.get(key, object, expand=False):
-                    self.settings.set(key, value)
-        except Exception:
-            pass
-
     async def on_load(self) -> None:
         db = await self.get_db()
         await db.create()
@@ -800,7 +754,6 @@ class A2TUIApp(App, inherit_bindings=False):
         self.ansi_theme_dark = DRACULA_TERMINAL_THEME
         self._settings = settings
         self.settings.set_all()
-        self._load_cdh_config()
 
     async def new_session_screen(
         self, get_screen: Callable[[], Screen], session_pk: int | None = None
@@ -844,7 +797,7 @@ class A2TUIApp(App, inherit_bindings=False):
         else:
             project_path = Path(self.project_dir)
             # Check project-level .cdh/last_session.json
-            from onecode.agent.cdh_loader import CdhProjectLoader
+            from cdh.project_loader import CdhProjectLoader
             cdh_dir = CdhProjectLoader.find_cdh_dir(project_path)
             if cdh_dir:
                 last_session = CdhProjectLoader.load_last_session(cdh_dir)
@@ -1128,21 +1081,20 @@ class A2TUIApp(App, inherit_bindings=False):
     @work
     async def action_projects(self) -> None:
         from pathlib import Path
-        from onecode.config import load_config, save_config
-        from onecode.config_screen import EditFieldScreen
+        from cdh.config import clear_active_project, read_active_project, write_active_project
+        from cdh.project_loader import CdhProjectLoader
+        from tui.widgets.edit_field import EditFieldScreen
         import yaml
 
         from tui.screens.projects_screen import ProjectsScreen
         result = await self.push_screen_wait(ProjectsScreen())
         if result is None:
-            cfg = load_config()
-            if cfg.current_project:
+            proj = read_active_project()
+            if proj and proj.get("name"):
                 projects_dir = Path.home() / ".cdh" / "projects"
-                pf = projects_dir / f"{cfg.current_project}.yaml"
+                pf = projects_dir / f"{proj['name']}.yaml"
                 if not pf.exists():
-                    cfg.current_project = None
-                    cfg.current_project_path = None
-                    save_config(cfg)
+                    clear_active_project()
                     self.project_dir = None
                     self.screen.post_message(messages.ProjectDirectoryUpdated(project_dir=None))
         if result is not None:
@@ -1159,7 +1111,6 @@ class A2TUIApp(App, inherit_bindings=False):
                     self.notify("Invalid path", severity="error")
                     return
                 name = project_path.name
-                from onecode.agent.cdh_loader import CdhProjectLoader
                 from cdh.scaffold import scaffold_dlc_project
                 scaffold_dlc_project(project_path, name)
                 CdhProjectLoader.init_project(project_path, name)
@@ -1167,10 +1118,7 @@ class A2TUIApp(App, inherit_bindings=False):
                 projects_dir.mkdir(parents=True, exist_ok=True)
                 proj_data = {"name": name, "path": str(project_path), "description": ""}
                 (projects_dir / f"{name}.yaml").write_text(yaml.dump(proj_data))
-                cfg = load_config()
-                cfg.current_project = name
-                cfg.current_project_path = str(project_path)
-                save_config(cfg)
+                write_active_project(name, str(project_path))
                 self.project_dir = project_path
                 self.screen.post_message(messages.ProjectDirectoryUpdated(project_dir=self.project_dir))
                 self.notify(f"Created project '{name}' at {project_path}")
@@ -1187,19 +1135,12 @@ class A2TUIApp(App, inherit_bindings=False):
                         project_path = proj_data.get("path", ".")
                         break
                 if project_path:
-                    cfg = load_config()
-                    cfg.current_project = project_name
-                    cfg.current_project_path = project_path
-                    save_config(cfg)
+                    write_active_project(project_name, project_path)
 
                     new_project_dir = Path(project_path) if project_path else Path.cwd()
                     self.project_dir = new_project_dir
                     self.screen.post_message(messages.ProjectDirectoryUpdated(project_dir=self.project_dir))
                     self.notify(f"Switched to project: {project_name}")
-                    from tui.agents import read_agents
-                    agents = await read_agents()
-                    if cfg.default_mode in agents:
-                        self.launch_agent(cfg.default_mode, project_path=new_project_dir)
 
     @on(messages.LaunchAgent)
     def on_launch_agent(self, message: messages.LaunchAgent) -> None:

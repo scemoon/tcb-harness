@@ -130,7 +130,7 @@ _DEFAULT_MODES = {
     "currentModeId": "build",
     "availableModes": [
         {"id": "build", "name": "Build", "description": "Full development agent. Edits and shell commands require user approval."},
-        {"id": "plan",  "name": "Plan",  "description": "Read-only planning and analysis. Edits and shell commands require approval."},
+        {"id": "plan",  "name": "Plan",  "description": "Read-only planning and analysis. Edits and shell commands are denied."},
         {"id": "solo",  "name": "Solo",  "description": "Independent mode with plan-first workflow. Edits allowed, shell commands require approval."},
     ],
 }
@@ -699,6 +699,8 @@ class CDHACPAdapter:
         # Diagnostics: per-subagent ACP forward counters (id → int)
         self._subagent_fwd_count: dict[str, int] = {}
         self._subagent_fwd_bytes: dict[str, int] = {}
+        # Turn counter for session/event notifications
+        self._turn_count: int = 0
         # Display state for tools invoked *inside* a subagent, keyed by a
         # namespaced id ``"sa:{subagent_id}:{inner_tool_id}"`` (kept separate
         # from ``self.tool_calls`` so subagent tool cards never collide with
@@ -912,6 +914,24 @@ class CDHACPAdapter:
         self.send_notification("session/update", {
             "sessionId": self.session_id,
             "update": update,
+        })
+
+    def send_session_event(self, event: dict, metrics: dict | None = None):
+        """Send a session/event notification (onecode enhancement).
+
+        Provides structured event data for L3/L4 loop analysis.
+        See docs/loop.md §9.2 for protocol spec.
+
+        Args:
+            event: Event payload dict with at minimum a ``type`` key.
+            metrics: Optional derived metrics dict for session-level stats.
+        """
+        payload: dict = {"event": event}
+        if metrics is not None:
+            payload["metrics"] = metrics
+        self.send_notification("session/event", {
+            "sessionId": self.session_id,
+            **payload,
         })
 
     def _subagent_tool_ns_id(self, subagent_id: str, inner_tool_id: str) -> str:
@@ -1813,6 +1833,11 @@ class CDHACPAdapter:
                     if event.tool_name != "Spawn":
                         self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
+                    self.send_session_event({
+                        "type": "tool_executed",
+                        "tool_name": event.tool_name,
+                        "tool_category": str(event.tool_category),
+                    })
                     if event.tool_id in self.tool_calls:
                         title = event.tool_name
                         if event.tool_args:
@@ -1880,6 +1905,11 @@ class CDHACPAdapter:
                         if event.tool_name != "Spawn":
                             self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.TOOL_RESULT:
+                    self.send_session_event({
+                        "type": "tool_result",
+                        "tool_id": event.tool_id,
+                        "is_error": event.result_is_error,
+                    })
                     # Spawn tool results: subagent_start/chunk/end events were
                     # already sent during subagent execution — just skip the
                     # tool_call_update (no duplicate SubAgent widget needed).
@@ -2067,6 +2097,19 @@ class CDHACPAdapter:
                     self._handle_subagent_tool_call(event)
                 elif event.type == StreamEventType.SUBAGENT_TOOL_RESULT:
                     self._handle_subagent_tool_result(event)
+                elif event.type == StreamEventType.VERIFICATION_PASSED:
+                    self.send_session_event({
+                        "type": "verification_passed",
+                        "tool_name": event.tool_name,
+                        "summary": event.text,
+                    })
+                elif event.type == StreamEventType.VERIFICATION_FAILED:
+                    self.send_session_event({
+                        "type": "verification_failed",
+                        "tool_name": event.tool_name,
+                        "failed_gates": event.verification_failed_gates,
+                        "summary": event.text,
+                    })
                 elif event.type == StreamEventType.PLAN:
                     self.send_session_update({
                         "sessionUpdate": "plan",
@@ -2324,6 +2367,19 @@ class CDHACPAdapter:
 
         stop_reason = "cancelled" if self.agent._cancelled else "end_turn"
         usage = self._build_session_usage()
+        self._turn_count += 1
+        self.send_session_event(
+            event={
+                "type": "session_ended",
+                "stop_reason": stop_reason,
+                "turn_count": self._turn_count,
+            },
+            metrics={
+                "tool_calls": len(self.tool_calls),
+                "subagent_calls": sum(self._subagent_fwd_count.values()),
+                "usage": usage,
+            },
+        )
         return {
             "sessionId": self.session_id,
             "stopReason": stop_reason,
@@ -2733,6 +2789,9 @@ def main():
     import os
     from onecode.cli import setup_logging
     setup_logging(os.environ.get("CDH_LOG_LEVEL", "INFO"))
+    # Sync optimizer params from ~/.cdh/agent_config.yaml before starting
+    from onecode.config import sync_agent_config
+    sync_agent_config()
     info_log(
         "[ACP-INIT] cdh_acp adapter starting; log_level=%s pid=%d",
         os.environ.get("CDH_LOG_LEVEL", "INFO"), os.getpid(),

@@ -6,9 +6,6 @@ from pathlib import Path
 import yaml
 
 
-SKILL_NAME = "ai-dlc-skill"
-
-
 @dataclass(frozen=True)
 class ComponentSpec:
     id: str
@@ -242,88 +239,45 @@ AGENTS_MD_TEMPLATE = """# AGENTS.md — Project Constitution
 Hard rules every AI agent must follow when working in this repo.
 Read once per session; behavior is enforced by the agent runtime.
 
-## Project Overview
+## Project
 
 - **Name**: {project_name}
 - **Description**: {description}
-- **Type**: monorepo — AI-DLC multi-component stack
-{component_list}
 
-## AI-DLC Core Cycle
+## References
 
-```
-① Understand (SDD+BDD)   Intent → Spec Delta → BDD Feature Files
-② Plan (SDD+TDD)         Design Doc → Task DAG → Test Plan
-③ Verify (BDD+TDD)       Red → Green → Refactor per scenario
-④ Deliver (SDD+Cloud)    Stack Preview → e2e → Production + BVT
-```
+| Topic | Source |
+|-------|--------|
+| AI-DLC methodology | `ai-dlc-skill/SKILL.md` |
+| Stack topology | `aidlc/project.yaml` |
+| Requirements & gates | `aidlc/requirements.md` |
 
-Reference skill: `~/.cdh/skills/ai-dlc-skill/SKILL.md` (full AI-DLC methodology; installed by cdh platform bootstrap).
+## Component Directories
 
-## Component Mapping
-
-Work is partitioned by component prefix. Place new code in the matching directory:
-
-| Prefix | Component | Directory |
-|--------|-----------|-----------|
+| Prefix | Directory |
+|--------|-----------|
 {component_table}
 
-> **Note**: FR namespaces are used in AI-DLC lifecycle only.
+## Path Hygiene
 
-## Quality Gates
+Never read, write, or modify (CLI-managed or build artifacts):
+- `.cdh/`, `.opencode/`, `.claude/`, `.agents/` — tool configs
+- `dist/`, `build/`, `__pycache__/`, `node_modules/`, `.venv/` — build artifacts
+- `aidlc/providers/` — CLI-managed
+- `~/.cdh/`, `~/.onecode/` — global state (runtime-managed)
 
-Hard thresholds every agent must respect:
+## Forbidden
 
-| Gate | Threshold |
-|------|-----------|
-| Unit/integration coverage | >= 80% |
-| BDD scenarios pass | 100% |
-| Contract tests pass | 100% |
-| Cross-stack e2e pass | 100% |
-| Security vulns | 0 |
-
-## File / Path Hygiene
-
-**Never read, write, or modify** any of these (they're local-only / secrets / build artifacts):
-
-- `.cdh/` — project-level runtime state (managed by CLI; never hand-edit)
-- `.opencode/`, `.claude/`, `.agents/` — tool configs (owned by user)
-- `.qwen/`, `.idea/` — IDE / tool caches
-- `dist/`, `*.egg-info/`, `__pycache__/`, `build/`, `.venv/`
-- `node_modules/`, `.next/`, `.nuxt/`
-- `.python-version`, `uv.lock` — Python toolchain pinning (user-managed)
-- `aidlc/contracts/CHANGELOG.md` — contract changelog (managed by CLI)
-- `aidlc/providers/` — provider config (managed by CLI)
-
-**Global state directories** (managed at runtime, do not hand-edit):
-- `~/.cdh/` — cdh platform global state (projects/, skills/, mcps/, state/, logs/, sessions/)
-- `~/.onecode/` — onecode engine private state (traces, memory, mcps, skills, config)
-
-## Forbidden Actions
-
-- Commit secrets (API keys, tokens, passwords) — use env vars or vault
+- Commit secrets
 - Force-push to `main` / `master`
-- Modify files outside the project root
-- Run `npm publish` / `pip upload` without explicit user approval
-- Hand-edit `.cdh/state.json`, `.cdh/todos.json`, `.cdh/last_session.json` — use CLI / slash commands
-- Delete tracked files outside `dist/`, `build/`, `__pycache__/` without confirmation
+- Hand-edit `.cdh/state.json` — use CLI
+- Delete tracked files outside `dist/` / `build` without confirmation
 
-## Working Conventions
+## Conventions
 
-This project follows the **AI-DLC (AI-Driven Lifecycle)** methodology shown above.
-
-- **Plan first**: Use task management (TodoCreate) for any non-trivial task (3+ steps)
-- **Route execution**:
-  - Single-step (1 tool, 1 file) → direct tool call
-  - Multi-step / multi-file / research → delegate to sub-agent
-- **Language**: Chinese for explanations to user, English for code / comments / commit messages
-- **Verification**: After non-trivial edits, run applicable lint/typecheck/test commands before declaring done
-
-## Where to Find More
-
-- **AI-DLC methodology**: `~/.cdh/skills/ai-dlc-skill/SKILL.md` (load via Skill tool; installed by cdh bootstrap)
-- **Human-readable README**: `README.md`
-- **Architecture / practices**: `docs/` if present, or ask the user
+- Plan first (TodoCreate) for 3+ step tasks
+- Chinese for user communication, English for code
+- Run lint/typecheck/test after non-trivial edits
 """
 
 REQUIREMENTS_MD = """# {project_name}
@@ -354,11 +308,6 @@ Default cloud provider: TCB (Tencent CloudBase).
 """
 
 
-def _detect_dlc_skill(workspace_root: Path) -> bool:
-    from cdh.cdh_skill_manager import CDH_PLATFORM_SKILLS_DIR
-    return (CDH_PLATFORM_SKILLS_DIR / SKILL_NAME / "SKILL.md").exists()
-
-
 def _mkdir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
@@ -374,18 +323,11 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content.lstrip("\n"), encoding="utf-8")
 
 
-def _build_agents_component_list(active: list[ComponentSpec]) -> str:
-    if not active:
-        return ""
-    items = (f"  - **{c.label}** (`{c.owns}`)" for c in active)
-    return "- **Components**:\n" + "\n".join(items)
-
-
 def _build_agents_component_table(active: list[ComponentSpec]) -> str:
     rows = []
     for c in active:
-        rows.append(f"| {c.fr_prefix:7s} | {c.label:14s} | {c.owns:20s} |")
-    rows.append("| INT      | Contracts, Shared | aidlc/contracts/, aidlc/packages/shared/ |")
+        rows.append(f"| {c.fr_prefix:7s} | {c.owns:20s} |")
+    rows.append("| INT      | aidlc/contracts/, aidlc/packages/shared/ |")
     return "\n".join(rows)
 
 
@@ -398,7 +340,6 @@ def _write_agents_and_claude_md(
     content = AGENTS_MD_TEMPLATE.format(
         project_name=project_name,
         description=description or f"AI-DLC monorepo project: {project_name}",
-        component_list=_build_agents_component_list(active),
         component_table=_build_agents_component_table(active),
     )
     _write(root / "AGENTS.md", content)
@@ -525,16 +466,7 @@ def init_dlc_project(
     and cross-cutting items later via add_component / add_cross_cutting.
 
     Returns True if scaffolding was performed.
-
-    Raises RuntimeError if ai-dlc-skill is not available — the directory
-    is left untouched in that case so callers don't end up with a
-    half-initialized project (.cdh/ written but no aidlc/project.yaml).
     """
-    if not _detect_dlc_skill(workspace_root):
-        raise RuntimeError(
-            "ai-dlc-skill is not available; install it before "
-            "initializing a cdh project."
-        )
 
     root = workspace_root.resolve()
     _write_project_yaml(
@@ -564,8 +496,7 @@ def scaffold_dlc_project(
         components: list of component ids (e.g. ["web", "backend"]).
                    Must be non-empty.
 
-    Returns True if scaffolding was performed, False if ai-dlc-skill
-    is not available and the project was left untouched.
+    Returns True if scaffolding was performed.
 
     Raises ValueError if components is empty or contains unknown ids.
     """
@@ -581,9 +512,6 @@ def scaffold_dlc_project(
             f"Unknown component id(s): {', '.join(unknown)}. "
             f"Valid ids: {', '.join(COMPONENT_BY_ID)}."
         )
-
-    if not _detect_dlc_skill(workspace_root):
-        return False
 
     root = workspace_root.resolve()
     active = [COMPONENT_BY_ID[cid] for cid in components]
@@ -714,6 +642,100 @@ def add_cross_cutting(
     return True
 
 
+def check_dlc_project(workspace_root: Path) -> dict:
+    """Check whether a directory is a valid AIDC project and return diagnostics.
+
+    Returns a dict with keys:
+      valid        — bool, whether the project is minimally valid
+      name         — str or None
+      path         — str (resolved root)
+      components   — list of component ids
+      has_cdh      — bool
+      suggestions  — list of human-readable improvement suggestions
+    """
+    root = workspace_root.resolve()
+    result: dict = {
+        "valid": False,
+        "name": None,
+        "path": str(root),
+        "components": [],
+        "has_cdh": False,
+        "suggestions": [],
+    }
+
+    project_yaml = root / "aidlc" / "project.yaml"
+    if not project_yaml.exists():
+        result["suggestions"].append(
+            f"Missing aidlc/project.yaml — run 'cdh aidc init {root}' first"
+        )
+        return result
+
+    try:
+        data = yaml.safe_load(project_yaml.read_text(encoding="utf-8"))
+    except Exception as e:
+        result["suggestions"].append(f"Invalid YAML in aidlc/project.yaml: {e}")
+        return result
+
+    if not isinstance(data, dict):
+        result["suggestions"].append("aidlc/project.yaml is not a valid YAML mapping")
+        return result
+
+    name = data.get("name", "")
+    if not name:
+        result["suggestions"].append("Missing 'name' field in aidlc/project.yaml")
+        name = root.name
+    result["name"] = name
+
+    components = data.get("stack", {}).get("components", [])
+    if not components:
+        result["suggestions"].append(
+            "No components defined in stack.components — "
+            "consider 'cdh aidc init' or adding components"
+        )
+    else:
+        ids = []
+        for c in components:
+            cid = c.get("id", "")
+            if not cid:
+                result["suggestions"].append(
+                    "A component entry is missing its 'id' field"
+                )
+                continue
+            ids.append(cid)
+            if cid not in COMPONENT_BY_ID:
+                result["suggestions"].append(
+                    f"Unknown component id '{cid}' — expected one of: "
+                    f"{', '.join(COMPONENT_BY_ID)}"
+                )
+            else:
+                owns = COMPONENT_BY_ID[cid].owns
+                if not (root / owns).exists():
+                    result["suggestions"].append(
+                        f"Component '{cid}' directory '{owns}/' not found on disk"
+                    )
+        result["components"] = ids
+
+    cross_cutting = data.get("stack", {}).get("cross_cutting", {})
+    if isinstance(cross_cutting, dict):
+        for key, path_val in cross_cutting.items():
+            if isinstance(path_val, str) and not (root / path_val).exists():
+                result["suggestions"].append(
+                    f"Cross-cutting '{key}' path '{path_val}' not found on disk"
+                )
+
+    from cdh.project_loader import CdhProjectLoader
+    result["has_cdh"] = CdhProjectLoader.find_cdh_dir(root) is not None
+    if not result["has_cdh"]:
+        result["suggestions"].append(
+            ".cdh/ not found — run 'cdh aidc init' to set up project state"
+        )
+
+    if not result["suggestions"]:
+        result["valid"] = True
+
+    return result
+
+
 __all__ = [
     "COMPONENTS",
     "COMPONENT_BY_ID",
@@ -725,4 +747,5 @@ __all__ = [
     "scaffold_dlc_project",
     "add_component",
     "add_cross_cutting",
+    "check_dlc_project",
 ]

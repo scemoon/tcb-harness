@@ -50,6 +50,7 @@ class AgentConfig:
     timeout_seconds: int = 600
     allow_shell_commands: bool = True
     shell_command_whitelist: list[str] = field(default_factory=list)
+    temperature: float = 0.7
 
 
 @dataclass
@@ -97,6 +98,33 @@ class MemoryConfig:
 
 
 @dataclass
+class VerificationConfig:
+    enabled: bool = True
+    policy: str = "conditional"
+    gates: list[str] = field(default_factory=lambda: ["lint", "type", "test"])
+    plan_gate_mode: str = "adaptive"
+
+
+@dataclass
+class EventLoopConfig:
+    enabled: bool = False
+    sources: list[str] = field(default_factory=lambda: ["cron", "filewatch"])
+
+
+@dataclass
+class HillclimbConfig:
+    enabled: bool = False
+    min_sessions: int = 10
+
+
+@dataclass
+class LoopConfig:
+    verification: VerificationConfig = field(default_factory=VerificationConfig)
+    event: EventLoopConfig = field(default_factory=EventLoopConfig)
+    hillclimb: HillclimbConfig = field(default_factory=HillclimbConfig)
+
+
+@dataclass
 class GlobalConfig:
     default_mode: str = "build"
     default_provider: str = "minimaxi"
@@ -113,6 +141,7 @@ class GlobalConfig:
     session_auto_save: bool = True
     codebase: CodebaseConfig = field(default_factory=CodebaseConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    loops: LoopConfig = field(default_factory=LoopConfig)
 
 
 def _dict_to_dataclass(cls, data: dict):
@@ -171,11 +200,9 @@ def load_config() -> GlobalConfig:
     ensure_dirs()
     if not GLOBAL_CONFIG_PATH.exists():
         _write_default_config()
-    # Bootstrap ai-dlc-skill from source into cdh platform pool
     try:
-        from onecode.skills.bootstrap import ensure_ai_dlc_skill, ensure_onecode_default_skills
+        from onecode.skills.bootstrap import ensure_onecode_default_skills
         ensure_onecode_default_skills()
-        ensure_ai_dlc_skill()
     except Exception:
         pass
     raw = yaml.safe_load(GLOBAL_CONFIG_PATH.read_text()) or {}
@@ -312,3 +339,64 @@ def resolve_env(value: str) -> str:
         env_var = value[2:-1]
         return os.environ.get(env_var, "")
     return value
+
+
+CDH_AGENT_CONFIG_PATH = Path.home() / ".cdh" / "agent_config.yaml"
+
+
+def sync_agent_config() -> None:
+    """Read ``~/.cdh/agent_config.yaml`` and sync applicable params to ``onecode.config.yaml``.
+
+    Maps optimizer-evolved params to ``GlobalConfig`` fields:
+      - ``engine.onecode.max_iterations`` → ``agent.max_iterations``
+      - ``engine.onecode.temperature``    → ``agent.temperature``
+      - ``engine.onecode.plan_gate_mode`` → ``loops.verification.plan_gate_mode``
+      - ``platform.verification.policy``  → ``loops.verification.policy``
+      - ``platform.verification.gates``   → ``loops.verification.gates``
+
+    Silently no-ops if the agent config does not exist.
+    """
+    if not CDH_AGENT_CONFIG_PATH.exists():
+        return
+    try:
+        raw = yaml.safe_load(CDH_AGENT_CONFIG_PATH.read_text()) or {}
+    except Exception:
+        logger.warning("Failed to read %s", CDH_AGENT_CONFIG_PATH)
+        return
+
+    cfg = load_config()
+    changed = False
+
+    # Platform-level params → loops.verification
+    platform = raw.get("platform", {})
+    if "verification.policy" in platform:
+        cfg.loops.verification.policy = str(platform["verification.policy"])
+        changed = True
+    if "verification.gates" in platform:
+        gates = platform["verification.gates"]
+        if isinstance(gates, list):
+            cfg.loops.verification.gates = [str(g) for g in gates]
+            changed = True
+
+    # Engine-level params (onecode-specific)
+    engine = raw.get("engine", {})
+    onecode_params = engine.get("onecode", {})
+    if "max_iterations" in onecode_params:
+        val = int(onecode_params["max_iterations"])
+        if val >= 5:
+            cfg.agent.max_iterations = val
+            changed = True
+    if "temperature" in onecode_params:
+        val = float(onecode_params["temperature"])
+        if 0.0 <= val <= 2.0:
+            cfg.agent.temperature = val
+            changed = True
+    if "plan_gate_mode" in onecode_params:
+        val = str(onecode_params["plan_gate_mode"])
+        if val in ("strict", "adaptive", "relaxed"):
+            cfg.loops.verification.plan_gate_mode = val
+            changed = True
+
+    if changed:
+        save_config(cfg)
+        logger.info("Synced %s → onecode.config.yaml", CDH_AGENT_CONFIG_PATH)

@@ -72,28 +72,17 @@ def sandbox(monkeypatch, tmp_path):
 # init_dlc_project contract
 
 
-def test_init_dlc_project_raises_when_skill_missing(monkeypatch, tmp_path):
-    """When ai-dlc-skill cannot be located, init_dlc_project must raise
-    a RuntimeError instead of silently returning False (which left the
-    caller thinking the project was scaffolded)."""
+def test_init_dlc_project_always_succeeds(monkeypatch, tmp_path):
+    """init_dlc_project always succeeds — no external skill dependency."""
     from cdh import scaffold
 
-    monkeypatch.setattr(scaffold, "_detect_dlc_skill", lambda *_a, **_kw: False)
-
-    with pytest.raises(RuntimeError):
-        scaffold.init_dlc_project(tmp_path, "demo")
-
-    # nothing should have been written
-    assert not (tmp_path / "aidlc" / "project.yaml").exists()
-    assert not (tmp_path / ".cdh").exists()
+    assert scaffold.init_dlc_project(tmp_path, "demo") is True
+    assert (tmp_path / "aidlc" / "project.yaml").exists()
 
 
-def test_init_dlc_project_writes_metadata_when_skill_available(
-    monkeypatch, tmp_path
-):
+def test_init_dlc_project_writes_metadata(monkeypatch, tmp_path):
     from cdh import scaffold
 
-    monkeypatch.setattr(scaffold, "_detect_dlc_skill", lambda *_a, **_kw: True)
     assert scaffold.init_dlc_project(tmp_path, "demo") is True
     assert (tmp_path / "aidlc" / "project.yaml").exists()
     assert (tmp_path / "aidlc" / "requirements.md").exists()
@@ -127,10 +116,6 @@ def test_picker_cancel_aborts_init(sandbox, tmp_path, monkeypatch):
 def test_picker_empty_selection_still_initialises(sandbox, tmp_path, monkeypatch):
     """allow_empty=True for the Init picker means an empty list is a
     valid user choice, not a cancel."""
-    from cdh import scaffold
-
-    monkeypatch.setattr(scaffold, "_detect_dlc_skill", lambda *_a, **_kw: True)
-
     target = tmp_path / "empty_init"
     target.mkdir()
     projects_dir = sandbox / "projects"
@@ -145,37 +130,25 @@ def test_picker_empty_selection_still_initialises(sandbox, tmp_path, monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# _do_init_project: skill failure visible
+# _do_init_project: init always succeeds (no external skill dependency)
 
 
-def test_init_dlc_failure_surfaces(sandbox, tmp_path, monkeypatch):
-    """If init_dlc_project raises (skill missing), no .cdh/ should be
-    written and no widget mounted.  Previously the failure was silent
-    and the caller proceeded with CdhProjectLoader.init_project, leaving
-    a half-initialized project."""
+def test_init_always_succeeds(sandbox, tmp_path, monkeypatch):
+    """init_dlc_project no longer checks for external skills — always proceeds."""
     from onecode.agent import cdh_loader
-    from cdh import scaffold
 
-    monkeypatch.setattr(scaffold, "_detect_dlc_skill", lambda *_a, **_kw: False)
     init_project_mock = MagicMock()
     monkeypatch.setattr(
         cdh_loader.CdhProjectLoader, "init_project", staticmethod(init_project_mock)
     )
 
-    target = tmp_path / "fail_target"
+    target = tmp_path / "always_ok"
     target.mkdir()
-    projects_dir = sandbox / "projects"
 
     screen = _build_screen(sandbox)
     screen._do_init_project(target, [])
 
-    assert not (target / ".cdh").exists()
-    assert not (projects_dir / "fail_target.yaml").exists()
-    assert not screen.project_grid_select.mount.called
-    assert not init_project_mock.called
-
-    notify_msgs = [c.args[0] for c in screen.notify.call_args_list if c.args]
-    assert any("ai-dlc-skill" in m for m in notify_msgs)
+    assert (target / "aidlc" / "project.yaml").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -186,8 +159,6 @@ def test_add_component_file_not_found_caught(sandbox, tmp_path, monkeypatch):
     """add_component raises FileNotFoundError if project.yaml doesn't
     exist.  Previously this was uncaught and would crash the modal."""
     from cdh import scaffold
-
-    monkeypatch.setattr(scaffold, "_detect_dlc_skill", lambda *_a, **_kw: True)
 
     target = tmp_path / "fnf_target"
     target.mkdir()
@@ -215,10 +186,6 @@ def test_add_component_file_not_found_caught(sandbox, tmp_path, monkeypatch):
 def test_duplicate_project_name_aborts(sandbox, tmp_path, monkeypatch):
     """Re-init with the same name must NOT clobber the existing entry
     or crash with DuplicateIds."""
-    from cdh import scaffold
-
-    monkeypatch.setattr(scaffold, "_detect_dlc_skill", lambda *_a, **_kw: True)
-
     target = tmp_path / "dup_target"
     target.mkdir()
     projects_dir = sandbox / "projects"
@@ -244,10 +211,6 @@ def test_duplicate_project_name_aborts(sandbox, tmp_path, monkeypatch):
 
 
 def test_do_init_project_creates_files(sandbox, tmp_path, monkeypatch):
-    from cdh import scaffold
-
-    monkeypatch.setattr(scaffold, "_detect_dlc_skill", lambda *_a, **_kw: True)
-
     target = tmp_path / "happy_path"
     target.mkdir()
     projects_dir = sandbox / "projects"
@@ -268,10 +231,6 @@ def test_do_init_project_creates_files(sandbox, tmp_path, monkeypatch):
 def test_do_init_project_with_components_creates_apps_dirs(
     sandbox, tmp_path, monkeypatch
 ):
-    from cdh import scaffold
-
-    monkeypatch.setattr(scaffold, "_detect_dlc_skill", lambda *_a, **_kw: True)
-
     target = tmp_path / "with_components"
     target.mkdir()
     projects_dir = sandbox / "projects"

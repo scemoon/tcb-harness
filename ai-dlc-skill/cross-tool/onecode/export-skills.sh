@@ -3,7 +3,8 @@
 set -euo pipefail
 
 PROJECT_ROOT="${1:-$PWD}"
-SKILL_DIR="${2:-${AI_DLC_SKILL_DIR:-$HOME/.cdh/skills/ai-dlc-skill}}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SKILL_DIR="${2:-${AI_DLC_SKILL_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}}"
 
 if [ ! -d "$SKILL_DIR" ]; then
   echo "  ✗ ai-dlc-skill not found at $SKILL_DIR" >&2

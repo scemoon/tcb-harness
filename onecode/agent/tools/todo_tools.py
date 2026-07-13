@@ -34,6 +34,7 @@ class TodoCreateTool(Tool):
         )
 
     def run(self, tool_input: dict[str, Any]) -> ToolResult:
+        self._tm.clear_completed()
         todo = self._tm.create_todo(
             subject=tool_input.get("subject", ""),
             description=tool_input.get("description", ""),

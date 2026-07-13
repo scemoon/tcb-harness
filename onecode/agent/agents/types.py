@@ -53,6 +53,7 @@ class AgentConfig:
     permission_grep: AgentPermission = AgentPermission.ALLOW
     permission_list: AgentPermission = AgentPermission.ALLOW
     permission_todowrite: AgentPermission = AgentPermission.ALLOW
+    permission_todoread: AgentPermission = AgentPermission.ALLOW
     tools: list[str] = field(default_factory=list)
     disallowed_tools: list[str] = field(default_factory=list)
     prompt_file: str = ""
@@ -73,6 +74,7 @@ class AgentConfig:
             "grep": self.permission_grep,
             "list": self.permission_list,
             "todowrite": self.permission_todowrite,
+            "todoread": self.permission_todoread,
             "external_directory": self.permission_external_directory,
             "doom_loop": self.permission_doom_loop,
         }
@@ -149,6 +151,7 @@ class PlanAgent(AgentConfig):
             permission_read=AgentPermission.ALLOW,
             permission_webfetch=AgentPermission.ALLOW,
             permission_websearch=AgentPermission.ALLOW,
+            permission_todowrite=AgentPermission.DENY,
             max_turns=20,
             temperature=0.2,
             tools=[],
@@ -546,10 +549,10 @@ at the start of `<thinking>`. No separate "Observation" step is needed.
 - Every task = a `TodoCreate`. No work without a todo.
 - `Spawn` = execution delegation for complex todos only.
 
-### Plan Hygiene
-- All current todos are done? → `TodoClear` to start a fresh plan for the next batch.
-- Starting unrelated work? → `TodoClear` first, then create new todos.
-- This keeps the plan focused and prevents unbounded growth.
+### Plan Hygiene (strict)
+- **Every new task batch MUST start with `TodoClear`** to wipe stale todos, even if previous ones are completed.
+- If existing todos don't cover the current request → `TodoClear` then `TodoCreate`.
+- Never append new todos to an old plan — it causes unbounded growth and loses focus.
 """
 
 PLAN_GATE_HARD = """

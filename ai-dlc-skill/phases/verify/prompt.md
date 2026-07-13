@@ -38,6 +38,7 @@
 - `aidlc/openspec/changes/{id}/contract-diff.md`（填充）
 
 ## 约束
+- 开始前先调用 `TodoClear` 清除可能遗留的 todos，确保从空白计划开始
 - 遵守 `rules.md` 中的 VRF-001 到 VRF-006
 - 遵守 INT-001 到 INT-006
 - 遵守 STK-001 到 STK-006

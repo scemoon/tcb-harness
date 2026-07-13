@@ -286,6 +286,8 @@ class StreamEventType(str, Enum):
     # style as main-conversation tools) instead of a plain "[Tool: X]" line.
     SUBAGENT_TOOL_CALL = "subagent_tool_call"
     SUBAGENT_TOOL_RESULT = "subagent_tool_result"
+    VERIFICATION_PASSED = "verification_passed"
+    VERIFICATION_FAILED = "verification_failed"
 
 
 @dataclass
@@ -337,6 +339,9 @@ class StreamEvent:
     # category/args). SUBAGENT_TOOL_RESULT reuses tool_id/result_* and needs
     # tool_name for display when no prior TOOL_CALL_COMPLETE was captured.
     subagent_tool_phase: str = ""
+    # VERIFICATION fields
+    verification_passed: bool = False
+    verification_failed_gates: list[str] = field(default_factory=list)
 
     @classmethod
     def text_delta(cls, text: str) -> "StreamEvent":

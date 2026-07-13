@@ -88,12 +88,13 @@ class TestPermissionStore:
         store.apply_to(agent)
         assert agent.permission_edit == AgentPermission.ALLOW
 
-        # Simulate mode switch: create a new agent
+        # Simulate mode switch: create a new agent with hard DENY
         agent2 = PlanAgent()
         assert agent2.permission_edit == AgentPermission.DENY  # PlanAgent defaults to DENY
 
+        # apply_to must NOT override agent's hard DENY — that's the bug fix
         store.apply_to(agent2)
-        assert agent2.permission_edit == AgentPermission.ALLOW  # restored!
+        assert agent2.permission_edit == AgentPermission.DENY  # DENY preserved!
 
 
 # ── _check_tool_permission integration tests ───────────────────────────────

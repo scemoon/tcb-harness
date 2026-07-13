@@ -668,11 +668,16 @@ class Provider(ABC):
             return AuthError(
                 "authentication failed", status_code=status_code, body=snippet,
             )
-        if status_code == 400 and "context" in snippet.lower() and "length" in snippet.lower():
+        if status_code == 400 and (
+            ("context" in snippet.lower() and ("length" in snippet.lower() or "window" in snippet.lower()))
+            or "context window" in snippet.lower()
+            or ("exceed" in snippet.lower() and "limit" in snippet.lower())
+            or "(2013)" in snippet
+        ):
             return ContextLengthError(
                 "context length exceeded", status_code=status_code, body=snippet,
             )
-        if 500 <= status_code < 600:
+        if status_code == 529 or (500 <= status_code < 600):
             msg = f"upstream {status_code}: {body_excerpt}" if body_excerpt else f"upstream {status_code}"
             return TransientProviderError(
                 msg, status_code=status_code, body=snippet,

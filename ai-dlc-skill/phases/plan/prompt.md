@@ -33,6 +33,7 @@
 - `aidlc/openspec/changes/{id}/contract-diff.md`（占位）
 
 ## 约束
+- 开始前先调用 `TodoClear` 清除可能遗留的 todos，确保从空白计划开始
 - 遵守 `rules.md` 中的 PLN-001 到 PLN-004
 - 遵守 STK-001, STK-002（affects 声明 + cross-component 依赖）
 - 完成前必须通过 Human Gate 审查

@@ -39,10 +39,17 @@ class PermissionStore:
         """Apply all recorded overrides to an AgentConfig instance.
 
         Call this after ``set_agent()`` to restore the user's choices.
+
+        Hard-DENY settings on the agent (e.g. PlanAgent.permission_edit=DENY)
+        are never overridden — they represent an intentional mode-level
+        restriction that user overrides from another mode must not bypass.
         """
         for perm_key, perm in self._overrides.items():
             attr_name = f"permission_{perm_key}"
             if hasattr(agent, attr_name):
+                current = getattr(agent, attr_name)
+                if current == AgentPermission.DENY:
+                    continue
                 setattr(agent, attr_name, perm)
 
     def to_dict(self) -> dict[str, str]:

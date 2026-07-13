@@ -9,9 +9,9 @@ from textual.reactive import var
 from textual.widget import Widget
 from textual.widgets import Button, Label, Static
 
-from onecode.config import load_config, save_config
-from onecode.agent.cdh_loader import CdhProjectLoader
-from onecode.config_screen import EditFieldScreen
+from cdh.config import write_active_project
+from cdh.project_loader import CdhProjectLoader
+from tui.widgets.edit_field import EditFieldScreen
 
 import yaml
 
@@ -244,10 +244,7 @@ class ProjectsApp(App):
         CdhProjectLoader.init_project(ws, name)
         proj_data = {"name": name, "path": str(ws), "description": ""}
         proj_file.write_text(yaml.dump(proj_data))
-        cfg = load_config()
-        cfg.current_project = name
-        cfg.current_project_path = str(ws)
-        save_config(cfg)
+        write_active_project(name, str(ws))
         self.notify(f"Created project '{name}' at {ws}")
         self._refresh()
 
@@ -307,10 +304,7 @@ class ProjectsApp(App):
             if pf.exists():
                 proj_data = yaml.safe_load(pf.read_text()) if ext in ["yaml", "yml"] else __import__("json").loads(pf.read_text())
                 project_path = proj_data.get("path", ".")
-                cfg = load_config()
-                cfg.current_project = name
-                cfg.current_project_path = project_path
-                save_config(cfg)
+                write_active_project(name, project_path)
                 self.notify(f"Loaded project '{name}' ({project_path})")
                 self.exit("loaded")
                 return

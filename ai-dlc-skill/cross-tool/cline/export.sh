@@ -25,7 +25,7 @@ INT aidlc/contracts/ + aidlc/packages/shared/
 - Cross-stack e2e mandatory for multi-component changes
 
 ## Reference
-Full skill: .opencode/skills/ai-dlc-skill/
+Full skill: ai-dlc-skill/
 EOF
 
 echo "  ✓ $PROJECT_ROOT/.clinerules"

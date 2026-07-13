@@ -466,6 +466,19 @@ def test_classify_http_error_5xx_includes_body():
     assert "service unavailable" in str(err)
 
 
+def test_classify_http_error_529_is_transient():
+    """529 (overloaded/server busy) must be treated as a retryable
+    TransientProviderError, just like any 5xx."""
+    err = Provider.classify_http_error(
+        529,
+        '{"error":{"type":"overloaded_error",'
+        '"message":"server busy"}}',
+    )
+    assert isinstance(err, TransientProviderError)
+    assert "529" in str(err)
+    assert "overloaded" in str(err).lower()
+
+
 def test_classify_http_error_empty_body_keeps_old_message():
     """No body → no spurious colon in the message."""
     err = Provider.classify_http_error(400, "")

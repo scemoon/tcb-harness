@@ -324,21 +324,17 @@ Skills are markdown-based instruction sets with YAML frontmatter, injected into 
 
 ### Platform Discovery Architecture
 
-CDH uses a **layered discovery** approach: the cdh platform owns the shared skill pool, while each engine discovers its own skills independently.
+CDH uses a **layered discovery** approach: each engine discovers its own skills independently.
 
 ```
 ai-dlc-skill/SKILL.md  ←  single source of truth (repository root)
          │
-         ├── cdh bootstrap → ~/.cdh/skills/ai-dlc-skill/   (cdh platform pool)
-         ├── cross-tool/opencode/export.sh                  (symlink to opencode's dir)
-         ├── cross-tool/claude/export.sh                    (symlink to Claude Code's dir)
-         └── cross-tool/cursor/export.sh                    (symlink to Cursor's dir)
+         ├── cross-tool/opencode/export.sh
+         ├── cross-tool/claude/export.sh
+         └── cross-tool/cursor/export.sh
 ```
 
 ### Discovery Paths
-
-**cdh platform** (shared pool, injected to all engines at runtime):
-- `~/.cdh/skills/<name>/SKILL.md` — Platform-level skills installed by `cdh skill install`
 
 **Engine-specific** (managed by each engine independently):
 - `~/.onecode/skills/<name>/SKILL.md` — onecode user skills (engine-private)
@@ -366,7 +362,7 @@ The **adaptive flow** (`core/adaptive-flow.md`) automatically selects phases bas
 - L4 full-stack + deploy → Understand → Plan → Verify → Deliver
 - L5 architecture refactoring → Plan → Verify
 
-When you run `cdh`, cdh platform bootstrap automatically installs and syncs ai-dlc-skill to `~/.cdh/skills/ai-dlc-skill/` and injects it into the active engine (onecode / opencode / claude / cursor …) — no manual activation needed. Each engine may also discover the skill independently via its own `export.sh` in `ai-dlc-skill/cross-tool/`.
+The `ai-dlc-skill` is available as a skill in the repository at `ai-dlc-skill/`. Each engine may discover it via its own `export.sh` in `ai-dlc-skill/cross-tool/`.
 
 ### Skill Frontmatter
 

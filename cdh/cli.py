@@ -5,15 +5,14 @@ import click
 
 from cdh.scaffold import (
     COMPONENTS,
-    CROSS_CUTTING,
     add_component,
-    add_cross_cutting,
     init_dlc_project,
     scaffold_dlc_project,
+    check_dlc_project,
 )
+from cdh.cli_logging import setup_logging
+from cdh.config import write_active_project
 from onecode.cli import cli as onecode_cli
-from onecode.cli import setup_logging
-from onecode.config import ensure_dirs, load_config, save_config
 from onecode import __version__ as _VERSION
 
 
@@ -25,7 +24,7 @@ Usage:
   cdh                              Launch TUI (agent store)
   cdh tui                          Launch TUI (agent store)
   cdh onecode <sub>                onecode CLI surface (config / codebase / skill / mcp / help)
-  cdh project                      Project management
+  cdh aidc                         AIDC project management
   cdh session list|load            Session management
   cdh uninstall                    Remove ~/.cdh/ global state
   cdh version                      Show version information
@@ -59,9 +58,7 @@ def cli(ctx):
     `cdh onecode config`, `cdh onecode codebase`, `cdh onecode skill`.
     """
     if ctx.invoked_subcommand is None:
-        ensure_dirs()
-        cfg = load_config()
-        setup_logging(cfg.log_level)
+        setup_logging("INFO")
         from tui.app import A2TUIApp
         A2TUIApp().run()
 
@@ -283,7 +280,7 @@ if _onecode_config_group is not None:
 # - `cdh onecode codebase <sub>` is the same as the old `cdh codebase <sub>`.
 
 
-# --- project command ---
+# --- aidc (AIDC project) command ---
 
 def _get_projects():
     projects_dir = _CDH_DIR / "projects"
@@ -302,34 +299,13 @@ def _load_project_by_name(name: str) -> Optional[tuple]:
     return None
 
 
-def _interactive_select_project():
-    project_files = _get_projects()
-    if not project_files:
-        return None
-    click.echo("Projects:")
-    for i, pf in enumerate(project_files, 1):
-        click.echo(f"  {i}) {pf.stem}")
-    choice = click.prompt("Select project", type=str, default="").strip().lower()
-    try:
-        idx = int(choice) - 1
-        if 0 <= idx < len(project_files):
-            return ("load", project_files[idx].stem)
-    except ValueError:
-        pass
-    return None
-
-
 def _parse_component_selection(text: str, valid_ids: list[str]) -> list[str]:
-    """Parse '1,2,5' / '1-3' / 'all' / 'web,backend' / '' into a list of ids.
-
-    Accepts either numeric tokens (positional, 1-based) or raw id names.
-    Returns an empty list if no valid tokens are found.
-    """
+    valid_ids = list(valid_ids)
     text = text.strip().lower()
     if not text:
         return []
     if text in ("all", "*"):
-        return list(valid_ids)
+        return valid_ids
     tokens = [t.strip() for t in text.replace(" ", "").split(",") if t.strip()]
     selected: list[str] = []
     for tok in tokens:
@@ -363,18 +339,6 @@ def _prompt_components(
     specs: tuple,
     allow_empty: bool = False,
 ) -> list[str]:
-    """Interactively prompt the user to choose from a list of specs.
-
-    Args:
-        spec_label: title describing what is being selected
-                    (e.g. "application components").
-        specs: a tuple of ComponentSpec or CrossCutSpec.
-        allow_empty: if False, the user must select at least one and
-                     the prompt will reject empty input.
-
-    Returns a list of selected spec ids. Raises click.Abort if the user
-    fails to provide a valid selection after the retry.
-    """
     valid_ids = [s.id for s in specs]
     click.echo(f"Select {spec_label} for the project:")
     for i, s in enumerate(specs, 1):
@@ -406,11 +370,6 @@ def _prompt_components(
 
 
 def _resolve_components_flag(components: Optional[str]) -> list[str]:
-    """Resolve a --components flag value to a list of component ids.
-
-    Empty/None means the caller will run the interactive prompt.
-    'all' expands to every component id.
-    """
     if not components:
         return []
     valid_ids = [c.id for c in COMPONENTS]
@@ -423,57 +382,25 @@ def _resolve_components_flag(components: Optional[str]) -> list[str]:
     return selected
 
 
-def _load_project_record(name: str) -> Optional[dict]:
-    """Read a project record from ~/.cdh/projects/{name}.{yaml,yml,json}."""
-    import yaml as _yaml
-    import json as _json
-    projects_dir = _CDH_DIR / "projects"
-    for ext in ("yaml", "yml", "json"):
-        pf = projects_dir / f"{name}.{ext}"
-        if pf.exists():
-            text = pf.read_text(encoding="utf-8")
-            if ext in ("yaml", "yml"):
-                return _yaml.safe_load(text) or {}
-            return _json.loads(text)
-    return None
-
-
-@cli.command(short_help="Project management (TUI)")
-@click.argument("action", type=click.Choice(["list", "show", "new", "init", "load", "select", "add-component", "add-cross-cutting"]), default="select")
+@cli.command("aidc", short_help="AIDC project management")
+@click.argument("action", type=click.Choice(["new", "init", "check", "list", "load"]))
 @click.argument("name", required=False)
 @click.argument("path", required=False, default=".")
 @click.option("--components", default=None, help="Comma-separated component ids (e.g. 'web,backend') or 'all'. Skips the interactive prompt.")
-@click.option("--component", "component_id", default=None, help="Component id for add-component (e.g. 'native').")
-@click.option("--id", "cross_id", default=None, help="Cross-cutting id for add-cross-cutting (e.g. 'contracts').")
-def project(action, name, path, components, component_id, cross_id):
-    """Manage CDH projects.
-
-    \b
-    Without arguments, opens the project management TUI.
-    Use subcommands for quick CLI operations.
+def aidc(action, name, path, components):
+    """Manage AIDC projects.
 
     \b
     Actions:
-      select                          Open project management TUI (default)
-      list                            List all projects
-      show <name>                     Show project details
-      new <name> [path]               Create a new project (interactive component selection)
-      init [path]                     Initialize .cdh in an existing directory (interactive, allows empty)
-      load <name>                     Load a project (set as current)
-      add-component <name>            Add an application component to an existing project
-      add-cross-cutting <name>        Add a cross-cutting item to an existing project
+      new <name> [path]    Create a new AIDC project (interactive component selection)
+      init [path]          Initialize .cdh in an existing directory as an AIDC project
+      check [path]         Check whether a directory is a valid AIDC project
+      list                 List all registered AIDC projects
+      load <name>          Load a registered AIDC project as the current project
     """
     import yaml
     projects_dir = _CDH_DIR / "projects"
     projects_dir.mkdir(parents=True, exist_ok=True)
-
-    if action == "select":
-        from tui.screens.projects_app import main as projects_main
-        result = projects_main()
-        if result == "loaded":
-            from tui.app import A2TUIApp
-            A2TUIApp().run()
-        return
 
     if action == "list":
         project_files = sorted(list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json")))
@@ -485,20 +412,8 @@ def project(action, name, path, components, component_id, cross_id):
             click.echo(f"  {pf.stem}")
         return
 
-    if action == "show":
-        if not name:
-            click.echo("Usage: cdh project show <name>")
-            return
-        for ext in ["yaml", "yml", "json"]:
-            pf = projects_dir / f"{name}.{ext}"
-            if pf.exists():
-                click.echo(pf.read_text())
-                return
-        click.echo(f"Project '{name}' not found.")
-        return
-
     if action == "new":
-        from onecode.agent.cdh_loader import CdhProjectLoader
+        from cdh.project_loader import CdhProjectLoader
         if not name:
             name = click.prompt("Project name", default="").strip()
         if not name:
@@ -523,18 +438,15 @@ def project(action, name, path, components, component_id, cross_id):
         CdhProjectLoader.init_project(ws, name)
         proj_data = {"name": name, "path": str(ws), "description": ""}
         project_file.write_text(yaml.dump(proj_data))
-        cfg = load_config()
-        cfg.current_project = name
-        cfg.current_project_path = str(ws)
-        save_config(cfg)
+        write_active_project(name, str(ws))
         click.echo(
-            f"Created project '{name}' at {ws} "
+            f"Created AIDC project '{name}' at {ws} "
             f"(components: {', '.join(selected_components)})"
         )
         return
 
     if action == "init":
-        from onecode.agent.cdh_loader import CdhProjectLoader
+        from cdh.project_loader import CdhProjectLoader
         target = Path(name or ".").expanduser().resolve()
         project_name = target.name
         proj_file = projects_dir / f"{project_name}.yaml"
@@ -565,70 +477,41 @@ def project(action, name, path, components, component_id, cross_id):
             if selected_components
             else ""
         )
-        click.echo(f"Initialized .cdh in {target}{suffix}")
+        click.echo(f"Initialized AIDC project in {target}{suffix}")
         return
 
-    if action == "add-component":
-        if not name:
-            click.echo("Usage: cdh project add-component <name> --component <id>")
-            return
-        if not component_id:
-            click.echo("Usage: cdh project add-component <name> --component <id>")
-            click.echo(f"Valid ids: {', '.join(c.id for c in COMPONENTS)}")
-            return
-        record = _load_project_record(name)
-        if record is None:
-            click.echo(f"Project '{name}' not found.")
-            return
-        ws = Path(record.get("path", ".")).expanduser().resolve()
-        try:
-            added = add_component(ws, component_id)
-        except (ValueError, FileNotFoundError) as e:
-            click.echo(f"Error: {str(e) or type(e).__name__}")
-            raise click.Abort()
-        if added:
-            click.echo(f"Added component '{component_id}' to '{name}'.")
+    if action == "check":
+        from cdh.scaffold import check_dlc_project
+        target = Path(name or ".").expanduser().resolve()
+        result = check_dlc_project(target)
+        if result["valid"]:
+            click.echo(f"\u2713 Valid AIDC project: {result['name']}")
+            click.echo(f"  Location: {result['path']}")
+            if result["components"]:
+                click.echo(f"  Components: {', '.join(result['components'])}")
+            else:
+                click.echo("  Components: (none)")
+            click.echo(
+                f"  CDH state: \u2713 initialized" if result["has_cdh"]
+                else "  CDH state: \u2717 not initialized"
+            )
         else:
-            click.echo(f"Component '{component_id}' already present in '{name}'.")
-        return
-
-    if action == "add-cross-cutting":
-        if not name:
-            click.echo("Usage: cdh project add-cross-cutting <name> --id <id>")
-            return
-        if not cross_id:
-            click.echo("Usage: cdh project add-cross-cutting <name> --id <id>")
-            click.echo(f"Valid ids: {', '.join(c.id for c in CROSS_CUTTING)}")
-            return
-        record = _load_project_record(name)
-        if record is None:
-            click.echo(f"Project '{name}' not found.")
-            return
-        ws = Path(record.get("path", ".")).expanduser().resolve()
-        try:
-            added = add_cross_cutting(ws, cross_id)
-        except (ValueError, FileNotFoundError) as e:
-            click.echo(f"Error: {str(e) or type(e).__name__}")
-            raise click.Abort()
-        if added:
-            click.echo(f"Added cross-cutting '{cross_id}' to '{name}'.")
-        else:
-            click.echo(f"Cross-cutting '{cross_id}' already present in '{name}'.")
+            click.echo(f"\u2717 Not a valid AIDC project: {target}")
+        for s in result["suggestions"]:
+            click.echo(f"  \u2022 {s}")
         return
 
     if action == "load":
         if not name:
-            click.echo("Usage: cdh project load <name>")
+            click.echo("Usage: cdh aidc load <name>")
             return
         for ext in ["yaml", "yml", "json"]:
             pf = projects_dir / f"{name}.{ext}"
             if pf.exists():
                 proj_data = yaml.safe_load(pf.read_text()) if ext in ["yaml", "yml"] else __import__("json").loads(pf.read_text())
-                cfg = load_config()
-                cfg.current_project = name
-                cfg.current_project_path = proj_data.get("path", ".")
-                save_config(cfg)
-                click.echo(f"Loaded project '{name}' (path: {cfg.current_project_path})")
+                project_path = proj_data.get("path", ".")
+                write_active_project(name, project_path)
+                click.echo(f"Loaded project '{name}' (path: {project_path})")
                 return
         click.echo(f"Project '{name}' not found.")
 
@@ -703,9 +586,7 @@ def tui(ctx, project_dir):
     By default opens the agent store, showing your configured launcher
     agents. Pick an agent from the store to launch it.
     """
-    ensure_dirs()
-    cfg = load_config()
-    setup_logging(cfg.log_level)
+    setup_logging("INFO")
 
     ws = Path(project_dir).expanduser().resolve()
 

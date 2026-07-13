@@ -23,7 +23,7 @@ class SettingsInput(Input):
 class SettingsScreen(ModalScreen):
     BINDINGS = [
         ("escape", "dismiss", "Dismiss settings"),
-        ("ctrl+s", "screen.focus('#search')", "Focus search"),
+        ("ctrl+s", "screen.focus('#search')", "Search"),
     ]
     CSS_PATH = "settings.tcss"
 

@@ -3,7 +3,7 @@
 This is a ONE-TIME migration triggered at first startup after upgrade.
 It only moves directories owned by onecode (logs, traces, memory,
 snapshots, mcps, models, onecode.config.yaml). cdh platform directories
-(skills, projects, state, sessions) are left untouched.  Session JSON is owned
+(projects, state, sessions) are left untouched.  Session JSON is owned
 by the cdh platform layer (B mapping mode), not by individual engines.
 """
 
@@ -29,7 +29,7 @@ _ONECODE_PRIVATE_DIRS = {
 }
 
 # cdh platform directories — NEVER touch
-_CDH_PLATFORM_DIRS = {"skills", "projects", "state"}
+_CDH_PLATFORM_DIRS = {"projects", "state"}
 
 # Dotfiles that belong to onecode (at the ~/.cdh/ root level)
 _ONECODE_DOTFILES = {"onecode.config.yaml"}

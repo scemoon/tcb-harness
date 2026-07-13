@@ -25,6 +25,7 @@ from tui.acp import protocol
 from tui.acp import api
 from tui.acp.api import API
 from tui.acp import messages
+from tui.acp.event_tap import AcpEventTap
 from tui.acp.prompt import build as build_prompt
 from tui import messages as tui_messages
 from tui.db import DB
@@ -88,6 +89,8 @@ class Agent(AgentBase):
 
         self._terminal_count: int = 0
         self.session_load_info: dict = {}
+
+        self.event_tap = AcpEventTap()
 
     @property
     def command(self) -> str | None:
@@ -315,8 +318,24 @@ class Agent(AgentBase):
                     error=rest.get("error", ""),
                 ))
 
+        self.event_tap.on_session_update(update)
+
         if status_line is not None:
             self.post_message(messages.UpdateStatusLine(status_line))
+
+    @jsonrpc.expose("session/event")
+    def rpc_session_event(
+        self,
+        sessionId: str,
+        event: dict,
+        metrics: dict | None = None,
+        _meta: dict[str, Any] | None = None,
+    ):
+        """Handle structured session/event notification (onecode enhancement).
+
+        See docs/loop.md §9.2 for protocol spec.
+        """
+        self.event_tap.on_session_event(event)
 
     @jsonrpc.expose("session/request_permission")
     async def rpc_request_permission(
@@ -707,7 +726,7 @@ class Agent(AgentBase):
         if self.session_id is None:
             return
         try:
-            from onecode.agent.cdh_loader import CdhProjectLoader
+            from cdh.project_loader import CdhProjectLoader
 
             cdh_dir = CdhProjectLoader.find_cdh_dir(self.project_root_path)
             if cdh_dir is None:
@@ -961,7 +980,7 @@ class Agent(AgentBase):
         db = DB()
         await db.session_update_title(self.session_pk, name)
         if self.session_id:
-            from onecode.agent.session import AgentSession
+            from cdh.session_store import AgentSession
             session = AgentSession(self.session_id)
             if session.load():
                 session.name = name

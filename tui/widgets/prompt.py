@@ -26,6 +26,7 @@ from tui import messages
 from tui.widgets.highlighted_textarea import HighlightedTextArea
 from tui.widgets.condensed_path import CondensedPath
 from tui.widgets.path_search import PathSearch
+from tui.widgets.pending_prompts import PendingPrompts
 from tui.widgets.plan import Plan
 from tui.answer import Answer
 from tui.widgets.question import Ask, Question
@@ -109,19 +110,21 @@ See on-screen instructions for details.
             key_display="⏎",
             priority=True,
             tooltip="Send the prompt to the agent",
+            show=False,
         ),
         Binding(
-            "ctrl+j,shift+enter",
+            "alt+enter,shift+enter",
             "newline",
             "Line",
-            key_display="⇧+⏎",
+            key_display="⌥+⏎",
             tooltip="Insert a new line character",
+            show=False,
         ),
         Binding(
-            "ctrl+j,shift+enter",
+            "alt+enter,shift+enter",
             "multiline_submit",
             "Send",
-            key_display="⇧+⏎",
+            key_display="⌥+⏎",
             tooltip="Send the prompt to the agent",
         ),
         Binding(
@@ -324,7 +327,7 @@ See on-screen instructions for details.
 
     async def action_tab_complete(self) -> None:
         if not self.shell_mode:
-            return
+            raise SkipAction()
 
         import shlex
 
@@ -462,6 +465,7 @@ class Prompt(containers.VerticalGroup):
     current_mode: var[Mode | None] = var(None)
     modes: var[dict[str, Mode] | None] = var(None)
     status: var[str] = var("")
+    pending_prompts: var[list[str]] = var([])
 
     app = getters.app(A2TUIApp)
 
@@ -753,6 +757,7 @@ class Prompt(containers.VerticalGroup):
     def compose(self) -> ComposeResult:
         yield PathSearch(self.project_path).data_bind(root=Prompt.project_path)
         yield SlashComplete().data_bind(slash_commands=Prompt.slash_commands)
+        yield PendingPrompts().data_bind(_prompts=Prompt.pending_prompts)
         with PromptContainer(id="prompt-container"):
             yield Question()
             with containers.HorizontalGroup(id="text-prompt"):

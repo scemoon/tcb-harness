@@ -60,8 +60,9 @@ See `core/adaptive-flow.md` for complexity assessment.
 
 1. Analyze intent → determine complexity (L1-L5)
 2. Select phases to execute
-3. Delegate each phase via `Spawn(agent_type="general", prompt=...)` using the phase's `prompt.md`
-4. Collect results, enforce gates, iterate or advance
+3. Call `TodoClear` to reset the plan before delegating each phase
+4. Delegate each phase via `Spawn(agent_type="general", prompt=...)` using the phase's `prompt.md`
+5. Collect results, enforce gates, iterate or advance
 
 ```
 

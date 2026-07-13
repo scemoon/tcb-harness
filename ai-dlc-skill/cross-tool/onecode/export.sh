@@ -4,12 +4,12 @@ set -euo pipefail
 
 # Project root: first arg or current working directory
 PROJECT_ROOT="${1:-$PWD}"
-# Skill dir: CDH platform skill pool or AI_DLC_SKILL_DIR env var
-SKILL_DIR="${AI_DLC_SKILL_DIR:-$HOME/.cdh/skills/ai-dlc-skill}"
+# Skill dir: resolve relative to script location, or AI_DLC_SKILL_DIR env var
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SKILL_DIR="${AI_DLC_SKILL_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
 if [ ! -d "$SKILL_DIR" ]; then
   echo "  ✗ ai-dlc-skill not found at $SKILL_DIR" >&2
-  echo "  Run: cdh skill install ai-dlc-skill" >&2
   exit 1
 fi
 

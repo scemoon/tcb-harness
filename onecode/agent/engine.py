@@ -17,7 +17,7 @@ from onecode.models.provider import ContentBlockType, ProviderRegistry
 
 from onecode.agent.session import AgentSession
 from onecode.memory import AgentMemory, MemoryLayer
-from onecode.models.errors import safe_error_msg
+from onecode.models.errors import ContextLengthError, TransientProviderError, safe_error_msg
 from onecode.models.messages import StreamEvent, StreamEventType
 
 logger = logging.getLogger("onecode.agent.engine")
@@ -414,6 +414,14 @@ class TodoManager:
         self._id_counter = 0
         self._mark_dirty()
 
+    def clear_completed(self) -> None:
+        completed_ids = [tid for tid in self._order if tid in self._todos and self._todos[tid].get("status") == "completed"]
+        for tid in completed_ids:
+            self._todos.pop(tid, None)
+            self._order.remove(tid)
+        if completed_ids:
+            self._mark_dirty()
+
     # ── Serialization ──
 
     def to_dict(self) -> dict:
@@ -502,6 +510,8 @@ class AgentEngine:
         self._hooks = HookManager()
         self._todo_manager = TodoManager(on_change=self._on_todo_change)
         self._plan_dirty: bool = False
+        # Plan mode denial counter — reset per session
+        self._plan_denial_count: int = 0
         # Cache of the last plan snapshot that was emitted to the TUI.  Used
         # by ``_emit_plan_update`` to dedupe redundant emits when the todos
         # have not actually changed between turns.  The first emit of a
@@ -517,6 +527,26 @@ class AgentEngine:
         self._mcp = MCPManager()
         self._cron_scheduler = CronScheduler()
         self._lsp_tool = LSPTool()
+
+        # Loop system (L2 Verification + L3 Event)
+        from onecode.config import load_config
+        _cfg = load_config()
+        self._verification_loop: Optional["VerificationLoop"] = None  # noqa: F821
+        self._event_bridge: Optional["EventBridge"] = None  # noqa: F821
+        if _cfg.loops.verification.enabled:
+            from onecode.verification import VerificationLoop
+            from onecode.verification.gates import LintGate, TypeGate, TestGate
+            self._verification_loop = VerificationLoop(policy=_cfg.loops.verification.policy)
+            self._verification_loop.activate()
+            if "lint" in _cfg.loops.verification.gates:
+                self._verification_loop.register_gate(LintGate())
+            if "type" in _cfg.loops.verification.gates:
+                self._verification_loop.register_gate(TypeGate())
+            if "test" in _cfg.loops.verification.gates:
+                self._verification_loop.register_gate(TestGate())
+        if _cfg.loops.event.enabled:
+            from onecode.agent.event_bridge import EventBridge
+            self._event_bridge = EventBridge(bus=None)
         app_config = getattr(app, 'config', None)
         self._config_tool_read = ConfigReadTool(app_config) if app_config else None
         self._config_tool_write = ConfigWriteTool(app_config) if app_config else None
@@ -663,6 +693,12 @@ class AgentEngine:
         from onecode.codebase.tools import CodebaseSearchTool
         registry.register(CodebaseSearchTool(lambda: self._codebase_engine))
         return registry
+
+    def _is_plan_mode(self) -> bool:
+        from onecode.agent.agents.types import AgentPermission
+        return (self.current_agent is not None
+                and self.current_agent.permission_edit == AgentPermission.DENY
+                and self.current_agent.permission_bash == AgentPermission.DENY)
 
     def _resolve_plan_gate_mode(self) -> str:
         """Determine plan gate strictness based on current agent type.
@@ -1069,7 +1105,7 @@ class AgentEngine:
 
         self.context.add_user(user_input)
 
-        self.context.config.model = self.app.current_model
+        self.context.set_model(self.app.current_model)
         if self.context.should_compact():
             level = self.context.compact()
             if level not in ("none",):
@@ -1143,12 +1179,12 @@ class AgentEngine:
         "Skill": "skill",
         "codebase_search": "read",
         "TodoCreate": "todowrite",
-        "TodoGet": "todowrite",
-        "TodoList": "todowrite",
         "TodoUpdate": "todowrite",
-        "TodoOutput": "todowrite",
         "TodoStop": "todowrite",
         "TodoClear": "todowrite",
+        "TodoGet": "todoread",
+        "TodoList": "todoread",
+        "TodoOutput": "todoread",
     }
 
     def _check_tool_permission(self, name: str, inp: dict) -> str | None:
@@ -1162,9 +1198,20 @@ class AgentEngine:
         if not self.current_agent.tool_allowed(name):
             return json.dumps({"success": False, "error": f"{name} denied (disallowed for {self.current_agent.name})"})
         perm_key = self._TOOL_NAME_TO_PERM_KEY.get(name)
-        if perm_key is None:
-            return None
         tools_config = self.current_agent.get_tools_config()
+        if perm_key is None:
+            # Fallback: if tool is not in the explicit mapping, check whether
+            # it is read-only. If not, treat it as an edit-tool and use the
+            # edit permission. This catches tools like ConfigWrite, CronCreate,
+            # Worktree, MCPTool, etc. that would otherwise bypass plan mode.
+            spec = self._tool_registry.get(name)
+            if spec and not spec.spec().is_read_only:
+                perm = tools_config.get("edit", AgentPermission.ALLOW)
+                if perm == AgentPermission.DENY:
+                    return json.dumps({"success": False, "error": f"{name} denied (read-only mode)"})
+                if perm == AgentPermission.ASK:
+                    return json.dumps({"success": False, "error": f"{name} requires approval", "requires_approval": True})
+            return None
         perm = tools_config.get(perm_key, AgentPermission.ALLOW)
         if perm == AgentPermission.DENY:
             return json.dumps({"success": False, "error": f"{name} denied"})
@@ -1306,7 +1353,7 @@ class AgentEngine:
         # Gate fires reactively when agent tries execution tools without a plan.
         self._plan_gate_mode = self._resolve_plan_gate_mode()
 
-        self.context.config.model = self.app.current_model
+        self.context.set_model(self.app.current_model)
         if self.context.should_compact():
             level = self.context.compact()
             if level not in ("none",):
@@ -1423,12 +1470,17 @@ class AgentEngine:
 
             self._pending_thinking_blocks = []
 
-            self.context.config.model = self.app.current_model
+            self.context.set_model(self.app.current_model)
             if self.context.should_compact():
                 level = self.context.compact()
                 if level not in ("none",):
                     logger.info("Context compaction at turn %d: %s", turn, level)
+            elif turn > 0 and turn % 3 == 0:
+                self.context._update_token_count()
+                logger.debug("Periodic token recalibration at turn %d: ~%d tokens",
+                             turn + 1, self.context._token_count)
 
+            turn_retries = 0
             turn_usage: dict[str, int] = {}
             response_text = ""
             tool_uses: list[dict] = []
@@ -1516,6 +1568,8 @@ class AgentEngine:
                             )
                     if model_response.usage:
                         turn_usage = model_response.usage
+                except TransientProviderError:
+                    raise  # propagate to outer TransientProviderError handler for retry
                 except Exception as e:
                     logger.exception(f"Error during chat() fallback turn {turn+1}: {e}")
                     yield StreamEvent.error(safe_error_msg(e))
@@ -1523,6 +1577,84 @@ class AgentEngine:
             except TurnCancelledError:
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                 return
+            except ContextLengthError as e:
+                ctx_retries = getattr(self, '_ctx_err_retries', 0) + 1
+                self._ctx_err_retries = ctx_retries
+                ctx_msgs_before = len(self.context.messages)
+                ctx_tokens_before = self.context._token_count
+                logger.warning(
+                    "ContextLengthError on turn %d (ctx_attempt %d): %s\n"
+                    "  context_msgs=%d ctx_tokens=%d — forcing compaction",
+                    turn + 1, ctx_retries, e,
+                    ctx_msgs_before, ctx_tokens_before,
+                )
+                if ctx_retries >= 3:
+                    logger.error(
+                        "ContextLengthError exhausted %d compaction retries "
+                        "on turn %d — giving up", ctx_retries, turn + 1,
+                    )
+                    yield StreamEvent.error(
+                        f"Context length exceeded (turn {turn+1}), "
+                        f"compaction exhausted after {ctx_retries} attempts"
+                    )
+                    break
+                level = self.context.compact()
+                ctx_tokens_after = self.context._token_count
+                if level == "none" and ctx_retries >= 2:
+                    for marker in ("<!-- SKILL:", "<!-- PROJECT_DOC -->",
+                                   "<!-- CODEBASE -->", "<!-- MEMORY -->"):
+                        removed = self.context.remove_system_by_marker(marker)
+                        if removed:
+                            logger.info(
+                                "ContextLengthError recovery: removed %d system "
+                                "msg(s) with marker %s", removed, marker,
+                            )
+                    ctx_tokens_after = self.context._token_count
+                if ctx_tokens_after < ctx_tokens_before:
+                    logger.info(
+                        "ContextLengthError recovery (ctx_attempt %d): compact "
+                        "level=%s tokens %d→%d, retrying turn %d",
+                        ctx_retries, level, ctx_tokens_before,
+                        ctx_tokens_after, turn + 1,
+                    )
+                    yield StreamEvent.text_delta(
+                        "\n\n*Context window exceeded, compressing and retrying…*\n\n"
+                    )
+                    continue
+                logger.error(
+                    "ContextLengthError recovery failed (ctx_attempt %d): "
+                    "level=%s tokens before=%d after=%d",
+                    ctx_retries, level, ctx_tokens_before, ctx_tokens_after,
+                )
+                yield StreamEvent.error(
+                    f"Context length exceeded (turn {turn+1}), "
+                    f"compaction did not reduce tokens"
+                )
+                break
+            except TransientProviderError as e:
+                turn_retries += 1
+                if turn_retries <= 3:
+                    delay = min(2 ** (turn_retries - 1), 30)
+                    logger.warning(
+                        "Transient provider error on turn %d, "
+                        "retry %d/3 after %ds: %s",
+                        turn + 1, turn_retries, delay, e,
+                    )
+                    yield StreamEvent.text_delta(
+                        f"\n\n*Transient error, retrying in {delay}s…*\n\n"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                ctx_msgs = len(self.context.messages)
+                ctx_tokens = self.context._token_count
+                logger.exception(
+                    f"Transient provider error on turn {turn+1} "
+                    f"(exhausted {turn_retries} retries): {e}\n"
+                    f"  provider={provider_name} model={model_name} "
+                    f"context_msgs={ctx_msgs} ctx_tokens={ctx_tokens}"
+                )
+                yield StreamEvent.error(f"Provider error (turn {turn+1}): {safe_error_msg(e)}")
+                break
             except Exception as e:
                 ctx_msgs = len(self.context.messages)
                 ctx_tokens = self.context._token_count
@@ -1599,6 +1731,7 @@ class AgentEngine:
                 self.context.add_assistant(clean_text)
 
             self.iterations += 1
+            self._ctx_err_retries = 0
 
             # Always yield text content as TEXT_DELTA, regardless of tool uses.
             # Without this, subagent text is consumed silently when it also
@@ -1724,6 +1857,77 @@ class AgentEngine:
                     yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                     return
                 logger.info(f"Executing tool: {tu['name']} (id={tu['id']})")
+
+                # ── Plan mode guard ──
+                # In plan mode (edit=DENY && bash=DENY), reject any tool not
+                # marked as read-only. Returns a clear message telling the LLM
+                # to switch to Build mode instead of silently failing.
+                if self._is_plan_mode():
+                    spec = self._tool_registry.get(tu["name"])
+                    if spec and not spec.spec().is_read_only:
+                        self._plan_denial_count += 1
+                        result = {
+                            "tool_use_id": tu["id"],
+                            "is_error": True,
+                            "category": "mode",
+                            "content": json.dumps({
+                                "success": False,
+                                "error": (
+                                    f"Tool '{tu['name']}' is not available in Plan mode. "
+                                    "Plan mode is read-only: you may use Read/Glob/Grep/WebFetch/"
+                                    "WebSearch for analysis, and TodoCreate/TodoUpdate/AskUser "
+                                    "for planning. Writing files, running shell commands, or any "
+                                    "other mutation requires switching to Build mode."
+                                ),
+                            }),
+                        }
+                        if self._plan_denial_count >= 3:
+                            self.context.add_system(
+                                "<!-- PLAN_MODE_DENIED -->\n"
+                                "## CRITICAL: Repeated write attempts in Plan mode\n"
+                                "You have repeatedly attempted write operations in Plan mode.\n"
+                                "This will NEVER succeed. Stop trying and use only read/planning tools.\n"
+                                "To execute changes, the user must switch to Build mode first."
+                            )
+                        else:
+                            self.context.add_system(
+                                "<!-- PLAN_MODE_DENIED -->\n"
+                                f"You attempted to use '{tu['name']}' which requires write access.\n"
+                                "Plan mode is read-only. Do NOT call write-capable tools again.\n"
+                                "Switch to Build mode if you need to execute changes."
+                            )
+                        # Emit tool result event before continuing to next tool
+                        result_str = str(result.get("content", ""))
+                        is_error = result.get("is_error", False)
+                        _cat = result.get("category", "unknown")
+                        from onecode.models.messages import ToolCategory as MsgToolCategory
+                        try:
+                            result_cat = MsgToolCategory(_cat)
+                        except ValueError:
+                            result_cat = MsgToolCategory.UNKNOWN
+                        self._notify_event(ToolEvent(
+                            kind="tool_result",
+                            tool_name=tu["name"],
+                            tool_use_id=tu["id"],
+                            tool_output=result_str,
+                            is_error=is_error,
+                        ))
+                        yield StreamEvent.tool_result(
+                            call_id=tu["id"],
+                            content=result_str,
+                            is_error=is_error,
+                            category=result_cat,
+                        )
+                        if is_anthropic:
+                            self.context.add_tool_result(tu["id"], result_str, is_error)
+                        else:
+                            self.context.add_message(
+                                "tool",
+                                [{"type": "tool_result", "tool_use_id": tu["id"],
+                                  "content": result_str, "is_error": is_error}],
+                                name=tu["id"],
+                            )
+                        continue
 
                 # Spawn tool: forward subagent text deltas to the TUI as
                 # subagent_chunk events so the SubAgent widget actually has
@@ -2052,6 +2256,16 @@ class AgentEngine:
                             [{"type": "tool_result", "tool_use_id": tu["id"], "content": result_str, "is_error": is_error}],
                             name=tu["id"],
                         )
+                    # Mid-turn compaction: tool results can add significant
+                    # context; compress immediately if we're over threshold.
+                    self.context.set_model(self.app.current_model)
+                    if self.context.should_compact():
+                        level = self.context.compact()
+                        if level not in ("none",):
+                            logger.info(
+                                "Mid-turn compaction at turn %d after tool %s: %s",
+                                turn + 1, tu["name"], level,
+                            )
                     # Emit plan update when tasks/todos changed.  Any
                     # mutating path through TodoManager flips
                     # ``_plan_dirty`` via the ``on_change`` callback, so we
@@ -2063,6 +2277,37 @@ class AgentEngine:
 
             # Tools were called this turn — reset the empty-turn counter
             self._empty_tool_turns = 0
+
+            # L2: Run verification loop if applicable
+            if self._verification_loop is not None:
+                from onecode.agent.turn_record import TurnRecord
+                for tu in tool_uses:
+                    if self._verification_loop.should_verify(tu["name"]):
+                        turn_record = TurnRecord(
+                            turn_number=turn,
+                            thought=clean_text,
+                            tool_name=tu["name"],
+                            tool_input=tu.get("input"),
+                        )
+                        agg_result = await self._verification_loop.run_gates(turn_record)
+                        turn_record.add_verification(agg_result.to_dict())
+                        evt_type = StreamEventType.VERIFICATION_PASSED if agg_result.passed else StreamEventType.VERIFICATION_FAILED
+                        yield StreamEvent(
+                            type=evt_type,
+                            text=f"{'passed' if agg_result.passed else 'failed'}: {', '.join(agg_result.failed_gates) if not agg_result.passed else 'all gates passed'}",
+                            verification_passed=agg_result.passed,
+                            verification_failed_gates=list(agg_result.failed_gates),
+                        )
+                        if not agg_result.passed:
+                            logger.warning("Verification failed: %s", agg_result.failed_gates)
+                            yield StreamEvent.text_delta(
+                                f"\n⚠️ Verification failed: {', '.join(agg_result.failed_gates)}\n"
+                            )
+                            if self._event_bridge is not None:
+                                self._event_bridge.on_verification_failed(agg_result)
+                        else:
+                            if self._event_bridge is not None:
+                                self._event_bridge.on_verification_passed()
 
             if self._cancelled:
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
@@ -2167,6 +2412,8 @@ class AgentEngine:
         self._react_phase = "thought"
         self._direct_execution_count = 0
         self._empty_tool_turns = 0
+        self._plan_denial_count = 0
+        self.context.remove_system_by_marker("<!-- PLAN_MODE_DENIED -->")
         # Invalidate the plan-emit dedupe cache so the next chat_stream
         # always produces a fresh snapshot for the TUI.
         self._last_emitted_plan = ()

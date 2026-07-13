@@ -38,8 +38,8 @@ def _project_db_path(name: str):
 class ProjectsScreen(ModalScreen[str]):
     CSS_PATH = "projects.tcss"
     BINDINGS = [
-        Binding("escape", "dismiss", "Dismiss"),
-        Binding("d", "delete_project", "Delete"),
+        Binding("escape", "dismiss", "Dismiss", show=False),
+        Binding("d", "delete_project", "Del"),
         Binding("n", "new_project", "New"),
         Binding("i", "init_project", "Init"),
     ]
@@ -106,7 +106,7 @@ class ProjectsScreen(ModalScreen[str]):
 
     def action_new_project(self) -> None:
         from pathlib import Path
-        from onecode.config_screen import EditFieldScreen
+        from tui.widgets.edit_field import EditFieldScreen
 
         default_path = str(Path.cwd().resolve())
         self.app.push_screen(
@@ -160,7 +160,7 @@ class ProjectsScreen(ModalScreen[str]):
         components: list[str],
     ) -> None:
         from pathlib import Path
-        from onecode.agent.cdh_loader import CdhProjectLoader
+        from cdh.project_loader import CdhProjectLoader
 
         name = target.name
         from cdh.scaffold import scaffold_dlc_project
@@ -192,7 +192,7 @@ class ProjectsScreen(ModalScreen[str]):
 
     def action_init_project(self) -> None:
         from pathlib import Path
-        from onecode.config_screen import EditFieldScreen
+        from tui.widgets.edit_field import EditFieldScreen
 
         default_path = str(Path.cwd().resolve())
         self.app.push_screen(
@@ -202,7 +202,7 @@ class ProjectsScreen(ModalScreen[str]):
 
     async def _on_init_path(self, path_str: str | None) -> None:
         from pathlib import Path
-        from onecode.agent.cdh_loader import CdhProjectLoader
+        from cdh.project_loader import CdhProjectLoader
 
         if not path_str:
             return
@@ -232,7 +232,7 @@ class ProjectsScreen(ModalScreen[str]):
         components: list[str],
     ) -> None:
         from pathlib import Path
-        from onecode.agent.cdh_loader import CdhProjectLoader
+        from cdh.project_loader import CdhProjectLoader
         from cdh.scaffold import add_component, init_dlc_project
 
         name = target.name

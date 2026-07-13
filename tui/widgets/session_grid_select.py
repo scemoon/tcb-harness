@@ -16,8 +16,8 @@ class SessionGridSelect(GridSelect):
     FOCUS_ON_CLICK = True
     CURSOR_GROUP = Binding.Group("Select")
     BINDINGS = [
-        Binding("]", "next_page", "Next page"),
-        Binding("[", "prev_page", "Prev page"),
+        Binding("]", "next_page", "Next"),
+        Binding("[", "prev_page", "Prev"),
     ]
     app: getters.app[A2TUIApp] = getters.app(A2TUIApp)
 

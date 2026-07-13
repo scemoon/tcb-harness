@@ -36,6 +36,7 @@
 - `aidlc/contracts/{api,events}/{name}.yaml`（跨组件时）
 
 ## 约束
+- 开始前先调用 `TodoClear` 清除可能遗留的 todos，确保从空白计划开始
 - 遵守 `rules.md` 中的 UND-001 到 UND-006
 - 遵守 `core/security.md`
 - 完成前必须通过 Human Gate 审查

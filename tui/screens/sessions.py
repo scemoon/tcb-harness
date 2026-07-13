@@ -31,7 +31,7 @@ INSTRUCTIONS_NO_SESSIONS = "Your sessions will be shown here."
 class SessionsScreen(ModalScreen[str]):
     CSS_PATH = "sessions.tcss"
     BINDINGS = [
-        Binding("escape", "dismiss", "Dismiss"),
+        Binding("escape", "dismiss", "Dismiss", show=False),
         Binding("d", "delete_session", "Delete"),
     ]
 

@@ -111,6 +111,36 @@ REFERENCE_MODELS: list[ModelInfo] = [
         capabilities=["coding", "general", "cost-efficient"],
         description="MiniMax M1 Light, faster and cost-effective",
     ),
+    ModelInfo(
+        id="MiniMax-M3",
+        provider="minimaxi",
+        context_window=1000000,
+        max_output=16384,
+        cost_per_1k_input=0.001,
+        cost_per_1k_output=0.003,
+        capabilities=["reasoning", "coding", "long-context", "complex"],
+        description="MiniMax M3 flagship model with 1M context",
+    ),
+    ModelInfo(
+        id="MiniMax-M2.7",
+        provider="minimaxi",
+        context_window=128000,
+        max_output=8192,
+        cost_per_1k_input=0.0002,
+        cost_per_1k_output=0.0006,
+        capabilities=["coding", "general", "cost-efficient"],
+        description="MiniMax M2.7, balanced and capable",
+    ),
+    ModelInfo(
+        id="MiniMax-M2.5",
+        provider="minimaxi",
+        context_window=64000,
+        max_output=4096,
+        cost_per_1k_input=0.0001,
+        cost_per_1k_output=0.0003,
+        capabilities=["quick", "general", "cost-efficient"],
+        description="MiniMax M2.5, fast and affordable",
+    ),
     # ── Zhipu GLM ──
     ModelInfo(
         id="glm-4-plus",
@@ -159,6 +189,8 @@ REFERENCE_MODELS: list[ModelInfo] = [
 class ModelRegistry:
     _models: dict[str, ModelInfo] = {}
 
+    _reference: dict[str, ModelInfo] = {m.id: m for m in REFERENCE_MODELS}
+
     @classmethod
     def initialize(cls):
         from onecode.config import load_config
@@ -166,16 +198,21 @@ class ModelRegistry:
         cls._models.clear()
         for provider, prov_cfg in cfg.providers.items():
             for model_id in prov_cfg.models:
+                ref = cls._reference.get(model_id)
                 cls._models[model_id] = ModelInfo(
                     id=model_id,
                     provider=provider,
-                    context_window=0,
-                    max_output=4096,
-                    cost_per_1k_input=0.0,
-                    cost_per_1k_output=0.0,
-                    capabilities=[],
-                    description="",
+                    context_window=ref.context_window if ref else 0,
+                    max_output=ref.max_output if ref else 4096,
+                    cost_per_1k_input=ref.cost_per_1k_input if ref else 0.0,
+                    cost_per_1k_output=ref.cost_per_1k_output if ref else 0.0,
+                    capabilities=list(ref.capabilities) if ref else [],
+                    description=ref.description if ref else "",
                 )
+        # Also register any reference models not in config
+        for m in REFERENCE_MODELS:
+            if m.id not in cls._models:
+                cls._models[m.id] = m
 
     @classmethod
     def get(cls, model_id: str) -> Optional[ModelInfo]:
