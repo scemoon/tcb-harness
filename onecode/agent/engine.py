@@ -883,7 +883,7 @@ class AgentEngine:
         )
         body = f"{marker}\n" + "\n".join(lines)
         if not self.context.replace_system_section(marker, body):
-            self.context.add_system(body)
+            self.context.insert_system_before_non_system(body)
 
     def _on_todo_change(self) -> None:
         """Callback invoked by TodoManager whenever todos mutate.
@@ -1006,7 +1006,7 @@ class AgentEngine:
             )
 
         tagged_content = "<!-- AGENT_CONFIG -->\n" + "\n".join(system_parts)
-        if not self.context.replace_system_section("AGENT_CONFIG", tagged_content):
+        if not self.context.replace_system_section("<!-- AGENT_CONFIG -->", tagged_content):
             self.context.add_system(tagged_content)
 
         # Inject TOOL_DESCRIPTIONS as its own marker so it can be independently
@@ -1016,7 +1016,7 @@ class AgentEngine:
             denylist=self.current_agent.disallowed_tools or None,
         )
         tool_tagged = "<!-- TOOL_DESCRIPTIONS -->\n" + tool_desc
-        if not self.context.replace_system_section("TOOL_DESCRIPTIONS", tool_tagged):
+        if not self.context.replace_system_section("<!-- TOOL_DESCRIPTIONS -->", tool_tagged):
             self.context.add_system(tool_tagged)
 
         # Re-apply user permission overrides (e.g. "allow always")
@@ -1291,6 +1291,7 @@ class AgentEngine:
 
     async def chat_stream(self, user_input: str | list[dict]) -> AsyncIterator[StreamEvent | str]:
         self._load_skills()
+        self._ctx_err_retries = 0
         preview = user_input[:100] if isinstance(user_input, str) else f"[{len(user_input)} content blocks]"
         logger.info(f"chat_stream() called with user_input='{preview}'")
 
@@ -1331,8 +1332,11 @@ class AgentEngine:
                         chunks, max_tokens=self.app.config.codebase.max_chunk_tokens
                     )
                     if ctx_text:
-                        if not self.context.replace_system_section("CODEBASE", ctx_text):
-                            self.context.add_system(f"<!-- CODEBASE -->\n{ctx_text}")
+                        tagged = f"<!-- CODEBASE -->\n{ctx_text}"
+                        if not self.context.replace_system_section("<!-- CODEBASE -->", tagged):
+                            self.context.add_system(tagged)
+                    else:
+                        self.context.remove_system_by_marker("<!-- CODEBASE -->")
             except Exception as e:
                 logger.warning("Codebase retrieval failed: %s", e)
 
@@ -1351,11 +1355,20 @@ class AgentEngine:
                     lines = ["## Relevant past memories"]
                     for r in results:
                         lines.append(r.content[:300])
-                    ctx_text = "<!-- MEMORY -->\n" + "\n".join(lines)
-                    if not self.context.replace_system_section("MEMORY", ctx_text):
-                        self.context.add_system(ctx_text)
+                    tagged = "<!-- MEMORY -->\n" + "\n".join(lines)
+                    if not self.context.replace_system_section("<!-- MEMORY -->", tagged):
+                        self.context.add_system(tagged)
+                else:
+                    self.context.remove_system_by_marker("<!-- MEMORY -->")
             except Exception as e:
                 logger.warning("Memory recall failed: %s", e)
+
+        # ── REACT_PHASE must be injected BEFORE add_user so system
+        # messages stay at the top of the message list.  On subsequent
+        # chat_stream calls replace_system_section updates it in-place.
+        cot_phase_init = "<!-- REACT_PHASE -->\n## Round 1 — 思考 → Todo → 行动\n"
+        if not self.context.replace_system_section("<!-- REACT_PHASE -->", cot_phase_init):
+            self.context.add_system(cot_phase_init)
 
         self.context.add_user(user_input)
 
@@ -1418,10 +1431,6 @@ class AgentEngine:
         max_turns = self.current_agent.max_turns or 10
         hard_limit = max_turns
 
-        cot_phase_init = "<!-- REACT_PHASE -->\n## Round 1 — 思考 → Todo → 行动\n"
-        if not self.context.replace_system_section("REACT_PHASE", cot_phase_init):
-            self.context.add_system(cot_phase_init)
-
         def _infinite_turns():
             t = 0
             while True:
@@ -1474,7 +1483,7 @@ class AgentEngine:
             self._refresh_pending_todos_nudge()
             if turn > 0:
                 self.context.replace_system_section(
-                    "REACT_PHASE",
+                    "<!-- REACT_PHASE -->",
                     f"<!-- REACT_PHASE -->\n## Round {turn + 1} — 思考 → Todo → 行动\n",
                 )
 
@@ -1892,7 +1901,7 @@ class AgentEngine:
                             }),
                         }
                         if self._plan_denial_count >= 3:
-                            self.context.add_system(
+                            self.context.insert_system_before_non_system(
                                 "<!-- PLAN_MODE_DENIED -->\n"
                                 "## CRITICAL: Repeated write attempts in Plan mode\n"
                                 "You have repeatedly attempted write operations in Plan mode.\n"
@@ -1900,7 +1909,7 @@ class AgentEngine:
                                 "To execute changes, the user must switch to Build mode first."
                             )
                         else:
-                            self.context.add_system(
+                            self.context.insert_system_before_non_system(
                                 "<!-- PLAN_MODE_DENIED -->\n"
                                 f"You attempted to use '{tu['name']}' which requires write access.\n"
                                 "Plan mode is read-only. Do NOT call write-capable tools again.\n"
@@ -2086,7 +2095,7 @@ class AgentEngine:
                         }
                     else:
                         # Soft gate: execute but inject a routing reminder for next turn
-                        self.context.add_system(
+                        self.context.insert_system_before_non_system(
                             "<!-- PLAN_REMINDER -->\n"
                             "## Routing Decision\n"
                             "Every task is a todo: create it with `TodoCreate` first (it "
@@ -2108,7 +2117,7 @@ class AgentEngine:
                     if tu["name"] in _EXECUTION_TOOLS:
                         self._direct_execution_count += 1
                         if self._direct_execution_count >= 2:
-                            self.context.add_system(
+                            self.context.insert_system_before_non_system(
                                 "<!-- ROUTING_REMINDER -->\n"
                                 "You've used direct execution tools repeatedly. Pause and decide:\n"
                                 "- Is this work tracked by a todo? If not, `TodoCreate` first.\n"

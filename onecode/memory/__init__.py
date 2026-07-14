@@ -31,6 +31,20 @@ class AgentMemory:
         self.backend = MemoryBackend(self.storage_path / "memory.db")
         self.pyramid = MemoryPyramid(self.storage_path)
         self.recall = HybridRecall()
+        self._warm_recall()
+
+    def _warm_recall(self) -> None:
+        records = self.backend.get_all_entries()
+        if not records:
+            return
+        docs: list[str] = []
+        ids: list[str] = []
+        meta: dict[str, dict] = {}
+        for r in records:
+            docs.append(r["content"])
+            ids.append(r["id"])
+            meta[r["id"]] = r.get("metadata_json") or {}
+        self.recall.add_documents(docs, ids, meta)
 
     def remember(self, layer: MemoryLayer, content: str, metadata: dict = None, parent_id: str = None) -> MemoryEntry:
         entry = self.pyramid.add(layer, content, metadata, parent_id)

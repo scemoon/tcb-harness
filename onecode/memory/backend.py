@@ -109,6 +109,24 @@ class MemoryBackend:
                 .all()
             )
 
+    def get_all_entries(self, layer: Optional[str] = None) -> list[dict]:
+        with self.session() as s:
+            query = s.query(MemoryRecord).order_by(MemoryRecord.timestamp.desc())
+            if layer:
+                query = query.filter_by(layer=layer)
+            return [
+                {
+                    "id": r.id,
+                    "layer": r.layer,
+                    "content": r.content,
+                    "timestamp": r.timestamp.isoformat() if r.timestamp else "",
+                    "metadata_json": r.metadata_json or {},
+                    "parent_id": r.parent_id,
+                    "result_ref": r.result_ref,
+                }
+                for r in query.all()
+            ]
+
     def get_recent_entries(self, layer: Optional[str] = None, limit: int = 20) -> list[MemoryRecord]:
         with self.session() as s:
             query = s.query(MemoryRecord).order_by(MemoryRecord.timestamp.desc())

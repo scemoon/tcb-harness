@@ -85,6 +85,16 @@ def _block_text(block: Any) -> str:
     return str(block)
 
 
+_ModelRegistry: Any = None
+
+def _get_model_registry() -> Any:
+    global _ModelRegistry
+    if _ModelRegistry is None:
+        from onecode.models.registry import ModelRegistry as MR
+        _ModelRegistry = MR
+    return _ModelRegistry
+
+
 class ContextManager:
     def __init__(self, config: Optional[ContextConfig] = None):
         self.config = config or ContextConfig()
@@ -99,8 +109,7 @@ class ContextManager:
         the existing ``max_tokens`` if the model is unrecognised.
         """
         self.config.model = model
-        from onecode.models.registry import ModelRegistry
-        info = ModelRegistry.get(model)
+        info = _get_model_registry().get(model)
         if info is not None and info.context_window > 0:
             self.config.max_tokens = info.context_window
 
@@ -128,9 +137,34 @@ class ContextManager:
     def add_system(self, content: str) -> None:
         self.add_message("system", content)
 
+    def insert_system_before_non_system(self, content: str) -> None:
+        """Insert a system message before the first non-system message.
+
+        Use this when adding system directives during an agent turn to ensure
+        they appear before user/assistant/tool messages in the message list,
+        which is the ordering most LLM APIs expect.
+        """
+        for i, m in enumerate(self.messages):
+            if m.role != "system":
+                msg = Message(role="system", content=content)
+                self.messages.insert(i, msg)
+                self._token_count += self._estimate_message_tokens(msg)
+                return
+        self.add_system(content)
+
+    def _marker_in_content(self, content: str, marker: str) -> bool:
+        """Check if *marker* appears in the content.
+
+        Markers use HTML-comment syntax (``<!-- NAME -->``) which is
+        distinct enough that a plain substring check is safe.  Only
+        system-role messages are checked, so user messages mentioning
+        the same keyword cannot cause false matches.
+        """
+        return marker in content
+
     def replace_system_section(self, marker: str, new_content: str) -> bool:
         for m in self.messages:
-            if m.role == "system" and isinstance(m.content, str) and marker in m.content:
+            if m.role == "system" and isinstance(m.content, str) and self._marker_in_content(m.content, marker):
                 old_tokens = self._estimate_message_tokens(m)
                 m.content = new_content
                 self._token_count += self._estimate_message_tokens(m) - old_tokens
@@ -142,7 +176,7 @@ class ContextManager:
         removed_tokens = 0
         kept: list[Message] = []
         for m in self.messages:
-            if m.role == "system" and isinstance(m.content, str) and marker in m.content:
+            if m.role == "system" and isinstance(m.content, str) and self._marker_in_content(m.content, marker):
                 removed_tokens += self._estimate_message_tokens(m)
             else:
                 kept.append(m)
@@ -218,11 +252,11 @@ class ContextManager:
             logger.info("compact: medium — truncated old messages")
             return "medium"
 
-        # Tier 3 — Heavy: full summarization
-        summary = self._summarize_messages(other_msgs)
+        # Tier 3 — Heavy: full summarization, preserving last 5 structured messages
+        summary = self._summarize_messages(other_msgs[:-5] if len(other_msgs) > 5 else other_msgs)
         self.messages = system_msgs + [
-            Message(role="system", content=f"[Previous context summarized]\n{summary}")
-        ]
+            Message(role="system", content=f"<!-- COMPACT_SUMMARY -->\n[Previous context summarized]\n{summary}")
+        ] + other_msgs[-min(5, len(other_msgs)):]
         self._update_token_count()
         logger.info("compact: heavy — full summarization")
         return "heavy"
@@ -236,7 +270,13 @@ class ContextManager:
         return total < threshold
 
     def _tier_compress_system_messages(self, msgs: list[Message]) -> None:
-        CRITICAL_MARKERS = {"<!-- AGENT_CONFIG -->", "<!-- REACT_PHASE -->"}
+        CRITICAL_MARKERS = {
+            "<!-- AGENT_CONFIG -->",
+            "<!-- REACT_PHASE -->",
+            "<!-- SKILL:",
+            "<!-- CODEBASE -->",
+            "<!-- MEMORY -->",
+        }
         for m in msgs:
             if isinstance(m.content, str) and len(m.content) > 8000:
                 if any(marker in m.content for marker in CRITICAL_MARKERS):
@@ -250,7 +290,7 @@ class ContextManager:
                     if isinstance(b, dict) and b.get("type") == "tool_result":
                         content = b.get("content", "")
                         if isinstance(content, str) and len(content) > 2000:
-                            b["content"] = content[:500] + "\n... [truncated]"
+                            b["content"] = content[:1000] + "\n... [truncated]"
 
     def _tier_truncate_old(self, msgs: list[Message], keep_recent: int = 20) -> None:
         if len(msgs) <= keep_recent:
