@@ -234,50 +234,93 @@ Thumbs.db
 
 CHANGELOG_MD = "# Changelog\n\n## [0.1.0] - Initial scaffold\n\n- Project created via cdh scaffold\n"
 
-AGENTS_MD_TEMPLATE = """# AGENTS.md — Project Constitution
 
-Hard rules every AI agent must follow when working in this repo.
-Read once per session; behavior is enforced by the agent runtime.
 
-## Project
 
-- **Name**: {project_name}
-- **Description**: {description}
+AGENTS_MD_TEMPLATE = """# AGENTS.md — {project_name}
 
-## References
+<!-- ═══════════════════════════════════════════════════════════
+     Generated from ai-dlc-skill/SKILL.md — do not edit manually.
+     Rebuild with `cdh scaffold` to sync with the source skill.
+     ═══════════════════════════════════════════════════════════ -->
 
-| Topic | Source |
-|-------|--------|
-| AI-DLC methodology | `ai-dlc-skill/SKILL.md` |
-| Stack topology | `aidlc/project.yaml` |
-| Requirements & gates | `aidlc/requirements.md` |
+## AI-DLC v4.0.0 — Master Orchestrator
 
-## Component Directories
+AI-Driven Development Lifecycle for monorepo multi-component stacks.
+Core phases: Understand (SDD+BDD), Plan (SDD+TDD), Verify (BDD+TDD),
+Deliver (SDD+Cloud). Adaptive orchestration — evaluate complexity, select
+phases, delegate sub-tasks.
+
+### Core Cycle
+
+```
+① Understand (SDD+BDD)   Intent → Spec Delta → BDD Feature Files
+② Plan (SDD+TDD)         Design Doc → Task DAG → Test Plan
+③ Verify (BDD+TDD)       Red → Green → Refactor per scenario
+④ Deliver (SDD+Cloud)    Stack Preview → e2e → Production + BVT
+```
+
+### Components
+
+| Prefix | Component | Directory | FR Namespace |
+|--------|-----------|-----------|--------------|
+| NATIVE | Mobile | `apps/native/` | `NATIVE-FR-NNN` |
+| DESKTOP | Desktop | `apps/desktop/` | `DESKTOP-FR-NNN` |
+| WEB | Browser | `apps/web/` | `WEB-FR-NNN` |
+| BE | Service | `apps/backend/` | `BE-FR-NNN` |
+| WXA | WeChat Mini | `apps/wxa/` | `WXA-FR-NNN` |
+| MYA | Alipay Mini | `apps/mya/` | `MYA-FR-NNN` |
+| TTA | TikTok Mini | `apps/tta/` | `TTA-FR-NNN` |
+| INT | Contracts | `aidlc/contracts/`, `aidlc/packages/shared/` | `INT-FR-NNN` |
+
+### Adaptive Flow
+
+Analyze intent → determine complexity (L1-L5) → select phases:
+
+| Level | Trigger | Phases |
+|-------|---------|--------|
+| L1 | Single-file bug fix, no behavior change | Verify |
+| L2 | Single-component feature, no INT contract | Understand → Verify |
+| L3 | Multi-component feature, needs INT contract | Understand → Plan → Verify |
+| L4 | Full-stack feature + deploy | Understand → Plan → Verify → Deliver |
+| L5 | Architecture refactor / platform migration | Plan → Verify |
+
+Evaluation dimensions: Scope (single/multi/full-stack), Type (bug/feature/refactor/migration),
+Contract (INT-FR involved?), Deploy (production?).
+
+### Phase Reference
+
+| Phase | Lifecycle | Rules | Practices |
+|-------|-----------|-------|-----------|
+| ① Understand | `phases/understand/lifecycle.md` | `phases/understand/rules.md` | SDD, BDD |
+| ② Plan | `phases/plan/lifecycle.md` | `phases/plan/rules.md` | SDD, TDD |
+| ③ Verify | `phases/verify/lifecycle.md` | `phases/verify/rules.md` | BDD, TDD |
+| ④ Deliver | `phases/deliver/lifecycle.md` | `phases/deliver/rules.md` | SDD, Cloud |
+
+Security baseline: `core/security.md` (all phases).
+
+{description}
+
+<!-- ═══════════════════════════════════════════════════════════
+     Project Rules
+     ═══════════════════════════════════════════════════════════ -->
+
+## Project Rules
+
+1. Intent → Spec (EARS) → BDD → Design (DAG) → TDD Red-Green-Refactor → Deploy
+2. Contract-first for cross-component changes (`aidlc/contracts/`)
+3. FR namespaces: NATIVE|DESKTOP|WEB|BE|WXA|MYA|TTA (apps/) + INT (aidlc/contracts/)
+4. Quality gates: coverage ≥80%, BDD 100%, 0 vulns, no TODO, backward-compat contracts
+5. Cross-stack e2e mandatory for changes affecting ≥2 components
+6. Never commit secrets; never force-push to main/master
+7. Chinese for user communication, English for code
+8. Run lint/typecheck/test after non-trivial edits
+
+## Components
 
 | Prefix | Directory |
 |--------|-----------|
 {component_table}
-
-## Path Hygiene
-
-Never read, write, or modify (CLI-managed or build artifacts):
-- `.cdh/`, `.opencode/`, `.claude/`, `.agents/` — tool configs
-- `dist/`, `build/`, `__pycache__/`, `node_modules/`, `.venv/` — build artifacts
-- `aidlc/providers/` — CLI-managed
-- `~/.cdh/`, `~/.onecode/` — global state (runtime-managed)
-
-## Forbidden
-
-- Commit secrets
-- Force-push to `main` / `master`
-- Hand-edit `.cdh/state.json` — use CLI
-- Delete tracked files outside `dist/` / `build` without confirmation
-
-## Conventions
-
-- Plan first (TodoCreate) for 3+ step tasks
-- Chinese for user communication, English for code
-- Run lint/typecheck/test after non-trivial edits
 """
 
 REQUIREMENTS_MD = """# {project_name}
@@ -483,28 +526,25 @@ def init_dlc_project(
 def scaffold_dlc_project(
     workspace_root: Path,
     project_name: str,
-    components: list[str],
+    components: list[str] | None = None,
     description: str = "",
 ) -> bool:
     """Scaffold a full ai-dlc-skill monorepo project structure.
 
-    The user must explicitly select at least one application component.
-    All cross-cutting items (contracts, shared types, openspec, etc.)
-    are always created.
+    Application components are optional — when omitted only cross-cutting
+    items (contracts, shared types, openspec, etc.) are created.
+    Components can be added later with add_component().
 
     Args:
         components: list of component ids (e.g. ["web", "backend"]).
-                   Must be non-empty.
+                   If None or empty, only cross-cutting items are scaffolded.
 
     Returns True if scaffolding was performed.
 
-    Raises ValueError if components is empty or contains unknown ids.
+    Raises ValueError if any component id is unknown.
     """
-    if not components:
-        raise ValueError(
-            "At least one application component is required "
-            "(e.g. 'web', 'backend', 'native')."
-        )
+    if components is None:
+        components = []
 
     unknown = [c for c in components if c not in COMPONENT_BY_ID]
     if unknown:
@@ -655,7 +695,7 @@ def check_dlc_project(workspace_root: Path) -> dict:
     """
     root = workspace_root.resolve()
     result: dict = {
-        "valid": False,
+        "valid": True,
         "name": None,
         "path": str(root),
         "components": [],
@@ -666,23 +706,27 @@ def check_dlc_project(workspace_root: Path) -> dict:
     project_yaml = root / "aidlc" / "project.yaml"
     if not project_yaml.exists():
         result["suggestions"].append(
-            f"Missing aidlc/project.yaml — run 'cdh aidc init {root}' first"
+            f"Missing aidlc/project.yaml — run 'cdh aidlc init {root}' first"
         )
+        result["valid"] = False
         return result
 
     try:
         data = yaml.safe_load(project_yaml.read_text(encoding="utf-8"))
     except Exception as e:
         result["suggestions"].append(f"Invalid YAML in aidlc/project.yaml: {e}")
+        result["valid"] = False
         return result
 
     if not isinstance(data, dict):
         result["suggestions"].append("aidlc/project.yaml is not a valid YAML mapping")
+        result["valid"] = False
         return result
 
     name = data.get("name", "")
     if not name:
         result["suggestions"].append("Missing 'name' field in aidlc/project.yaml")
+        result["valid"] = False
         name = root.name
     result["name"] = name
 
@@ -690,7 +734,7 @@ def check_dlc_project(workspace_root: Path) -> dict:
     if not components:
         result["suggestions"].append(
             "No components defined in stack.components — "
-            "consider 'cdh aidc init' or adding components"
+            "use 'cdh aidlc add-component' to add one"
         )
     else:
         ids = []
@@ -727,11 +771,8 @@ def check_dlc_project(workspace_root: Path) -> dict:
     result["has_cdh"] = CdhProjectLoader.find_cdh_dir(root) is not None
     if not result["has_cdh"]:
         result["suggestions"].append(
-            ".cdh/ not found — run 'cdh aidc init' to set up project state"
+            ".cdh/ not found — run 'cdh aidlc init' to set up project state"
         )
-
-    if not result["suggestions"]:
-        result["valid"] = True
 
     return result
 
@@ -748,4 +789,5 @@ __all__ = [
     "add_component",
     "add_cross_cutting",
     "check_dlc_project",
+    "_regenerate_agents_and_claude_md",
 ]

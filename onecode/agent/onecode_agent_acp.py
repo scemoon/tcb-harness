@@ -1215,6 +1215,20 @@ class CDHACPAdapter:
                 "entries": event.plan_entries,
             })
 
+    def _emit_aidlc_state_to_tui(self) -> None:
+        if self.agent is None:
+            return
+        cdh_dir = CdhProjectLoader.find_cdh_dir(self.agent._project_dir)
+        if cdh_dir is None:
+            return
+        state = CdhProjectLoader.load_project_state(cdh_dir)
+        self.send_session_update({
+            "sessionUpdate": "aidlc_state",
+            "current_phase": state.get("current_phase", ""),
+            "completed_phases": state.get("completed_phases", []),
+            "gate_results": state.get("gate_results", {}),
+        })
+
     async def initialize(self, protocol_version: int, client_capabilities: dict, client_info: dict):
         """Handle ACP initialize."""
         return {
@@ -1303,6 +1317,7 @@ class CDHACPAdapter:
         # Surface loaded tasks to the TUI Plan widget so the user sees
         # pending work without having to send a new message first.
         self._emit_plan_update_to_tui()
+        self._emit_aidlc_state_to_tui()
 
         if not loaded:
             return {
@@ -2304,6 +2319,7 @@ class CDHACPAdapter:
                         )
                         # Sync plan after approval — the tool may have mutated todos
                         self._emit_plan_update_to_tui()
+                        self._emit_aidlc_state_to_tui()
                     verb = "Approved" if approved else "Rejected"
                     self.send_session_update({
                         "sessionUpdate": "agent_message_chunk",
@@ -2351,6 +2367,7 @@ class CDHACPAdapter:
 
         # Sync plan to TUI so sidebar shows final todo state
         self._emit_plan_update_to_tui()
+        self._emit_aidlc_state_to_tui()
 
         # Send context usage stats to TUI sidebar
         ctx = self.agent.context
@@ -2485,6 +2502,7 @@ class CDHACPAdapter:
                 tm.clear_todos()
             self.agent.save_todos_to_project()
             self._emit_plan_update_to_tui()
+            self._emit_aidlc_state_to_tui()
         return {"cleared": True}
 
     # ── Terminal RPC stubs ──────────────────────────────────────────

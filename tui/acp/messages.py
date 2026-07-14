@@ -77,6 +77,13 @@ class AskUser(AgentMessage):
 
 
 @dataclass
+class AIDLCState(AgentMessage):
+    current_phase: str
+    completed_phases: list[str]
+    gate_results: dict
+
+
+@dataclass
 class Plan(AgentMessage):
     entries: list[protocol.PlanEntry]
 

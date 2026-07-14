@@ -2,7 +2,9 @@
 name: ai-dlc-skill
 description: |
   AI-Driven Development Lifecycle for monorepo multi-component stacks.
-  Adaptive orchestration: Master Agent evaluates complexity, delegates sub-tasks.
+  Core phases: Understand (SDD+BDD), Plan (SDD+TDD), Verify (BDD+TDD),
+  Deliver (SDD+Cloud). Adaptive orchestration: Master Agent evaluates
+  complexity, delegates sub-tasks.
 allowed_tools:
   - read
   - grep
@@ -17,6 +19,14 @@ allowed_tools:
 triggers:
   - ai-dlc
   - ai dlc
+  - lifecycle
+  - BDD
+  - INT-FR
+phases:
+  - understand
+  - plan
+  - verify
+  - deliver
 compatibility:
   cdh: ">=1.4"
   opencode: ">=1.15"

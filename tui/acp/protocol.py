@@ -295,6 +295,13 @@ class SessionModelState(SchemaDict, total=False, extra_items=Any):
 
 
 # https://agentclientprotocol.com/protocol/schema#param-plan
+class AIDLCState(SchemaDict, total=False, extra_items=Any):
+    current_phase: Required[str]
+    completed_phases: Required[list[str]]
+    gate_results: Required[dict]
+    sessionUpdate: Required[Literal["aidlc_state"]]
+
+
 class Plan(SchemaDict, total=False, extra_items=Any):
     entries: Required[list[PlanEntry]]
     sessionUpdate: Required[Literal["plan"]]

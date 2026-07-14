@@ -23,6 +23,7 @@ from tui import messages
 from tui.agent_schema import Agent
 from tui.acp import messages as acp_messages
 
+from tui.widgets.aidlc import AIDLCStats
 from tui.widgets.context_stats import ContextStats
 from tui.widgets.modified_files import ModifiedFiles
 from tui.widgets.plan import Plan
@@ -144,6 +145,12 @@ class MainScreen(Screen, can_focus=False):
 
     def compose(self) -> ComposeResult:
         panels: list[SideBar.Panel] = [
+            SideBar.Panel(
+                "AI-DLC",
+                AIDLCStats(id="aidlc-stats"),
+                collapsed=False,
+                id="aidlc-panel",
+            ),
             SideBar.Panel(
                 "Plan",
                 Plan([], placeholder="no plan yet"),
@@ -283,6 +290,15 @@ class MainScreen(Screen, can_focus=False):
         message.stop()
         from tui.widgets.plan import entries_from_dicts
         self.query_one("SideBar Plan", Plan).entries = entries_from_dicts(message.entries)
+
+    @on(acp_messages.AIDLCState)
+    async def on_acp_aidlc_state(self, message: acp_messages.AIDLCState):
+        message.stop()
+        self.query_one("#aidlc-stats", AIDLCStats).refresh_from_state({
+            "current_phase": message.current_phase,
+            "completed_phases": message.completed_phases,
+            "gate_results": message.gate_results,
+        })
 
     @on(messages.SessionUpdate)
     async def on_session_update(self, event: messages.SessionUpdate) -> None:

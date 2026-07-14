@@ -24,7 +24,7 @@ Usage:
   cdh                              Launch TUI (agent store)
   cdh tui                          Launch TUI (agent store)
   cdh onecode <sub>                onecode CLI surface (config / codebase / skill / mcp / help)
-  cdh aidc                         AIDC project management
+  cdh aidlc                        AIDLC project management
   cdh session list|load            Session management
   cdh uninstall                    Remove ~/.cdh/ global state
   cdh version                      Show version information
@@ -280,7 +280,7 @@ if _onecode_config_group is not None:
 # - `cdh onecode codebase <sub>` is the same as the old `cdh codebase <sub>`.
 
 
-# --- aidc (AIDC project) command ---
+# --- aidlc (AIDLC project) command ---
 
 def _get_projects():
     projects_dir = _CDH_DIR / "projects"
@@ -382,13 +382,14 @@ def _resolve_components_flag(components: Optional[str]) -> list[str]:
     return selected
 
 
-@cli.command("aidc", short_help="AIDC project management")
-@click.argument("action", type=click.Choice(["new", "init", "check", "list", "load"]))
+@cli.command("aidlc", short_help="AIDLC project management")
+@click.argument("action", type=click.Choice(["new", "init", "check", "list", "load", "phase", "gate", "update"]))
 @click.argument("name", required=False)
 @click.argument("path", required=False, default=".")
 @click.option("--components", default=None, help="Comma-separated component ids (e.g. 'web,backend') or 'all'. Skips the interactive prompt.")
-def aidc(action, name, path, components):
-    """Manage AIDC projects.
+@click.option("--status", default=None, help="Gate status: passed or failed")
+def aidlc(action, name, path, components, status):
+    """Manage AIDLC projects.
 
     \b
     Actions:
@@ -397,6 +398,9 @@ def aidc(action, name, path, components):
       check [path]         Check whether a directory is a valid AIDC project
       list                 List all registered AIDC projects
       load <name>          Load a registered AIDC project as the current project
+      phase <phase>        Set the current AI-DLC phase (init|understand|plan|verify|deliver)
+      gate <name>          Record a quality gate result (requires --status passed|failed)
+      update               Regenerate AGENTS.md and CLAUDE.md from aidlc/project.yaml
     """
     import yaml
     projects_dir = _CDH_DIR / "projects"
@@ -501,9 +505,59 @@ def aidc(action, name, path, components):
             click.echo(f"  \u2022 {s}")
         return
 
+    if action == "phase":
+        from cdh.project_loader import CdhProjectLoader
+        phase = name or ""
+        valid = {"init", "understand", "plan", "verify", "deliver"}
+        if not phase or phase not in valid:
+            click.echo(f"Usage: cdh aidlc phase <{'|'.join(sorted(valid))}>")
+            raise click.Abort()
+        target = Path(path).expanduser().resolve()
+        ok = CdhProjectLoader.advance_phase(target, phase)
+        if ok:
+            click.echo(f"Phase set to: {phase}")
+        else:
+            click.echo(
+                "Error: Invalid phase transition. "
+                "Phases must advance one step at a time "
+                "(init→understand→plan→verify→deliver). "
+                "Use 'init' to reset."
+            )
+            raise click.Abort()
+        return
+
+    if action == "gate":
+        from cdh.project_loader import CdhProjectLoader
+        gate_name = name or ""
+        if not gate_name or status not in ("passed", "failed"):
+            click.echo("Usage: cdh aidlc gate <name> --status <passed|failed>")
+            raise click.Abort()
+        target = Path(path).expanduser().resolve()
+        ok = CdhProjectLoader.record_gate_result(target, gate_name, status)
+        if ok:
+            click.echo(f"Gate '{gate_name}': {status}")
+        else:
+            click.echo("No .cdh/ directory found. Run 'cdh aidlc init' first.")
+        return
+
+    if action == "update":
+        from cdh.scaffold import _regenerate_agents_and_claude_md, scaffold_dlc_project
+        from cdh.project_loader import CdhProjectLoader
+        target = Path(path).expanduser().resolve()
+        project_yaml = target / "aidlc" / "project.yaml"
+        if project_yaml.exists():
+            _regenerate_agents_and_claude_md(target)
+            click.echo("Updated AGENTS.md and CLAUDE.md")
+        else:
+            project_name = target.name
+            scaffold_dlc_project(target, project_name)
+            CdhProjectLoader.init_project(target, project_name)
+            click.echo(f"Initialized AIDC project and regenerated AGENTS.md/CLAUDE.md")
+        return
+
     if action == "load":
         if not name:
-            click.echo("Usage: cdh aidc load <name>")
+            click.echo("Usage: cdh aidlc load <name>")
             return
         for ext in ["yaml", "yml", "json"]:
             pf = projects_dir / f"{name}.{ext}"

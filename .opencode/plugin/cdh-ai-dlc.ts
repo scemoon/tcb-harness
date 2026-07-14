@@ -15,7 +15,7 @@ export const CDHAiDLCPlugin: Plugin = async () => ({
         const raw = readFileSync(fp, "utf-8");
         const body = raw.replace(/^---[\s\S]*?\n---\n?/, "");
         output.system.push(
-          `<!-- AI-DLC:start v=3.0.0 -->\n${body}\n<!-- AI-DLC:end -->`
+          `<!-- AI-DLC:start v=4.0.0 -->\n${body}\n<!-- AI-DLC:end -->`
         );
         break;
       }

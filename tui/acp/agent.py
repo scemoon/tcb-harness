@@ -207,6 +207,13 @@ class Agent(AgentBase):
             case {"sessionUpdate": "plan", "entries": entries}:
                 self.post_message(messages.Plan(entries))
 
+            case {"sessionUpdate": "aidlc_state", **state}:
+                self.post_message(messages.AIDLCState(
+                    current_phase=state.get("current_phase", ""),
+                    completed_phases=state.get("completed_phases", []),
+                    gate_results=state.get("gate_results", {}),
+                ))
+
             case {
                 "sessionUpdate": "tool_call_update",
                 "toolCallId": tool_call_id,

@@ -1902,9 +1902,9 @@ class Conversation(containers.Vertical):
                 "<list|load|new|close|rename> [args]",
             ),
             SlashCommand(
-                "/aidc",
-                "AIDC commands: new, init, check, list, load, show",
-                "<new|init|check|list|load|show> [args]",
+                "/aidlc",
+                "AIDLC commands: new, init, check, list, load, show, update, phase, gate",
+                "<new|init|check|list|load|show|update|phase|gate> [args]",
             ),
             SlashCommand(
                 "/logs",
@@ -2527,8 +2527,8 @@ class Conversation(containers.Vertical):
             return True
         elif command == "session":
             return await self._handle_session_command(parameters)
-        elif command == "aidc":
-            return await self._handle_aidc_command(parameters)
+        elif command == "aidlc":
+            return await self._handle_aidlc_command(parameters)
         elif command == "diff":
             return await self._handle_diff_command()
         elif command == "ide":
@@ -2614,31 +2614,57 @@ class Conversation(containers.Vertical):
             )
             return True
 
-    async def _handle_aidc_command(self, parameters: str) -> bool:
-        parts = parameters.strip().split(maxsplit=2)
+    def _refresh_aidlc_panel(self, target: Path) -> None:
+        from cdh.project_loader import CdhProjectLoader
+        from tui.widgets.aidlc import AIDLCStats
+
+        cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+        if cdh_dir is None:
+            return
+        state = CdhProjectLoader.load_project_state(cdh_dir)
+        try:
+            widget = self.app.query_one("#aidlc-stats", AIDLCStats)
+            widget.refresh_from_state(state)
+        except Exception:
+            pass
+
+    def _current_aidlc_phase(self) -> str:
+        from pathlib import Path
+        from cdh.project_loader import CdhProjectLoader
+
+        target = self.app.project_dir or Path.cwd()
+        cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+        if cdh_dir is None:
+            return "—"
+        state = CdhProjectLoader.load_project_state(cdh_dir)
+        return state.get("current_phase", "—")
+
+    async def _handle_aidlc_command(self, parameters: str) -> bool:
+        parts = parameters.strip().split(maxsplit=3)
         sub_cmd = parts[0] if parts else ""
         name = parts[1] if len(parts) > 1 else ""
         path = parts[2] if len(parts) > 2 else ""
+        extra = parts[3] if len(parts) > 3 else ""
 
         if sub_cmd == "list":
             from pathlib import Path
             projects_dir = Path.home() / ".cdh" / "projects"
             if not projects_dir.exists():
-                self.notify("No projects found", title="/aidc list")
+                self.notify("No projects found", title="/aidlc list")
                 return True
             project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
             if not project_files:
-                self.notify("No projects found", title="/aidc list")
+                self.notify("No projects found", title="/aidlc list")
                 return True
             lines = ["Projects:"]
             for pf in sorted(project_files):
                 lines.append(f"  {pf.stem}")
-            self.notify("\n".join(lines), title="/aidc list")
+            self.notify("\n".join(lines), title="/aidlc list")
             return True
 
         elif sub_cmd == "load":
             if not name:
-                self.notify("Project name required", title="/aidc load", severity="error")
+                self.notify("Project name required", title="/aidlc load", severity="error")
                 return True
             from pathlib import Path
             from cdh.config import write_active_project
@@ -2650,7 +2676,7 @@ class Conversation(containers.Vertical):
                     project_file = pf
                     break
             if not project_file:
-                self.notify(f"Project '{name}' not found", title="/aidc load", severity="error")
+                self.notify(f"Project '{name}' not found", title="/aidlc load", severity="error")
                 return True
             import yaml
             proj_data = yaml.safe_load(project_file.read_text()) if project_file.suffix in [".yaml", ".yml"] else __import__("json").loads(project_file.read_text())
@@ -2664,18 +2690,38 @@ class Conversation(containers.Vertical):
 
         elif sub_cmd == "new":
             if not name:
-                self.notify("Usage: /aidc new <name> [path]", title="/aidc new", severity="error")
+                self.notify(
+                    "Usage: /aidlc new <name> [path] [components]\n"
+                    "  components: comma-separated ids (web,backend,native,etc.) or 'all'",
+                    title="/aidlc new", severity="error",
+                )
                 return True
             from pathlib import Path
             from cdh.config import write_active_project
             from cdh.project_loader import CdhProjectLoader
-            from cdh.scaffold import scaffold_dlc_project
+            from cdh.scaffold import scaffold_dlc_project, COMPONENT_BY_ID
             import yaml
             projects_dir = Path.home() / ".cdh" / "projects"
             projects_dir.mkdir(parents=True, exist_ok=True)
             project_path = path or str(Path.cwd())
             ws = Path(project_path).expanduser().resolve()
-            scaffold_dlc_project(ws, name)
+
+            selected = []
+            if extra:
+                if extra == "all":
+                    selected = list(COMPONENT_BY_ID.keys())
+                else:
+                    selected = [c.strip() for c in extra.split(",") if c.strip()]
+                    unknown = [c for c in selected if c not in COMPONENT_BY_ID]
+                    if unknown:
+                        valid = ", ".join(sorted(COMPONENT_BY_ID.keys()))
+                        self.notify(
+                            f"Unknown components: {', '.join(unknown)}. Valid: {valid}",
+                            title="/aidlc new", severity="error",
+                        )
+                        return True
+
+            scaffold_dlc_project(ws, name, components=selected if selected else None)
             CdhProjectLoader.init_project(ws, name)
             proj_data = {"name": name, "path": str(ws), "description": ""}
             project_file = projects_dir / f"{name}.yaml"
@@ -2683,7 +2729,8 @@ class Conversation(containers.Vertical):
             write_active_project(name, str(ws))
             self.app.project_dir = ws
             self.post_message(messages.ProjectDirectoryUpdated(project_dir=ws))
-            self.flash(f"Created and switched to AIDC project: {name}", style="success")
+            suffix = f" (components: {', '.join(selected)})" if selected else ""
+            self.flash(f"Created and switched to AIDC project: {name}{suffix}", style="success")
             return True
 
         elif sub_cmd == "init":
@@ -2700,7 +2747,7 @@ class Conversation(containers.Vertical):
             if proj_file.exists():
                 self.notify(
                     f"Project '{project_name}' already exists",
-                    title="/aidc init",
+                    title="/aidlc init",
                     severity="error",
                 )
                 return True
@@ -2712,6 +2759,31 @@ class Conversation(containers.Vertical):
             self.app.project_dir = target
             self.post_message(messages.ProjectDirectoryUpdated(project_dir=target))
             self.flash(f"Initialized AIDC project in: {target}", style="success")
+            return True
+
+        elif sub_cmd == "update":
+            from pathlib import Path
+            from cdh.scaffold import (
+                _regenerate_agents_and_claude_md,
+                scaffold_dlc_project,
+            )
+            from cdh.project_loader import CdhProjectLoader
+
+            target = self.app.project_dir or Path.cwd()
+            # Ensure aidlc/ exists with project.yaml
+            project_yaml = target / "aidlc" / "project.yaml"
+            if project_yaml.exists():
+                _regenerate_agents_and_claude_md(target)
+                self.flash("Updated AGENTS.md and CLAUDE.md", style="success")
+            else:
+                # First-time — scaffold whole project
+                project_name = target.name
+                scaffold_dlc_project(target, project_name)
+                CdhProjectLoader.init_project(target, project_name)
+                self.flash(
+                    f"Initialized AIDLC project and regenerated AGENTS.md/CLAUDE.md",
+                    style="success",
+                )
             return True
 
         elif sub_cmd == "check":
@@ -2734,7 +2806,62 @@ class Conversation(containers.Vertical):
                 lines = [f"\u2717 Not a valid AIDC project: {target}"]
             for s in result["suggestions"]:
                 lines.append(f"  \u2022 {s}")
-            self.notify("\n".join(lines), title="/aidc check")
+            self.notify("\n".join(lines), title="/aidlc check")
+            return True
+
+        elif sub_cmd == "phase":
+            from pathlib import Path
+            from cdh.project_loader import CdhProjectLoader
+
+            valid_phases = {"init", "understand", "plan", "verify", "deliver"}
+            target_phase = name or ""
+            if not target_phase or target_phase not in valid_phases:
+                phases_list = "|".join(sorted(valid_phases))
+                self.notify(
+                    f"Usage: /aidlc phase <{phases_list}>\nCurrent: {self._current_aidlc_phase()}",
+                    title="/aidlc phase",
+                    severity="error",
+                )
+                return True
+            target = self.app.project_dir or Path.cwd()
+            ok = CdhProjectLoader.advance_phase(target, target_phase)
+            if ok:
+                self.flash(f"Phase: {target_phase}", style="success")
+                self._refresh_aidlc_panel(target)
+            else:
+                self.notify(
+                    "No .cdh/ directory found or invalid phase transition. "
+                    "Phases must advance one step at a time "
+                    "(init→understand→plan→verify→deliver). "
+                    "Use 'init' to reset.\n"
+                    f"Current: {self._current_aidlc_phase()}",
+                    title="/aidlc phase",
+                    severity="error",
+                )
+            return True
+
+        elif sub_cmd == "gate":
+            from pathlib import Path
+            from cdh.project_loader import CdhProjectLoader
+
+            if not name or path not in ("passed", "failed"):
+                self.notify(
+                    "Usage: /aidlc gate <name> <passed|failed>",
+                    title="/aidlc gate",
+                    severity="error",
+                )
+                return True
+            target = self.app.project_dir or Path.cwd()
+            ok = CdhProjectLoader.record_gate_result(target, name, path)
+            if ok:
+                self.flash(f"Gate '{name}': {path}", style="success")
+                self._refresh_aidlc_panel(target)
+            else:
+                self.notify(
+                    "No .cdh/ directory found. Run /aidlc init first.",
+                    title="/aidlc gate",
+                    severity="error",
+                )
             return True
 
         elif sub_cmd == "show":
@@ -2743,8 +2870,8 @@ class Conversation(containers.Vertical):
 
         else:
             self.notify(
-                "Usage: /aidc <new|init|check|list|load|show> [args]",
-                title="/aidc",
+                "Usage: /aidlc <new|init|check|list|load|show|update|phase|gate> [args]",
+                title="/aidlc",
                 severity="error",
             )
             return True

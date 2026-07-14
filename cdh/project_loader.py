@@ -177,6 +177,68 @@ class CdhProjectLoader:
 
         return "\n".join(parts)
 
+    # ── phase state management ─────────────────────────────────
+
+    _PHASE_SEQUENCE = ["init", "understand", "plan", "verify", "deliver"]
+
+    @staticmethod
+    def advance_phase(workspace_root: Path, phase: str) -> bool:
+        """Advance to the next AI-DLC phase. Only single-step forward allowed.
+
+        To reset: call with phase="init".
+        """
+        cdh_dir = CdhProjectLoader.find_cdh_dir(workspace_root)
+        if cdh_dir is None:
+            return False
+        state = CdhProjectLoader.load_project_state(cdh_dir)
+        prev = state.get("current_phase", "")
+
+        if phase == prev:
+            return True
+
+        if phase == "init":
+            state["current_phase"] = "init"
+            state["completed_phases"] = []
+            state["gate_results"] = {}
+            CdhProjectLoader.save_state(cdh_dir, state)
+            return True
+
+        seq = CdhProjectLoader._PHASE_SEQUENCE
+        try:
+            prev_idx = seq.index(prev)
+            target_idx = seq.index(phase)
+        except ValueError:
+            return False
+
+        if target_idx != prev_idx + 1:
+            return False
+
+        if prev and prev != "init":
+            completed = state.get("completed_phases", [])
+            if prev not in completed:
+                completed.append(prev)
+                state["completed_phases"] = completed
+
+        state["current_phase"] = phase
+        CdhProjectLoader.save_state(cdh_dir, state)
+        return True
+
+    @staticmethod
+    def record_gate_result(
+        workspace_root: Path, gate_name: str, status: str, summary: str = ""
+    ) -> bool:
+        """Record a quality gate result."""
+        cdh_dir = CdhProjectLoader.find_cdh_dir(workspace_root)
+        if cdh_dir is None:
+            return False
+        state = CdhProjectLoader.load_project_state(cdh_dir)
+        state.setdefault("gate_results", {})[gate_name] = {
+            "status": status,
+            "summary": summary,
+        }
+        CdhProjectLoader.save_state(cdh_dir, state)
+        return True
+
     # ── scaffolding ────────────────────────────────────────────
 
     @staticmethod
