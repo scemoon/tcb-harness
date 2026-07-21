@@ -39,3 +39,12 @@
 - 开始前先调用 `TodoClear` 清除可能遗留的 todos，确保从空白计划开始
 - 遵守 DLV-001 到 DLV-004
 - 遵守 STK-004 到 STK-006（统一部署 + 构建配置注入 + stack 级回滚）
+
+## 完成报告
+
+完成后返回以下信息给 Master Agent（用于写入 Registry）：
+- `phase: "deliver"`
+- `status: "completed"`
+- `artifacts: [部署URL、BVT报告路径列表]`
+- `gatePassed: true/false`
+- `deployUrl: 生产环境URL`

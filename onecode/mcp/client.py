@@ -9,6 +9,8 @@ from typing import Any, Optional
 
 logger = logging.getLogger("onecode.mcp")
 
+_READLINE_TIMEOUT = 30.0
+
 
 @dataclass
 class MCPTool:
@@ -32,7 +34,7 @@ class MCPClient:
     env: dict[str, str] = field(default_factory=dict)
     _process: Optional[subprocess.Popen] = None
     _reader: Optional[asyncio.StreamReader] = None
-    _writer: Optional[asyncio.StreamWriter] = None
+    _writer_transport: Any = None
     _request_id: int = 0
     _pending: dict = field(default_factory=dict)
     _tools: list = field(default_factory=list)
@@ -49,23 +51,18 @@ class MCPClient:
                 env={**self.env} if self.env else None,
             )
             loop = asyncio.get_event_loop()
-            self._reader, self._writer = await asyncio.open_connection(
-                fd=self._process.stdout.fileno(),
-                # Use a loop.create_connection approach for pipe-based fd
-            )
-            # Proper way: create StreamReader/StreamWriter from pipe
+
             self._reader = asyncio.StreamReader()
             protocol = asyncio.StreamReaderProtocol(self._reader)
             await loop.connect_read_pipe(
                 lambda: protocol,
                 self._process.stdout,
             )
-            self._writer_transport, self._writer_protocol = await loop.connect_write_pipe(
+            self._writer_transport, _ = await loop.connect_write_pipe(
                 lambda: asyncio.StreamReaderProtocol(asyncio.StreamReader()),
                 self._process.stdin,
             )
 
-            # Start background reader task
             self._read_task = asyncio.create_task(self._read_loop())
             await self._send_init()
             return True
@@ -74,13 +71,21 @@ class MCPClient:
             return False
 
     async def _read_loop(self) -> None:
-        """Continuously read JSON-RPC responses from stdout."""
         try:
             while self._process and self._process.poll() is None:
                 if self._reader is None:
                     await asyncio.sleep(0.1)
                     continue
-                line = await self._reader.readline()
+                try:
+                    line = await asyncio.wait_for(
+                        self._reader.readline(),
+                        timeout=_READLINE_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    logger.debug("MCP %s: readline timed out, checking liveness", self.name)
+                    if self._process.poll() is not None:
+                        break
+                    continue
                 if not line:
                     await asyncio.sleep(0.05)
                     continue
@@ -91,10 +96,9 @@ class MCPClient:
                     msg = json.loads(line_str)
                     req_id = str(msg.get("id", ""))
                     if req_id in self._pending:
-                        future = self._pending.pop(req_id)
-                        if not future.done():
+                        future = self._pending.pop(req_id, None)
+                        if future is not None and not future.done():
                             future.set_result(msg)
-                    # Handle notifications (no id)
                     if "method" in msg:
                         await self._handle_notification(msg)
                 except json.JSONDecodeError:
@@ -128,9 +132,6 @@ class MCPClient:
         msg = json.dumps({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
         if self._writer_transport:
             self._writer_transport.write((msg + "\n").encode())
-        elif self._writer:
-            self._writer.write((msg + "\n").encode())
-            await self._writer.drain()
 
         future = asyncio.Future()
         self._pending[str(req_id)] = future
@@ -141,6 +142,9 @@ class MCPClient:
         except asyncio.TimeoutError:
             self._pending.pop(str(req_id), None)
             return None
+        except asyncio.CancelledError:
+            self._pending.pop(str(req_id), None)
+            raise
 
     async def list_tools(self) -> list[MCPTool]:
         result = await self._send_request("tools/list", {})
@@ -172,9 +176,27 @@ class MCPClient:
             return result["result"]
         return None
 
+    async def read_resource(self, uri: str) -> Any:
+        result = await self._send_request("resources/read", {"uri": uri})
+        if result and "result" in result:
+            return result["result"]
+        return None
+
+    def cancel_all(self) -> None:
+        """Cancel all pending requests — releases callers blocked on _send_request."""
+        for req_id, future in list(self._pending.items()):
+            if not future.done():
+                future.cancel()
+        self._pending.clear()
+
     async def stop(self) -> None:
+        self.cancel_all()
         if self._read_task:
             self._read_task.cancel()
+            try:
+                await self._read_task
+            except (asyncio.CancelledError, Exception):
+                pass
             self._read_task = None
         if self._process:
             self._process.terminate()
@@ -182,6 +204,7 @@ class MCPClient:
                 self._process.wait(timeout=5)
             except Exception:
                 self._process.kill()
+            self._process = None
 
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None

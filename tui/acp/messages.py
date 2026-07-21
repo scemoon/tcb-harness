@@ -77,6 +77,17 @@ class AskUser(AgentMessage):
 
 
 @dataclass
+class AwaitingUserInput(AgentMessage):
+    """The agent yielded control to the user without invoking AskUser.
+
+    Sent in response to the ``awaiting_user_input`` ACP sessionUpdate.
+    The next user_input_submitted should be routed as a reply to the
+    question currently on screen, not queued as a brand-new task.
+    """
+    prompt_preview: str = ""
+
+
+@dataclass
 class AIDLCState(AgentMessage):
     current_phase: str
     completed_phases: list[str]

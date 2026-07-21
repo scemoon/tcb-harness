@@ -892,45 +892,30 @@ class A2TUIApp(App, inherit_bindings=False):
         await self.push_screen_wait("settings")
         await self.save_settings()
 
-    def action_logs(self) -> None:
-        """Toggle the real-time log screen (F4).
+    def action_trace(self) -> None:
+        """Toggle the trace viewer screen (F4 / /trace).
 
-        Opens the current session's JSON-RPC log file (the wire
-        protocol trace between this TUI and the ``cdh-agent-acp``
-        subprocess).  Falls back to the most-recently-modified log
-        file under ``paths.get_log()`` if no session is active.
+        Opens the structured trace view powered by agenttrace,
+        showing spans for the current session. Replaces the old
+        JSON-RPC log screen.
         """
-        from tui.screens.log import LogScreen
+        from tui.screens.trace import TraceScreen
 
-        # Re-focus the existing one if it's already on the stack
         for screen in self.screen_stack:
-            if isinstance(screen, LogScreen):
+            if isinstance(screen, TraceScreen):
                 screen.dismiss()
                 return
-        log_path = self._current_session_log_path()
-        self.push_screen(LogScreen(log_path=log_path))
+        session_id = self._current_session_id()
+        self.push_screen(TraceScreen(session_id=session_id))
 
-    def _current_session_log_path(self) -> Path | None:
-        """Resolve the message log file for the active session.
-
-        Returns ``None`` when there is no active session yet (e.g. on
-        the splash / store screen).  The :class:`LogScreen` interprets
-        ``None`` as "auto-discover the most recent log" and shows a
-        "waiting" placeholder while the agent subprocess is still
-        starting.
-        """
+    def _current_session_id(self) -> str | None:
+        """Return the active session ID, or None if no session is running."""
         screen = self.screen
         conv = getattr(screen, "conversation", None)
         agent = getattr(conv, "agent", None) if conv else None
-        session_id = (
+        return (
             getattr(agent, "session_id", None) if agent else None
         ) or getattr(conv, "_agent_session_id", None)
-        if not session_id:
-            return None
-        from tui.message_log import sanitize_filename
-        agent_name = getattr(conv, "agent_title", None) or "unknown"
-        path = paths.get_log() / "messages" / f"{sanitize_filename(agent_name)}_{sanitize_filename(session_id)}.jsonl"
-        return path if path.exists() else None
 
     def action_quit(self) -> None:
         """An [action](/guide/actions) to quit the app as soon as possible."""

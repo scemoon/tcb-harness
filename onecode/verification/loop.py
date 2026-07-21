@@ -73,10 +73,6 @@ class VerificationLoop:
             results[name] = result
 
         aggregated = AggregateResult(gate_results=results)
-        if aggregated.failed:
-            self.state = VerificationState.FAILED
-        else:
-            self.state = VerificationState.COMPLETED
         return aggregated
 
     async def run_all_final_gates(self) -> AggregateResult:

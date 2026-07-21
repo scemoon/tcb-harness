@@ -106,6 +106,7 @@ class SubAgentScreen(Screen):
         height: 1fr;
         overflow-y: auto;
         scrollbar-gutter: stable;
+        padding-bottom: 1;
     }
 
     #content-grid {

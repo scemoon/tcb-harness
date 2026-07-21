@@ -10,7 +10,6 @@ from textual import widgets
 from textual import containers
 from textual import on
 
-
 from tui.app import A2TUIApp
 from tui.widgets.grid_select import GridSelect
 from tui.widgets.project_grid_select import ProjectGridSelect
@@ -183,7 +182,8 @@ class ProjectsScreen(ModalScreen[str]):
         import yaml
         proj_data = {"name": name, "path": str(target), "description": ""}
         proj_file.write_text(yaml.dump(proj_data))
-        await self.project_grid_select.reload()
+        summary = ProjectSummary(name, str(target), id=name)
+        await self.project_grid_select.mount(summary)
         self.project_grid_select.highlighted = len(self.project_grid_select.children) - 1
         self.notify(
             f"Created project '{name}' at {target} "
@@ -214,10 +214,6 @@ class ProjectsScreen(ModalScreen[str]):
         except Exception:
             self.notify("Invalid path", severity="error")
             return
-        existing = CdhProjectLoader.find_cdh_dir(target)
-        if existing is not None and existing.parent == target:
-            self.notify(f".cdh already exists at {existing}", severity="warning")
-            return
         if _project_db_path(target.name) is not None:
             self.notify(
                 f"Project '{target.name}' is already in the project list",
@@ -242,11 +238,12 @@ class ProjectsScreen(ModalScreen[str]):
                 severity="error",
             )
             return
-        try:
-            init_dlc_project(target, name)
-        except (ValueError, RuntimeError) as e:
-            self.notify(str(e), severity="error")
-            return
+        if not (target / "aidlc" / "project.yaml").exists():
+            try:
+                init_dlc_project(target, name)
+            except (ValueError, RuntimeError) as e:
+                self.notify(str(e), severity="error")
+                return
         for cid in components:
             try:
                 add_component(target, cid)
@@ -259,7 +256,8 @@ class ProjectsScreen(ModalScreen[str]):
         proj_file = projects_dir / f"{name}.yaml"
         proj_data = {"name": name, "path": str(target), "description": ""}
         proj_file.write_text(yaml.dump(proj_data))
-        await self.project_grid_select.reload()
+        summary = ProjectSummary(name, str(target), id=name)
+        await self.project_grid_select.mount(summary)
         self.project_grid_select.highlighted = len(self.project_grid_select.children) - 1
         suffix = (
             f" (components: {', '.join(components)})"

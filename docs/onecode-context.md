@@ -290,10 +290,10 @@ class MemoryConfig:
 ### 8.2 容量保护
 
 ```python
-_SYSTEM_CAP_BYTES = 80_000  # UTF-8 字节
+_SYSTEM_CAP_BYTES = 32_768  # 32 KiB UTF-8 字节
 ```
 
-当合并后超过 80KB 时，按优先级丢弃段落：
+当合并后超过 32 KiB 时，按优先级丢弃段落：
 
 | 优先级 | 标记 | 行为 |
 |--------|------|------|

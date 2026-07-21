@@ -327,6 +327,17 @@ class CurrentModeUpdate(SchemaDict, total=False, extra_items=Any):
     sessionUpdate: Required[Literal["current_mode_update"]]
 
 
+class AwaitingUserInputUpdate(SchemaDict, total=False, extra_items=Any):
+    """The agent is waiting for user input but did not invoke AskUser.
+
+    Used when the agent asks a question via plain text output. The TUI
+    switches turn to "client" so the next user_input_submitted is treated
+    as a reply, not queued as a fresh prompt.
+    """
+    sessionUpdate: Required[Literal["awaiting_user_input"]]
+    promptPreview: str
+
+
 class UsageUpdate(SchemaDict, total=False, extra_items=object):
     sessionUpdate: Required[Literal["usage_update"]]
     used: Required[int]

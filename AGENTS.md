@@ -1,4 +1,4 @@
-# cloud-dev-harness
+# AGENTS.md — cloud-dev-harness
 
 <!-- ═══════════════════════════════════════════════════════════
      Generated from ai-dlc-skill/SKILL.md — do not edit manually.
@@ -60,6 +60,8 @@ Contract (INT-FR involved?), Deploy (production?).
 
 Security baseline: `core/security.md` (all phases).
 
+AI-DLC monorepo project: cloud-dev-harness
+
 <!-- ═══════════════════════════════════════════════════════════
      Project Rules
      ═══════════════════════════════════════════════════════════ -->
@@ -74,3 +76,9 @@ Security baseline: `core/security.md` (all phases).
 6. Never commit secrets; never force-push to main/master
 7. Chinese for user communication, English for code
 8. Run lint/typecheck/test after non-trivial edits
+
+## Components
+
+| Prefix | Directory |
+|--------|-----------|
+| INT      | aidlc/contracts/, aidlc/packages/shared/ |

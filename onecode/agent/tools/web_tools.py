@@ -28,12 +28,23 @@ class WebResult:
 class WebFetcher:
     def __init__(self, timeout: int = 30):
         self.timeout = timeout
+        self._client: httpx.Client | None = None
+        self._async_client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.Client:
+        if self._client is None:
+            self._client = httpx.Client(timeout=self.timeout, follow_redirects=True)
+        return self._client
+
+    def _get_async_client(self) -> httpx.AsyncClient:
+        if self._async_client is None:
+            self._async_client = httpx.AsyncClient(timeout=self.timeout, follow_redirects=True)
+        return self._async_client
 
     def fetch(self, url: str, prompt: Optional[str] = None) -> str:
         try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-                resp = client.get(url)
-                resp.raise_for_status()
+            resp = self._get_client().get(url)
+            resp.raise_for_status()
 
             content_type = resp.headers.get("content-type", "").lower()
             if "text/html" in content_type:
@@ -59,9 +70,8 @@ class WebFetcher:
         if cancel_check and cancel_check():
             return f"Error: Cancelled fetching {url}"
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
+            resp = await self._get_async_client().get(url)
+            resp.raise_for_status()
 
             content_type = resp.headers.get("content-type", "").lower()
             if "text/html" in content_type:

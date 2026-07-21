@@ -67,12 +67,21 @@ metadata:
 ## Adaptive Flow
 
 See `core/adaptive-flow.md` for complexity assessment.
+See `core/task-registry.md` for task status tracking.
 
-1. Analyze intent → determine complexity (L1-L5)
-2. Select phases to execute
-3. Call `TodoClear` to reset the plan before delegating each phase
-4. Delegate each phase via `Spawn(agent_type="general", prompt=...)` using the phase's `prompt.md`
-5. Collect results, enforce gates, iterate or advance
+1. **Check Registry**: Read `.opencode/plans/task-registry.json`, check if intent already processed
+   - Found + all phases completed → SKIP, return existing result
+   - Found + partially completed → skip completed phases, run pending only
+   - Not found → create new task entry
+2. Analyze intent → determine complexity (L1-L5)
+3. Select phases to execute (skip any already completed per registry)
+4. `taskRegistry.create()` — record task with phase list
+5. For each pending phase:
+   a. Call `TodoClear` to reset the plan
+   b. Delegate via `Task(agent_type="general", prompt=...)` using the phase's `prompt.md`
+   c. Collect result, enforce gate
+   d. `taskRegistry.completePhase()` — mark phase completed with artifacts
+6. All phases done → mark task `completed` in registry
 
 ```
 

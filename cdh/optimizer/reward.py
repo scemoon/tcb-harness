@@ -15,20 +15,35 @@ class SessionMetrics:
 
 
 class RewardCalculator:
-    WEIGHTS = {
+    WEIGHTS_FULL = {
         "test_pass_rate": 0.40,
         "task_completion": 0.30,
         "tool_efficiency": 0.20,
         "user_feedback": 0.10,
     }
 
+    WEIGHTS_PARTIAL = {
+        "test_pass_rate": 0.55,
+        "tool_efficiency": 0.30,
+        "user_feedback": 0.15,
+    }
+
     def compute(self, metrics: SessionMetrics) -> float:
-        return (
-            metrics.test_pass_rate * self.WEIGHTS["test_pass_rate"]
-            + metrics.task_completion_pct * self.WEIGHTS["task_completion"]
-            + metrics.tool_efficiency * self.WEIGHTS["tool_efficiency"]
-            + metrics.user_feedback * self.WEIGHTS["user_feedback"]
-        )
+        if metrics.task_completion_pct is not None and metrics.task_completion_pct > 0:
+            w = self.WEIGHTS_FULL
+            return (
+                metrics.test_pass_rate * w["test_pass_rate"]
+                + metrics.task_completion_pct * w["task_completion"]
+                + metrics.tool_efficiency * w["tool_efficiency"]
+                + metrics.user_feedback * w["user_feedback"]
+            )
+        else:
+            w = self.WEIGHTS_PARTIAL
+            return (
+                metrics.test_pass_rate * w["test_pass_rate"]
+                + metrics.tool_efficiency * w["tool_efficiency"]
+                + metrics.user_feedback * w["user_feedback"]
+            )
 
     def compute_all(self, all_metrics: list[SessionMetrics]) -> float:
         if not all_metrics:

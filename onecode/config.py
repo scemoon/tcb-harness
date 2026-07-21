@@ -51,6 +51,7 @@ class AgentConfig:
     allow_shell_commands: bool = True
     shell_command_whitelist: list[str] = field(default_factory=list)
     temperature: float = 0.7
+    max_subagent_depth: int = 1
 
 
 @dataclass
@@ -98,11 +99,26 @@ class MemoryConfig:
 
 
 @dataclass
+class PerAgentVerificationConfig:
+    enabled: bool = True
+    gates: list[str] = field(default_factory=lambda: ["lint", "type", "test"])
+    policy: str = "conditional"
+
+
+@dataclass
 class VerificationConfig:
     enabled: bool = True
     policy: str = "conditional"
     gates: list[str] = field(default_factory=lambda: ["lint", "type", "test"])
     plan_gate_mode: str = "adaptive"
+    per_agent: dict[str, PerAgentVerificationConfig] = field(default_factory=dict)
+
+    def for_agent(self, agent_type: str) -> PerAgentVerificationConfig:
+        return self.per_agent.get(agent_type, PerAgentVerificationConfig(
+            enabled=self.enabled,
+            gates=self.gates,
+            policy=self.policy,
+        ))
 
 
 @dataclass

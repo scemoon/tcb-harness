@@ -93,7 +93,7 @@ cdh [OPTIONS] COMMAND [ARGS]...
 | `cdh` (无参数) | 启动 TUI Agent Store |
 | `cdh tui [--project-dir]` | 启动 TUI |
 | `cdh onecode <sub>` | onecode CLI 命名空间 |
-| `cdh project <action>` | 项目管理 |
+| `cdh aidlc <sub>` | AIDLC 项目管理 |
 | `cdh session <action>` | 会话管理 |
 | `cdh version` | 版本信息 |
 | `cdh help [command]` | 帮助 |
@@ -120,18 +120,20 @@ cdh [OPTIONS] COMMAND [ARGS]...
 | `cdh onecode help` | onecode CLI 帮助 |
 | `cdh onecode version` | onecode 版本 |
 
-### 3.4 `cdh project` 子命令
+### 3.4 `cdh aidlc` 子命令
 
-| 动作 | 说明 |
+| 命令 | 说明 |
 |------|------|
-| `select` (默认) | 打开项目管理 TUI |
-| `list` | 列出项目 |
-| `show <name>` | 显示项目详情 |
-| `new <name> [path]` | 创建新项目 (交互式组件选择) |
-| `init [path]` | 在现有目录初始化 `.cdh/` |
-| `load <name>` | 加载项目为当前项目 |
-| `add-component <name>` | 为项目添加组件 |
-| `add-cross-cutting <name>` | 为项目添加横切关注点 |
+| `cdh aidlc project` (无参数) | 打开项目管理 TUI |
+| `cdh aidlc project list` | 列出项目 |
+| `cdh aidlc project new <name> [path]` | 创建新项目 (交互式组件选择) |
+| `cdh aidlc project init [path]` | 在现有目录初始化 `.cdh/` |
+| `cdh aidlc project check [path]` | 检查项目是否为有效 AIDLC 项目 |
+| `cdh aidlc project load <name>` | 加载项目为当前项目 |
+| `cdh aidlc phase <phase>` | 设置 AI-DLC 阶段 |
+| `cdh aidlc gate <name> --status <passed\|failed>` | 记录质量门禁结果 |
+| `cdh aidlc sync` | 从 aidlc/project.yaml 重新生成 AGENTS.md/CLAUDE.md |
+| `cdh aidlc update` | sync 别名 (已弃用) |
 
 ### 3.5 `cdh session` 子命令
 

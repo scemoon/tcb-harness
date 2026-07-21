@@ -263,5 +263,14 @@ class MCPManager:
         client = self._clients.get(name)
         return client.is_running() if client else False
 
+    def cancel_all(self) -> None:
+        """Cancel all in-flight MCP requests across all clients."""
+        for client in self._clients.values():
+            try:
+                if hasattr(client, 'cancel_all'):
+                    client.cancel_all()
+            except Exception as e:
+                logger.warning("MCP cancel_all failed for %s: %s", getattr(client, 'name', '?'), e)
+
     def _save(self):
         self.config_path.write_text(yaml.dump(self._data, default_flow_style=False))

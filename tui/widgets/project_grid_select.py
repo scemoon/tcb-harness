@@ -58,7 +58,11 @@ class ProjectGridSelect(GridSelect):
         projects_dir.mkdir(parents=True, exist_ok=True)
         project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
         for pf in sorted(project_files):
-            await self.mount(ProjectSummary(pf.stem, _read_project_path(pf), id=pf.stem))
+            try:
+                summary = ProjectSummary(pf.stem, _read_project_path(pf), id=pf.stem)
+            except Exception:
+                continue
+            await self.mount(summary)
 
     def refresh(self, **kwargs) -> None:
         super().refresh(**kwargs)

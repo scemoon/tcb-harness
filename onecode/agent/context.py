@@ -44,15 +44,17 @@ def _estimate_tokens(text: str, model: str = "gpt-4") -> int:
             return len(enc.encode(text, disallowed_special=()))
         except Exception:
             pass
-    return max(1, len(text) // 4)
+    ascii_count = sum(1 for c in text if ord(c) < 128)
+    cjk_count = len(text) - ascii_count
+    return max(1, int(ascii_count * 0.3 + cjk_count * 1.5))
 
 
 # ── Context config ──
 
 class ContextConfig:
-    max_tokens: int = 100000
+    max_tokens: int = 32000
     max_messages: int = 1000
-    compact_threshold: float = 0.50
+    compact_threshold: float = 0.40
     model: str = "gpt-4"
 
 
@@ -106,12 +108,14 @@ class ContextManager:
 
         Sets ``config.model`` and derives ``config.max_tokens`` from the
         model's known ``context_window`` in the registry.  Falls back to
-        the existing ``max_tokens`` if the model is unrecognised.
+        32000 (typical small-model window) if the model is unrecognised.
         """
         self.config.model = model
         info = _get_model_registry().get(model)
         if info is not None and info.context_window > 0:
             self.config.max_tokens = info.context_window
+        else:
+            self.config.max_tokens = 32000
 
     # -- model-aware token estimation (incremental O(1) per message) --
 
@@ -276,6 +280,8 @@ class ContextManager:
             "<!-- SKILL:",
             "<!-- CODEBASE -->",
             "<!-- MEMORY -->",
+            "<!-- CDH_PROJECT -->",
+            "<!-- PROJECT_DOC -->",
         }
         for m in msgs:
             if isinstance(m.content, str) and len(m.content) > 8000:
@@ -299,8 +305,24 @@ class ContextManager:
             if isinstance(m.content, str) and len(m.content) > 200:
                 m.content = m.content[:200] + "..."
             elif isinstance(m.content, list):
-                m.content = [b for b in m.content if isinstance(b, dict) and b.get("type") == "tool_use"]
-                if not m.content:
+                truncated: list = []
+                for b in m.content:
+                    if isinstance(b, dict):
+                        btype = b.get("type", "")
+                        if btype == "tool_result":
+                            content = b.get("content", "")
+                            if isinstance(content, str) and len(content) > 300:
+                                b = dict(b, content=content[:300] + "... [truncated]")
+                            truncated.append(b)
+                        elif btype == "tool_use":
+                            truncated.append(b)
+                        elif btype == "thinking":
+                            truncated.append(b)
+                        else:
+                            continue
+                if truncated:
+                    m.content = truncated
+                else:
                     m.content = "[truncated]"
 
     def _summarize_messages(self, msgs: list[Message]) -> str:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from enum import Enum
 from typing import Any
 
@@ -12,6 +13,12 @@ from cdh.optimizer.reward import RewardCalculator, SessionMetrics
 from cdh.optimizer.tracker import OptimizationTracker
 
 logger = logging.getLogger("cdh.optimizer.loop")
+
+_VALID_PARAMS: dict[str, tuple[float, float]] = {
+    "temperature": (0.0, 2.0),
+    "max_iterations": (1, 200),
+    "top_p": (0.0, 1.0),
+} 
 
 
 class HillclimbState(Enum):
@@ -25,8 +32,9 @@ class HillclimbState(Enum):
 
 
 class HillclimbLoop:
-    def __init__(self, min_sessions: int = 10):
+    def __init__(self, min_sessions: int = 3):
         self.state = HillclimbState.IDLE
+        self._base_min_sessions = min_sessions
         self.min_sessions = min_sessions
         self.tracker = OptimizationTracker()
         self.reward_calc = RewardCalculator()
@@ -78,19 +86,16 @@ class HillclimbLoop:
             if self._tool_count > 0
             else metrics.get("tool_efficiency", 0.0)
         )
+        task_pct = metrics.get("task_completion_pct", None)
 
         session_metrics = SessionMetrics(
             session_id=payload.get("session_id", ""),
             test_pass_rate=test_pass_rate,
-            task_completion_pct=metrics.get("task_completion_pct", 0.5),
+            task_completion_pct=task_pct if task_pct is not None else 0.0,
             tool_efficiency=tool_efficiency,
             turn_count=payload.get("turn_count", 0),
         )
         self.tracker.record(session_metrics)
-
-        self._tool_count = 0
-        self._test_pass_count = 0
-        self._test_total_count = 0
 
         if self.tracker.count() >= self.min_sessions:
             self._run_optimization_cycle()
@@ -117,6 +122,10 @@ class HillclimbLoop:
             self.tracker.save_mutation(mutation)
 
         self.tracker.clear()
+        self._tool_count = 0
+        self._test_pass_count = 0
+        self._test_total_count = 0
+        self.min_sessions = min(self._base_min_sessions * 5, self.min_sessions + 2)
         self.state = HillclimbState.COLLECTING
 
         if mutation and self.bus:
@@ -126,8 +135,32 @@ class HillclimbLoop:
                 payload={"mutation": mutation.to_dict()},
             ))
 
+    def _validate_mutation(self, mutation: ConfigMutation) -> list[str]:
+        errors: list[str] = []
+        onecode = mutation.engine_params.get("onecode.dev", {})
+        for key, value in onecode.items():
+            if key in _VALID_PARAMS:
+                lo, hi = _VALID_PARAMS[key]
+                if not (lo <= float(value) <= hi):
+                    errors.append(f"{key}={value} out of range [{lo}, {hi}]")
+            else:
+                logger.debug("Unrecognised engine param in mutation: %s", key)
+        return errors
+
     def _apply_mutation(self, mutation: ConfigMutation) -> None:
+        errors = self._validate_mutation(mutation)
+        if errors:
+            logger.warning("Mutation rejected: %s", errors)
+            return
+
         AGENT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        if AGENT_CONFIG_PATH.exists():
+            backup = AGENT_CONFIG_PATH.with_suffix(".yaml.bak")
+            try:
+                shutil.copy(AGENT_CONFIG_PATH, backup)
+            except Exception as e:
+                logger.warning("Failed to backup agent config: %s", e)
 
         config: dict[str, Any] = {}
         if AGENT_CONFIG_PATH.exists():

@@ -40,3 +40,11 @@
 - 遵守 `rules.md` 中的 UND-001 到 UND-006
 - 遵守 `core/security.md`
 - 完成前必须通过 Human Gate 审查
+
+## 完成报告
+
+完成后返回以下信息给 Master Agent（用于写入 Registry）：
+- `phase: "understand"`
+- `status: "completed"`
+- `artifacts: [生成的文件路径列表]`
+- `gatePassed: true/false`

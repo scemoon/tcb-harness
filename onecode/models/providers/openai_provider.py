@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
+from onecode.models.errors import (
+    ProviderError, TransientProviderError, retry_after_seconds, safe_error_msg,
+)
 from onecode.models.provider import ChatResponse, Message, ModelResponse, Provider, ProviderRegistry
 
 
@@ -14,46 +18,28 @@ class OpenAIProvider(Provider):
     def __init__(self, api_key: str = "", endpoint: str = "", **kwargs):
         self.api_key = api_key
         self._endpoint = endpoint or "https://api.openai.com/v1"
-        self._stream_tool_calls: dict[int, dict] = {}
 
     def is_anthropic_style(self) -> bool:
         return False
 
+    def _non_system_to_dict(self, msg: Message) -> dict:
+        return msg.to_multimodal_dict()
+
     def prepare_messages(self, messages: list[Message]) -> list[dict]:
-        """Prepare messages for OpenAI API, supporting multimodal (text + image) content."""
-        system_parts = []
-        non_system = []
+        """Prepare messages for OpenAI API, supporting multimodal content.
 
-        for m in messages:
-            if m.role == "system":
-                system_parts.append(m.to_api_content())
-            else:
-                non_system.append(m.to_multimodal_dict())
-
-        if len(system_parts) > 1:
-            combined_system = "\n\n".join(system_parts)
-        elif system_parts:
-            combined_system = system_parts[0]
-        else:
-            combined_system = ""
-
-        if combined_system:
-            non_system.insert(0, {"role": "system", "content": combined_system})
-
-        return non_system
-
-    def get_stream_tool_calls(self) -> list[dict]:
-        return list(self._stream_tool_calls.values())
+        Delegates to the base hardening pipeline which handles empty-tool
+        dropping, user coalescing, orphan-tool stripping, dangling
+        tool_call cleanup, and system-prompt capping.
+        """
+        return super().prepare_messages(messages)
 
     async def chat(
         self, messages: list[Message], model: str = "gpt-4-turbo", **kwargs
     ) -> ModelResponse:
         key = self.resolve_api_key(self.api_key)
         if not key:
-            return ModelResponse(
-                content="API key not configured. Set OPENAI_API_KEY.",
-                model=model,
-            )
+            raise ProviderError("API key not configured. Set OPENAI_API_KEY.")
         body = {
             "model": model,
             "messages": self.prepare_messages(messages),
@@ -61,7 +47,7 @@ class OpenAIProvider(Provider):
         tools = kwargs.get("tools")
         if tools:
             body["tools"] = tools
-        body.update({k: v for k, v in kwargs.items() if k != "tools"})
+        body.update({k: v for k, v in kwargs.items() if k not in ("tools", "stream")})
 
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
@@ -72,6 +58,11 @@ class OpenAIProvider(Provider):
                 },
                 json=body,
             )
+            if resp.status_code != 200:
+                raise Provider.classify_http_error(
+                    resp.status_code, resp.text,
+                    retry_after=retry_after_seconds(resp),
+                )
             data = resp.json()
             choice = data.get("choices", [{}])[0]
             msg = choice.get("message", {})
@@ -85,7 +76,7 @@ class OpenAIProvider(Provider):
             for tc in tool_calls:
                 func = tc.get("function", {})
                 try:
-                    args = __import__("json").loads(func.get("arguments", "{}"))
+                    args = json.loads(func.get("arguments", "{}"))
                 except Exception:
                     args = {"raw": func.get("arguments", "")}
                 if not isinstance(args, dict):
@@ -109,9 +100,7 @@ class OpenAIProvider(Provider):
     ) -> AsyncIterator[str]:
         key = self.resolve_api_key(self.api_key)
         if not key:
-            yield "API key not configured."
-            return
-        self._stream_tool_calls = {}
+            raise ProviderError("API key not configured.")
         body = {
             "model": model,
             "messages": self.prepare_messages(messages),
@@ -132,28 +121,17 @@ class OpenAIProvider(Provider):
                 },
                 json=body,
             ) as resp:
+                if resp.status_code != 200:
+                    error_body = await resp.aread()
+                    raise Provider.classify_http_error(
+                        resp.status_code, error_body.decode("utf-8", errors="replace"),
+                        retry_after=retry_after_seconds(resp),
+                    )
                 async for line in resp.aiter_lines():
                     if line.startswith("data: ") and line[6:] != "[DONE]":
-                        import json
                         chunk = json.loads(line[6:])
                         delta = chunk.get("choices", [{}])[0].get("delta", {})
                         yield delta.get("content", "")
-                        tc_deltas = delta.get("tool_calls", [])
-                        for tcd in tc_deltas:
-                            idx = tcd.get("index", 0)
-                            if idx not in self._stream_tool_calls:
-                                self._stream_tool_calls[idx] = {
-                                    "id": tcd.get("id", ""),
-                                    "name": tcd.get("function", {}).get("name", ""),
-                                    "arguments": "",
-                                }
-                            args_delta = tcd.get("function", {}).get("arguments", "")
-                            self._stream_tool_calls[idx]["arguments"] += args_delta
-                            if tcd.get("id"):
-                                self._stream_tool_calls[idx]["id"] = tcd["id"]
-                            if tcd.get("function", {}).get("name"):
-                                self._stream_tool_calls[idx]["name"] = tcd["function"]["name"]
-
 
     async def chat_stream_response(
         self,
@@ -161,12 +139,15 @@ class OpenAIProvider(Provider):
         model: str,
         on_text_chunk: Optional[Callable[[str], None]] = None,
         on_tool_call_delta: Optional[Callable[[str, str, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
         **kwargs,
     ) -> ChatResponse:
         key = self.resolve_api_key(self.api_key)
         if not key:
-            return ChatResponse(content="API key not configured.")
-        self._stream_tool_calls = {}
+            raise ProviderError("API key not configured.")
+        if cancel_check and cancel_check():
+            raise asyncio.CancelledError("cancelled before chat_stream_response")
+
         body = {
             "model": model,
             "messages": self.prepare_messages(messages),
@@ -178,48 +159,64 @@ class OpenAIProvider(Provider):
         body.update({k: v for k, v in kwargs.items() if k not in ("tools", "stream")})
 
         content_parts: list[str] = []
+        stream_tool_calls: dict[int, dict] = {}
 
-        async with httpx.AsyncClient(timeout=300) as client:
-            async with client.stream(
-                "POST",
-                f"{self._endpoint}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "content-type": "application/json",
-                },
-                json=body,
-            ) as resp:
-                async for line in resp.aiter_lines():
-                    if line.startswith("data: ") and line[6:] != "[DONE]":
-                        chunk = json.loads(line[6:])
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        text = delta.get("content", "")
-                        if text:
-                            content_parts.append(text)
-                            if on_text_chunk:
-                                on_text_chunk(text)
-                        tc_deltas = delta.get("tool_calls", [])
-                        for tcd in tc_deltas:
-                            idx = tcd.get("index", 0)
-                            if idx not in self._stream_tool_calls:
-                                self._stream_tool_calls[idx] = {
-                                    "id": tcd.get("id", ""),
-                                    "name": tcd.get("function", {}).get("name", ""),
-                                    "arguments": "",
-                                }
-                            args_delta = tcd.get("function", {}).get("arguments", "")
-                            self._stream_tool_calls[idx]["arguments"] += args_delta
-                            if tcd.get("id"):
-                                self._stream_tool_calls[idx]["id"] = tcd["id"]
-                            if tcd.get("function", {}).get("name"):
-                                self._stream_tool_calls[idx]["name"] = tcd["function"]["name"]
-                            if on_tool_call_delta:
-                                call_id = self._stream_tool_calls[idx].get("id", "")
-                                name = self._stream_tool_calls[idx].get("name", "")
-                                on_tool_call_delta(call_id, name, args_delta)
+        try:
+            async with httpx.AsyncClient(timeout=300) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self._endpoint}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {key}",
+                        "content-type": "application/json",
+                    },
+                    json=body,
+                ) as resp:
+                    if resp.status_code != 200:
+                        error_body = await resp.aread()
+                        raise Provider.classify_http_error(
+                            resp.status_code, error_body.decode("utf-8", errors="replace"),
+                            retry_after=retry_after_seconds(resp),
+                        )
+                    async for line in resp.aiter_lines():
+                        if cancel_check and cancel_check():
+                            raise asyncio.CancelledError("cancelled during streaming")
+                        if line.startswith("data: ") and line[6:] != "[DONE]":
+                            chunk = json.loads(line[6:])
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            text = delta.get("content", "")
+                            if text:
+                                content_parts.append(text)
+                                if on_text_chunk:
+                                    on_text_chunk(text)
+                            tc_deltas = delta.get("tool_calls", [])
+                            for tcd in tc_deltas:
+                                idx = tcd.get("index", 0)
+                                if idx not in stream_tool_calls:
+                                    stream_tool_calls[idx] = {
+                                        "id": tcd.get("id", ""),
+                                        "name": tcd.get("function", {}).get("name", ""),
+                                        "arguments": "",
+                                    }
+                                args_delta = tcd.get("function", {}).get("arguments", "")
+                                stream_tool_calls[idx]["arguments"] += args_delta
+                                if tcd.get("id"):
+                                    stream_tool_calls[idx]["id"] = tcd["id"]
+                                if tcd.get("function", {}).get("name"):
+                                    stream_tool_calls[idx]["name"] = tcd["function"]["name"]
+                                if on_tool_call_delta:
+                                    call_id = stream_tool_calls[idx].get("id", "")
+                                    name = stream_tool_calls[idx].get("name", "")
+                                    on_tool_call_delta(call_id, name, args_delta)
+        except asyncio.CancelledError:
+            raise
+        except ProviderError:
+            raise
+        except Exception as e:
+            raise TransientProviderError(f"Error: {safe_error_msg(e)}") from e
 
         tool_uses = []
-        for nt in self._stream_tool_calls.values():
+        for nt in stream_tool_calls.values():
             try:
                 inp = json.loads(nt.get("arguments", "{}"))
             except (json.JSONDecodeError, TypeError):

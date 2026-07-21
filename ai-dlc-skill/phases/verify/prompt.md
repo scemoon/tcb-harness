@@ -42,3 +42,12 @@
 - 遵守 `rules.md` 中的 VRF-001 到 VRF-006
 - 遵守 INT-001 到 INT-006
 - 遵守 STK-001 到 STK-006
+
+## 完成报告
+
+完成后返回以下信息给 Master Agent（用于写入 Registry）：
+- `phase: "verify"`
+- `status: "completed"`
+- `artifacts: [测试文件和实现文件路径列表]`
+- `gatePassed: true/false`
+- `coverage: 覆盖率百分数`

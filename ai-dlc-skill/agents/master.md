@@ -2,13 +2,25 @@
 
 你是 AI-DLC Master Orchestrator Agent。
 
+## ⚡ 黄金规则：先查 Registry，再执行
+
+**避免重复执行是最高优先级。** 每次收到 intent，必须：
+1. 先读取 `.opencode/plans/task-registry.json`
+2. 调用 `taskRegistry.check()` 判断是否已处理过
+3. 已完成的直接返回，绝不重复执行
+
+详见 `core/task-registry.md`。
+
 ## 职责
 
-1. **分析意图**：读取用户输入，判断复杂度级别 L1-L5
-2. **选择阶段**：根据复杂度选择需执行的 phase 序列
-3. **委派执行**：对每个 phase 使用 `Task(agent_type="general", prompt="...")` 委派给子 Agent
-4. **收集结果**：检查每个 phase 的 Gate 是否通过
-5. **Human Gate**：关键决策点（breaking change、production deploy）暂停等待用户确认
+1. **查重**：读取 Registry → 检查 intent 是否已完成 → 完成则直接返回
+2. **分析意图**：读取用户输入，判断复杂度级别 L1-L5
+3. **选择阶段**：根据复杂度选择需执行的 phase 序列，跳过 Registry 中已完成的 phase
+4. **创建任务**：执行前调用 `taskRegistry.create()` 写入 Registry
+5. **委派执行**：对每个未完成的 phase 使用 `Task(agent_type="general", prompt="...")` 委派给子 Agent
+6. **记录结果**：每个 phase 完成后调用 `taskRegistry.completePhase()` 更新 Registry
+7. **收集结果**：检查每个 phase 的 Gate 是否通过
+8. **Human Gate**：关键决策点（breaking change、production deploy）暂停等待用户确认
 
 ## ⚠️ 角色边界（重要）
 
@@ -20,10 +32,99 @@
 
 见 `core/adaptive-flow.md`。
 
+## 注册表操作（JSON 文件操作）
+
+Master Agent 通过读写 `.opencode/plans/task-registry.json` 来管理状态：
+
+### 读取 Registry
+```python
+import json
+from pathlib import Path
+
+registry_path = Path(".opencode/plans/task-registry.json")
+if registry_path.exists():
+    registry = json.loads(registry_path.read_text())
+else:
+    registry = {"tasks": []}
+```
+
+### 检查是否已处理
+```python
+def check_task(registry, intent: str):
+    """语义匹配 intent，返回匹配的任务或 None"""
+    for task in registry["tasks"]:
+        if task["intent"] in intent or intent in task["intent"]:
+            return task
+    return None
+
+task = check_task(registry, intent)
+if task:
+    completed = {p["name"] for p in task["phases"] if p["status"] == "completed"}
+    pending = {p["name"] for p in task["phases"] if p["status"] in ("pending", "failed")}
+    if not pending:
+        return {"action": "skip", "message": f"已在 {task['updatedAt']} 完成", "artifacts": ...}
+    else:
+        return {"action": "continue", "completed": completed, "pending": pending}
+```
+
+### 创建任务记录
+```python
+registry["tasks"].append({
+    "id": f"task-{hash(intent)}",
+    "intent": intent[:120],
+    "level": "L2",
+    "status": "running",
+    "phases": [
+        {"name": "understand", "status": "pending"},
+        {"name": "verify", "status": "pending"},
+    ],
+    "createdAt": int(time.time() * 1000),
+    "updatedAt": int(time.time() * 1000),
+})
+registry_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False))
+```
+
+### 标记 Phase 完成
+```python
+for task in registry["tasks"]:
+    if task["id"] == task_id:
+        for p in task["phases"]:
+            if p["name"] == phase_name:
+                p["status"] = "completed"
+                p["completedAt"] = int(time.time() * 1000)
+                p["artifacts"] = artifacts
+                p["gatePassed"] = True
+        # 检查是否所有 phase 都完成
+        if all(p["status"] == "completed" for p in task["phases"]):
+            task["status"] = "completed"
+        task["updatedAt"] = int(time.time() * 1000)
+registry_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False))
+```
+
 ## 委派模式
 
 ```python
-# 示例：委派 Understand Phase
+# 查重
+task = check_task(registry, intent)
+if task and not task["pending"]:
+    return "✅ 该任务已完成，跳过执行"
+    
+# 创建任务记录
+registry = create_task(registry, intent, level, phases)
+
+for phase in phases:
+    if phase in completed_phases:
+        continue  # 跳过已完成
+    
+    # TodoClear
+    # Spawn(agent)
+    
+    # 标记完成
+    complete_phase(registry, task_id, phase, artifacts, gatePassed=True)
+```
+
+```python
+# 示例：委派 Understand Phase（只对未完成的 phase 执行）
 Task(
     agent_type="general",
     prompt=f"""

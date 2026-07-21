@@ -1,16 +1,30 @@
-.DS_Store
-build/
+# Python
 __pycache__/
+*.py[cod]
 *.egg-info/
-.python-version
-uv.lock
-.qwen
-.opencode
-.idea
-.cdh/
 dist/
-npm/npm_pkg/*
+build/
+.venv/
+venv/
+*.egg
+
+# Node
 node_modules/
-package.json
-pnpm-lock.yaml
-pnpm-workspace.yaml
+.next/
+dist/
+.nuxt/
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CDH
+.cdh/

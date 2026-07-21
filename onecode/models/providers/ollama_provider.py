@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
-from onecode.models.errors import safe_error_msg
+from onecode.models.errors import (
+    ProviderError, TransientProviderError, safe_error_msg,
+)
 from onecode.models.provider import ChatResponse, Message, ModelResponse, Provider, ProviderRegistry
 
 
@@ -33,6 +36,12 @@ class OllamaProvider(Provider):
                     "stream": False,
                 },
             )
+            if resp.status_code != 200:
+                raise ProviderError(
+                    f"Ollama returned HTTP {resp.status_code}",
+                    status_code=resp.status_code,
+                    body=resp.text,
+                )
             data = resp.json()
             return ModelResponse(
                 content=[{"type": "text", "text": data.get("message", {}).get("content", "")}],
@@ -54,9 +63,15 @@ class OllamaProvider(Provider):
                     "stream": True,
                 },
             ) as resp:
+                if resp.status_code != 200:
+                    error_body = await resp.aread()
+                    raise ProviderError(
+                        f"Ollama returned HTTP {resp.status_code}",
+                        status_code=resp.status_code,
+                        body=error_body.decode("utf-8", errors="replace"),
+                    )
                 async for line in resp.aiter_lines():
                     if line.strip():
-                        import json
                         chunk = json.loads(line)
                         yield chunk.get("message", {}).get("content", "")
                         if chunk.get("done"):
@@ -68,8 +83,11 @@ class OllamaProvider(Provider):
         model: str,
         on_text_chunk: Optional[Callable[[str], None]] = None,
         on_tool_call_delta: Optional[Callable[[str, str, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
         **kwargs,
     ) -> ChatResponse:
+        if cancel_check and cancel_check():
+            raise asyncio.CancelledError("cancelled before chat_stream_response")
         content_parts: list[str] = []
         try:
             async with httpx.AsyncClient(timeout=300) as client:
@@ -82,7 +100,16 @@ class OllamaProvider(Provider):
                         "stream": True,
                     },
                 ) as resp:
+                    if resp.status_code != 200:
+                        error_body = await resp.aread()
+                        raise ProviderError(
+                            f"Ollama returned HTTP {resp.status_code}",
+                            status_code=resp.status_code,
+                            body=error_body.decode("utf-8", errors="replace"),
+                        )
                     async for line in resp.aiter_lines():
+                        if cancel_check and cancel_check():
+                            raise asyncio.CancelledError("cancelled during streaming")
                         if line.strip():
                             chunk = json.loads(line)
                             text = chunk.get("message", {}).get("content", "")
@@ -92,8 +119,12 @@ class OllamaProvider(Provider):
                                     on_text_chunk(text)
                             if chunk.get("done"):
                                 break
+        except asyncio.CancelledError:
+            raise
+        except ProviderError:
+            raise
         except Exception as e:
-            return ChatResponse(content=f"Error: {safe_error_msg(e)}")
+            raise TransientProviderError(f"Error: {safe_error_msg(e)}") from e
         return ChatResponse(content="".join(content_parts))
 
 

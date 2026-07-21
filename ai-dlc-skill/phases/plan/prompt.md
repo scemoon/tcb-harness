@@ -37,3 +37,11 @@
 - 遵守 `rules.md` 中的 PLN-001 到 PLN-004
 - 遵守 STK-001, STK-002（affects 声明 + cross-component 依赖）
 - 完成前必须通过 Human Gate 审查
+
+## 完成报告
+
+完成后返回以下信息给 Master Agent（用于写入 Registry）：
+- `phase: "plan"`
+- `status: "completed"`
+- `artifacts: [生成的文件路径列表]`
+- `gatePassed: true/false`

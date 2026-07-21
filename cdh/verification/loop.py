@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from enum import Enum
 from pathlib import Path
 
@@ -27,6 +28,8 @@ class PlatformVerificationLoop:
         self.project_dir = project_dir or "."
         self._gates: dict[str, Gate] = {}
         self._bus: EventBus | None = None
+        self._last_run: dict[str, float] = {}
+        self._dedup_window: float = 2.0
 
     def register_gate(self, gate: Gate) -> None:
         self._gates[gate.name] = gate
@@ -57,13 +60,17 @@ class PlatformVerificationLoop:
         except ValueError:
             return
 
-        logger.debug("Verification triggered by file change: %s", path)
+        now = time.time()
         results: dict[str, GateResult] = {}
         for name, gate in self._gates.items():
             if not gate.enabled:
                 continue
             if not gate.should_run(path):
                 continue
+            if now - self._last_run.get(name, 0) < self._dedup_window:
+                logger.debug("Dedup: skipping %s (last run %.1fs ago)", name, now - self._last_run[name])
+                continue
+            self._last_run[name] = now
             try:
                 result = await gate.run(self.project_dir)
                 results[name] = result
@@ -72,11 +79,6 @@ class PlatformVerificationLoop:
                 results[name] = GateResult(name=name, status="failed", summary=str(exc))
 
         aggregated = AggregateResult(gate_results=results)
-        if aggregated.failed:
-            self.state = VerificationState.FAILED
-            logger.warning("Verification failed: %s", aggregated.failed_gates)
-        else:
-            self.state = VerificationState.COMPLETED
 
         if self._bus is not None:
             evt_type = EventTypes.VERIFICATION_FAILED if aggregated.failed else EventTypes.VERIFICATION_PASSED

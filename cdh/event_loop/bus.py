@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
@@ -20,6 +21,13 @@ class EventLoopState(Enum):
     FAILED = "failed"
 
 
+def _is_async(handler: EventHandler) -> bool:
+    return asyncio.iscoroutinefunction(handler) or (
+        hasattr(handler, "__func__")
+        and asyncio.iscoroutinefunction(handler.__func__)  # type: ignore[attr-defined]
+    )
+
+
 @dataclass
 class EventBus:
     state: EventLoopState = EventLoopState.IDLE
@@ -31,7 +39,7 @@ class EventBus:
         if event_type not in self._subscribers:
             self._subscribers[event_type] = []
         self._subscribers[event_type].append(handler)
-        logger.debug("Subscribed %s to %s", handler.__name__, event_type)
+        logger.debug("Subscribed %s to %s", getattr(handler, "__name__", handler), event_type)
 
     def unsubscribe(self, event_type: str, handler: EventHandler) -> None:
         if event_type in self._subscribers:
@@ -43,12 +51,47 @@ class EventBus:
         self._history.append(event)
         if len(self._history) > self._max_history:
             self._history = self._history[-self._max_history:]
-        for handler in self._subscribers.get(event.type, []):
-            try:
-                handler(event)
-            except Exception as exc:
-                logger.warning("Handler %s failed on %s: %s",
-                               handler.__name__, event.type, exc)
+
+        handlers = self._subscribers.get(event.type, [])
+        if not handlers:
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+            for handler in handlers:
+                if _is_async(handler):
+                    loop.create_task(self._invoke_async(handler, event))
+                else:
+                    self._invoke_sync(handler, event)
+        except RuntimeError:
+            for handler in handlers:
+                if _is_async(handler):
+                    logger.debug(
+                        "Skipping async handler %s — no running event loop",
+                        getattr(handler, "__name__", handler),
+                    )
+                else:
+                    self._invoke_sync(handler, event)
+
+    async def _invoke_async(self, handler: EventHandler, event: Event) -> None:
+        try:
+            await handler(event)
+        except Exception as exc:
+            logger.warning(
+                "Async handler %s failed on event %s: %s",
+                getattr(handler, "__name__", handler), event.type, exc,
+                exc_info=True,
+            )
+
+    def _invoke_sync(self, handler: EventHandler, event: Event) -> None:
+        try:
+            handler(event)
+        except Exception as exc:
+            logger.warning(
+                "Handler %s failed on event %s: %s",
+                getattr(handler, "__name__", handler), event.type, exc,
+                exc_info=True,
+            )
 
     def get_history(self, event_type: str | None = None,
                     limit: int = 100) -> list[Event]:

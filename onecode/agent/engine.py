@@ -22,8 +22,18 @@ from onecode.models.messages import StreamEvent, StreamEventType
 
 logger = logging.getLogger("onecode.agent.engine")
 
-# Subagent depth limit — subagents are leaf nodes (max depth = 1).
+# Subagent depth limit — subagents are leaf nodes by default (max depth = 1),
+# controlled via `agent.max_subagent_depth` in onecode.config.yaml.
 _MAX_SUBAGENT_DEPTH = 1
+
+# Marker embedded in injected nudge messages for robust cleanup.
+# Searching by content is resilient to context compaction, index shifts,
+# and concurrent message insertion — unlike the index-based approach.
+_INJECT_MARKER = "<!-- INJECTED_NUDGE -->"
+
+# Maximum wall-clock seconds for a single subagent execution.  Prevents
+# hung subagents from blocking the parent engine indefinitely.
+_SUBAGENT_TIMEOUT = 600
 
 
 def _get_block_type(block: Any) -> str:
@@ -534,16 +544,20 @@ class AgentEngine:
         self._verification_loop: Optional["VerificationLoop"] = None  # noqa: F821
         self._event_bridge: Optional["EventBridge"] = None  # noqa: F821
         if _cfg.loops.verification.enabled:
-            from onecode.verification import VerificationLoop
-            from onecode.verification.gates import LintGate, TypeGate, TestGate
-            self._verification_loop = VerificationLoop(policy=_cfg.loops.verification.policy)
-            self._verification_loop.activate()
-            if "lint" in _cfg.loops.verification.gates:
-                self._verification_loop.register_gate(LintGate())
-            if "type" in _cfg.loops.verification.gates:
-                self._verification_loop.register_gate(TypeGate())
-            if "test" in _cfg.loops.verification.gates:
-                self._verification_loop.register_gate(TestGate())
+            agent_type = getattr(app, 'current_agent', None)
+            agent_name = getattr(agent_type, 'name', 'build') if agent_type else 'build'
+            vcfg = _cfg.loops.verification.for_agent(agent_name)
+            if vcfg.enabled:
+                from onecode.verification import VerificationLoop
+                from onecode.verification.gates import LintGate, TypeGate, TestGate
+                self._verification_loop = VerificationLoop(policy=vcfg.policy)
+                self._verification_loop.activate()
+                if "lint" in vcfg.gates:
+                    self._verification_loop.register_gate(LintGate())
+                if "type" in vcfg.gates:
+                    self._verification_loop.register_gate(TypeGate())
+                if "test" in vcfg.gates:
+                    self._verification_loop.register_gate(TestGate())
         if _cfg.loops.event.enabled:
             from onecode.agent.event_bridge import EventBridge
             self._event_bridge = EventBridge(bus=None)
@@ -574,6 +588,16 @@ class AgentEngine:
 
         # Subagent depth limit — subagents are leaf nodes (max depth = 1).
         self._subagent_depth: int = 0
+
+        # ContextLengthError crisis flag — when set, skip codebase/memory
+        # auto-injection to avoid "compact → re-inject → compact" loops.
+        self._ctx_crisis: bool = False
+
+        # Verification retry counter per session.
+        self._verification_fail_count: int = 0
+
+        # Store last tool results by tool_use_id for TurnRecord assembly.
+        self._last_tool_results: dict[str, str] = {}
 
         # Skip codebase auto-retrieval / long-term memory recall inside
         # subagent engines.  Both are project-seeding steps meant for the
@@ -617,6 +641,9 @@ class AgentEngine:
         # refuses to call tools despite pending todos, we cap the loop
         # instead of cycling until max_turns is exhausted.
         self._empty_tool_turns: int = 0
+
+        # Track injected nudge messages for cleanup after chat_stream exits.
+        self._injected_msg_indices: list[int] = []
 
     def _build_tool_registry(self) -> ToolRegistry:  # noqa: F821
         from onecode.agent.tools.registry import ToolRegistry
@@ -726,6 +753,40 @@ class AgentEngine:
                 self.on_event(event)
             except Exception as e:
                 logger.warning("ToolEvent callback failed: %s", e)
+
+    def _inject_nudge(self, lines: list[str]) -> None:
+        """Inject a user nudge message for later cleanup (marker-based)."""
+        self.context.add_message(
+            "user",
+            [{"type": "text", "text": f"{_INJECT_MARKER}\n" + "\n".join(lines)}],
+        )
+
+    def _cleanup_injected_messages(self) -> None:
+        """Remove all injected nudge messages by marker content.
+
+        Uses the ``_INJECT_MARKER`` string embedded in message text, which
+        is resilient to context compaction and index shifts — unlike the
+        previous index-based approach that could corrupt the message list
+        when markers referred to stale positions.
+        """
+        marker = _INJECT_MARKER
+        kept: list = []
+        removed_tokens = 0
+        for m in self.context.messages:
+            content_str = ""
+            if isinstance(m.content, str):
+                content_str = m.content
+            elif isinstance(m.content, list):
+                content_str = " ".join(
+                    str(b.get("text", "")) for b in m.content if isinstance(b, dict)
+                )
+            if marker in content_str:
+                removed_tokens += self.context._estimate_message_tokens(m)
+            else:
+                kept.append(m)
+        self.context.messages = kept
+        self.context._token_count -= removed_tokens
+        self._injected_msg_indices.clear()
 
     def _emit_text_chunks(self, text: str, chunk_size: int = 12) -> None:
         """Emit user-visible text in small chunks (Clawd-Code pattern)."""
@@ -1269,11 +1330,12 @@ class AgentEngine:
         except (TypeError, ValueError):
             return str(output)
 
-    async def cancel(self):
+    def cancel(self):
         """Cancel the current chat_stream turn and all in-flight subagents."""
         self._cancelled = True
         for child in self._child_engines:
             child._cancelled = True
+        self._mcp.cancel_all()
 
     async def shutdown(self):
         """Release OS resources held by this engine (LSP, MCP, cron)."""
@@ -1285,9 +1347,17 @@ class AgentEngine:
         self._cron_scheduler.stop_loop()
 
     def __del__(self):
-        """Fallback cleanup on garbage collection."""
-        self._lsp_tool.stop_all()
-        self._cron_scheduler.stop_loop()
+        """Fallback cleanup on garbage collection — wrapped in try/except
+        to avoid crashing during interpreter teardown when modules may
+        already be collected."""
+        try:
+            self._lsp_tool.stop_all()
+        except Exception:
+            pass
+        try:
+            self._cron_scheduler.stop_loop()
+        except Exception:
+            pass
 
     async def chat_stream(self, user_input: str | list[dict]) -> AsyncIterator[StreamEvent | str]:
         self._load_skills()
@@ -1319,10 +1389,13 @@ class AgentEngine:
         # Skipped entirely for subagent engines (see _disable_retrieval)
         # to avoid the 2.3s+ indexer loop and the per-chunk embedding httpx
         # calls that block the event loop and freeze streaming/cancel.
+        # Also skipped when _ctx_crisis is set to prevent "compact →
+        # re-inject → compact" loops after a ContextLengthError recovery.
         if (
             isinstance(user_input, str)
             and self._should_retrieve_codebase()
             and not self._disable_retrieval
+            and not self._ctx_crisis
         ):
             try:
                 engine = await self._get_codebase_engine()
@@ -1347,6 +1420,7 @@ class AgentEngine:
             and self.app.config.memory.enabled
             and self.app.config.memory.auto_recall
             and not self._disable_retrieval
+            and not self._ctx_crisis
         ):
             try:
                 top_k = self.app.config.memory.top_k
@@ -1423,8 +1497,14 @@ class AgentEngine:
         # Reset per-turn usage tracking
         self._turn_usages = []
 
-        # Reset cancellation flag (adapter also resets it before calling)
-        self._cancelled = False
+        # Guard against concurrent chat_stream calls: if the engine was
+        # already cancelled before the adapter called us, honour that.
+        # Do NOT blindly reset _cancelled — a caller may have called
+        # cancel() between turn boundary.
+        if self._cancelled:
+            logger.warning("chat_stream: engine already cancelled, aborting")
+            yield StreamEvent.text_delta("\n\n*Cancelled*\n\n")
+            return
 
         # ── Agent loop: 思考 → Todo → 行动 (per-Round) ──
         is_anthropic = provider.is_anthropic_style()
@@ -1463,13 +1543,11 @@ class AgentEngine:
                         f"## {turn} rounds completed, {pending} todos still pending",
                         "Continue executing the next todo. Do NOT stop or summarise.",
                     ]
-                    self.context.add_message(
-                        "user",
-                        [{"type": "text", "text": "\n".join(lines)}],
-                    )
+                    self._inject_nudge(lines)
                 else:
                     break
             if self._cancelled:
+                self._cleanup_injected_messages()
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                 return
 
@@ -1523,6 +1601,7 @@ class AgentEngine:
                     model=model_name,
                     on_text_chunk=stream_cb,
                     on_tool_call_delta=self.on_tool_call_delta,
+                    cancel_check=lambda: self._cancelled,
                     tools=self._tool_registry.make_openai_schemas(),
                 )
                 response_text = chat_response.content
@@ -1594,6 +1673,7 @@ class AgentEngine:
                     yield StreamEvent.error(safe_error_msg(e))
                     break
             except TurnCancelledError:
+                self._cleanup_injected_messages()
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                 return
             except ContextLengthError as e:
@@ -1620,13 +1700,14 @@ class AgentEngine:
                 level = self.context.compact()
                 ctx_tokens_after = self.context._token_count
                 if level == "none" and ctx_retries >= 2:
+                    self._ctx_crisis = True
                     for marker in ("<!-- SKILL:", "<!-- PROJECT_DOC -->",
                                    "<!-- CODEBASE -->", "<!-- MEMORY -->"):
                         removed = self.context.remove_system_by_marker(marker)
                         if removed:
                             logger.info(
                                 "ContextLengthError recovery: removed %d system "
-                                "msg(s) with marker %s", removed, marker,
+                                "msg(s) with marker %s (ctx_crisis set)", removed, marker,
                             )
                     ctx_tokens_after = self.context._token_count
                 if ctx_tokens_after < ctx_tokens_before:
@@ -1653,6 +1734,10 @@ class AgentEngine:
             except TransientProviderError as e:
                 turn_retries += 1
                 if turn_retries <= 3:
+                    if self._cancelled:
+                        self._cleanup_injected_messages()
+                        yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
+                        return
                     delay = min(2 ** (turn_retries - 1), 30)
                     logger.warning(
                         "Transient provider error on turn %d, "
@@ -1688,6 +1773,7 @@ class AgentEngine:
             # Check cancellation after provider call (covers non-streaming
             # responses and cases where on_text_chunk was never called).
             if self._cancelled:
+                self._cleanup_injected_messages()
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                 return
 
@@ -1781,13 +1867,15 @@ class AgentEngine:
                 # forceful continuation nudge and loop again instead of
                 # exiting the turn loop.
                 self._empty_tool_turns += 1
-                if self._empty_tool_turns >= 3:
+                if self._empty_tool_turns >= 2:
+                    pending_count = sum(
+                        1 for t in self._todo_manager.list_todos()
+                        if t.get("status") in ("pending", "in_progress")
+                    )
                     logger.warning(
                         "LLM produced %d consecutive empty turns with %d "
                         "remaining todos — breaking loop",
-                        self._empty_tool_turns,
-                        sum(1 for t in self._todo_manager.list_todos()
-                            if t.get("status") in ("pending", "in_progress")),
+                        self._empty_tool_turns, pending_count,
                     )
                     break
                 if self._has_pending_todos():
@@ -1800,8 +1888,6 @@ class AgentEngine:
                         "injecting FORCE_CONTINUE nudge (empty_tool_turns=%d)",
                         open_count, self._empty_tool_turns,
                     )
-                    # Auto-advance: since the LLM is stalled, find the next
-                    # pending todo and inject a direct instruction.
                     next_todo = None
                     for t in self._todo_manager.list_todos():
                         if t.get("status") == "pending":
@@ -1816,30 +1902,21 @@ class AgentEngine:
                             "",
                             "Execute it now. Do NOT summarise or stop.",
                         ]
-                        self.context.add_message(
-                            "user",
-                            [{"type": "text", "text": "\n".join(lines)}],
-                        )
+                        self._inject_nudge(lines)
                     else:
                         lines = [
                             "<!-- FORCE_CONTINUE -->",
-            "## CRITICAL: Unfinished todos detected",
-            "You stopped without completing all planned todos.",
-            "You MUST continue working:",
-            "1. Call TodoUpdate(status=\"completed\") for any finished work.",
-            "2. Then Spawn or execute the next pending todo.",
-            "3. Repeat until ALL todos are Done.",
-            "Do NOT stop. Do NOT summarise. Keep executing.",
+                            "## CRITICAL: Unfinished todos detected",
+                            "You stopped without completing all planned todos.",
+                            "You MUST continue working:",
+                            "1. Call TodoUpdate(status=\"completed\") for any finished work.",
+                            "2. Then Spawn or execute the next pending todo.",
+                            "3. Repeat until ALL todos are Done.",
+                            "Do NOT stop. Do NOT summarise. Keep executing.",
                         ]
-                        self.context.add_message(
-                            "user",
-                            [{"type": "text", "text": "\n".join(lines)}],
-                        )
+                        self._inject_nudge(lines)
                     continue
                 # No pending todos and no tool calls: work appears done.
-                # Guard: if no todos were ever created after multiple rounds,
-                # the agent may have done work without tracking it. Inject a
-                # one-time confirmation prompt before giving the final break.
                 all_todos = self._todo_manager.list_todos()
                 if not all_todos and self.iterations > 1:
                     confirm_lines = [
@@ -1851,10 +1928,7 @@ class AgentEngine:
                         "If work remains → `TodoCreate` and continue.",
                         "If done → output a visible summary of what you accomplished.",
                     ]
-                    self.context.add_message(
-                        "user",
-                        [{"type": "text", "text": "\n".join(confirm_lines)}],
-                    )
+                    self._inject_nudge(confirm_lines)
                     self._empty_tool_turns += 1
                     continue
                 break
@@ -1873,6 +1947,7 @@ class AgentEngine:
 
             for tu in tool_uses:
                 if self._cancelled:
+                    self._cleanup_injected_messages()
                     yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                     return
                 logger.info(f"Executing tool: {tu['name']} (id={tu['id']})")
@@ -2253,6 +2328,7 @@ class AgentEngine:
                         result_cat = MsgToolCategory(category)
                     except ValueError:
                         result_cat = MsgToolCategory.UNKNOWN
+                    self._last_tool_results[tu["id"]] = result_str
                     self._notify_event(ToolEvent(
                         kind="tool_result",
                         tool_name=tu["name"],
@@ -2298,40 +2374,69 @@ class AgentEngine:
             self._empty_tool_turns = 0
 
             # L2: Run verification loop if applicable
+            verification_retry = False
             if self._verification_loop is not None:
                 from onecode.agent.turn_record import TurnRecord
                 for tu in tool_uses:
                     if self._verification_loop.should_verify(tu["name"]):
+                        result_str = self._last_tool_results.get(tu["id"], "")
                         turn_record = TurnRecord(
                             turn_number=turn,
                             thought=clean_text,
                             tool_name=tu["name"],
                             tool_input=tu.get("input"),
+                            tool_output=result_str,
                         )
                         agg_result = await self._verification_loop.run_gates(turn_record)
                         turn_record.add_verification(agg_result.to_dict())
                         evt_type = StreamEventType.VERIFICATION_PASSED if agg_result.passed else StreamEventType.VERIFICATION_FAILED
                         yield StreamEvent(
                             type=evt_type,
-                            text=f"{'passed' if agg_result.passed else 'failed'}: {', '.join(agg_result.failed_gates) if not agg_result.passed else 'all gates passed'}",
+                            text="passed" if agg_result.passed else f"failed: {', '.join(agg_result.failed_gates)}",
                             verification_passed=agg_result.passed,
                             verification_failed_gates=list(agg_result.failed_gates),
                         )
                         if not agg_result.passed:
-                            logger.warning("Verification failed: %s", agg_result.failed_gates)
-                            yield StreamEvent.text_delta(
-                                f"\n⚠️ Verification failed: {', '.join(agg_result.failed_gates)}\n"
+                            self._verification_fail_count += 1
+                            logger.warning(
+                                "Verification failed (attempt %d/3): %s",
+                                self._verification_fail_count, agg_result.failed_gates,
                             )
-                            if self._event_bridge is not None:
-                                self._event_bridge.on_verification_failed(agg_result)
+                            if self._verification_fail_count <= 3:
+                                lines = [
+                                    "<!-- VERIFY_FAIL -->",
+                                    f"## Verification failed: {', '.join(agg_result.failed_gates)}",
+                                    f"Attempt {self._verification_fail_count}/3 — fix the issues above and retry.",
+                                    "Do NOT stop. Fix the code and re-run verification tools.",
+                                ]
+                                self.context.insert_system_before_non_system("\n".join(lines))
+                                if self._event_bridge is not None:
+                                    self._event_bridge.on_verification_failed(agg_result)
+                                verification_retry = True
+                                break
+                            else:
+                                logger.warning(
+                                    "Verification failed after %d retries, continuing",
+                                    self._verification_fail_count,
+                                )
+                                yield StreamEvent.text_delta(
+                                    f"\n⚠️ Verification failed after 3 retries: {', '.join(agg_result.failed_gates)}\n"
+                                )
+                                if self._event_bridge is not None:
+                                    self._event_bridge.on_verification_failed(agg_result)
                         else:
+                            self._verification_fail_count = 0
                             if self._event_bridge is not None:
                                 self._event_bridge.on_verification_passed()
+            if verification_retry:
+                continue
 
             if self._cancelled:
+                self._cleanup_injected_messages()
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                 return
 
+        self._cleanup_injected_messages()
         usage_summary = ", ".join(
             f"turn {i+1}: {u.get('total_tokens', '?')} tokens"
             for i, u in enumerate(self._turn_usages) if u
@@ -2432,9 +2537,11 @@ class AgentEngine:
         self._direct_execution_count = 0
         self._empty_tool_turns = 0
         self._plan_denial_count = 0
+        self._verification_fail_count = 0
+        self._last_tool_results.clear()
+        self._cleanup_injected_messages()
         self.context.remove_system_by_marker("<!-- PLAN_MODE_DENIED -->")
-        # Invalidate the plan-emit dedupe cache so the next chat_stream
-        # always produces a fresh snapshot for the TUI.
+        self.context.remove_system_by_marker("<!-- VERIFY_FAIL -->")
         self._last_emitted_plan = ()
         self.context.remove_system_by_marker("<!-- REACT_PHASE -->")
         self.context.remove_system_by_marker("<!-- ROUTING_REMINDER -->")
@@ -2447,6 +2554,7 @@ class AgentEngine:
         self._turn_usages = []
         self._skills_loaded = False
         self._project_context_loaded = False
+        self._ctx_crisis = False
         self._skill_loader.invalidate_cache()
         self._reset_react_state()
 
@@ -2529,9 +2637,10 @@ class AgentEngine:
         Inherits project context and skills from the parent
         engine so the subagent does not start from a blank slate.
         """
-        # Depth check: subagents are leaf nodes (max depth = 1).
-        if self._subagent_depth >= _MAX_SUBAGENT_DEPTH:
-            err = "Subagent cannot spawn nested subagents (max depth=1)"
+        # Depth check: limit from config (default 1 = leaf nodes only).
+        depth_limit = getattr(self.app.config.agent, 'max_subagent_depth', _MAX_SUBAGENT_DEPTH)
+        if self._subagent_depth >= depth_limit:
+            err = f"Subagent cannot spawn nested subagents (max depth={depth_limit})"
             yield (StreamEvent.subagent_end(
                 "", agent_type=agent_type, status="failed", error=err,
             ), err)
@@ -2668,8 +2777,33 @@ class AgentEngine:
 
         try:
             logger.debug("%s entering queue.get() consumer loop", _sa_log_prefix)
+            _sa_deadline = _SUBAGENT_TIMEOUT
             while True:
-                item_type, item = await _queue.get()
+                if self._cancelled:
+                    logger.debug("%s cancelled — breaking consumer loop", _sa_log_prefix)
+                    yield (StreamEvent.subagent_end(
+                        "", agent_type=agent_type, status="failed", error="cancelled",
+                    ), "")
+                    return
+                try:
+                    item_type, item = await asyncio.wait_for(
+                        _queue.get(),
+                        timeout=min(1.0, _sa_deadline),
+                    )
+                    _sa_deadline = _SUBAGENT_TIMEOUT  # reset on each item
+                except asyncio.TimeoutError:
+                    _sa_deadline -= 1.0
+                    if _sa_deadline <= 0:
+                        logger.warning(
+                            "%s subagent timed out after %ds — cancelling",
+                            _sa_log_prefix, _SUBAGENT_TIMEOUT,
+                        )
+                        yield (StreamEvent.subagent_end(
+                            "", agent_type=agent_type, status="failed",
+                            error=f"timed out after {_SUBAGENT_TIMEOUT}s",
+                        ), "")
+                        return
+                    continue
                 _sa_chunk_count += 1
                 if _sa_chunk_count <= 5 or _sa_chunk_count % 50 == 0:
                     logger.debug(

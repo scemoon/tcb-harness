@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import logging
 import os
 import resource
+import signal
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
+
+logger = logging.getLogger("onecode.sandbox")
+
+# How often to poll cancel_check while a subprocess is running.  Small enough
+# that a user cancel feels immediate, large enough to avoid busy-spinning.
+CANCEL_POLL_INTERVAL = 0.1
 
 
 class SandboxMode(enum.Enum):
@@ -123,8 +131,7 @@ class Sandbox:
                 return await self._exec_bwrap_async(cmd, timeout, cancel_check)
             return await self._exec_direct_async(cmd, timeout, cancel_check)
         if mode == SandboxMode.DOCKER:
-            # Docker exec is async-adaptable via docker-py, but keep sync for now
-            return self._exec_docker(cmd, timeout)
+            return await self._exec_docker_async(cmd, timeout, cancel_check)
         return await self._exec_direct_async(cmd, timeout, cancel_check)
 
     def _exec_direct(self, cmd: str, timeout: int) -> dict:
@@ -139,15 +146,15 @@ class Sandbox:
                 resource.setrlimit(
                     resource.RLIMIT_CPU, (limits.cpu_time, limits.cpu_time + 5)
                 )
-            except (ValueError, OSError, resource.error):
-                pass
+            except (ValueError, OSError, resource.error) as exc:
+                logger.warning("RLIMIT_CPU setrlimit failed in preexec: %s", exc)
             try:
                 mem_bytes = limits.memory_mb * 1024 * 1024
                 resource.setrlimit(
                     resource.RLIMIT_AS, (mem_bytes, mem_bytes)
                 )
-            except (ValueError, OSError, resource.error):
-                pass
+            except (ValueError, OSError, resource.error) as exc:
+                logger.warning("RLIMIT_AS setrlimit failed in preexec: %s", exc)
         try:
             result = subprocess.run(
                 cmd,
@@ -181,47 +188,109 @@ class Sandbox:
                 resource.setrlimit(
                     resource.RLIMIT_CPU, (limits.cpu_time, limits.cpu_time + 5)
                 )
-            except (ValueError, OSError, resource.error):
-                pass
+            except (ValueError, OSError, resource.error) as exc:
+                logger.warning("RLIMIT_CPU setrlimit failed in preexec: %s", exc)
             try:
                 mem_bytes = limits.memory_mb * 1024 * 1024
                 resource.setrlimit(
                     resource.RLIMIT_AS, (mem_bytes, mem_bytes)
                 )
-            except (ValueError, OSError, resource.error):
-                pass
+            except (ValueError, OSError, resource.error) as exc:
+                logger.warning("RLIMIT_AS setrlimit failed in preexec: %s", exc)
         process = await asyncio.create_subprocess_shell(
             cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self.config.workspace_root),
             preexec_fn=_preexec_apply_rlimits,
+            start_new_session=True,
         )
+        return await self._run_with_cancel(process, timeout, cancel_check, "none")
+
+    @staticmethod
+    async def _terminate_process(process: asyncio.subprocess.Process) -> None:
+        """Terminate a running subprocess tree, escalating to SIGKILL if needed.
+
+        Subprocesses are started with ``start_new_session=True`` so they lead
+        their own process group; we signal the whole group so child processes
+        spawned by the shell (e.g. ``sleep``) are killed too, instead of being
+        orphaned and keeping the output pipes open.
+        """
+        def _kill_group(sig: int) -> None:
+            try:
+                os.killpg(os.getpgid(process.pid), sig)
+            except (ProcessLookupError, PermissionError):
+                try:
+                    process.send_signal(sig)
+                except ProcessLookupError:
+                    pass
+
         try:
-            if cancel_check is not None and cancel_check():
-                process.terminate()
-                await process.wait()
-                return {"success": False, "error": "Cancelled", "sandbox": "none"}
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=timeout,
-            )
-            stdout = stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else stdout
-            stderr = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else stderr
-            return {
-                "success": process.returncode == 0,
-                "stdout": stdout,
-                "stderr": stderr,
-                "returncode": process.returncode,
-                "sandbox": "none",
-            }
+            _kill_group(signal.SIGTERM)
+            await asyncio.wait_for(process.wait(), timeout=2.0)
         except asyncio.TimeoutError:
-            process.terminate()
+            _kill_group(signal.SIGKILL)
             await process.wait()
-            return {"success": False, "error": "Command timed out", "sandbox": "none"}
+        except ProcessLookupError:
+            pass
+
+    async def _run_with_cancel(
+        self,
+        process: asyncio.subprocess.Process,
+        timeout: int,
+        cancel_check: Callable[[], bool] | None,
+        sandbox: str,
+    ) -> dict:
+        """Await ``process.communicate()`` while polling ``cancel_check`` so a
+        user cancel actually terminates the running command instead of blocking
+        until it finishes naturally or hits ``timeout``.
+
+        ``process`` must already be started.
+        """
+        communicate_task = asyncio.ensure_future(process.communicate())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout if timeout else None
+        try:
+            while not communicate_task.done():
+                if cancel_check is not None and cancel_check():
+                    await self._terminate_process(process)
+                    try:
+                        await communicate_task
+                    except Exception:
+                        pass
+                    return {"success": False, "error": "Cancelled", "sandbox": sandbox}
+                if deadline is not None and loop.time() >= deadline:
+                    await self._terminate_process(process)
+                    try:
+                        await communicate_task
+                    except Exception:
+                        pass
+                    return {"success": False, "error": "Command timed out", "sandbox": sandbox}
+                await asyncio.sleep(CANCEL_POLL_INTERVAL)
+            stdout, stderr = await communicate_task
+        except asyncio.CancelledError:
+            # A cancelled parent turn must not leave the child process running.
+            # Cancelling ``process.communicate()`` alone does NOT kill the
+            # subprocess, so terminate it explicitly before re-raising.
+            communicate_task.cancel()
+            await self._terminate_process(process)
+            try:
+                await communicate_task
+            except Exception:
+                pass
+            raise
         except Exception as e:
-            process.terminate()
-            await process.wait()
-            return {"success": False, "error": str(e), "sandbox": "none"}
+            await self._terminate_process(process)
+            return {"success": False, "error": str(e), "sandbox": sandbox}
+        stdout = stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else stdout
+        stderr = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else stderr
+        return {
+            "success": process.returncode == 0,
+            "stdout": stdout,
+            "stderr": stderr,
+            "returncode": process.returncode,
+            "sandbox": sandbox,
+        }
 
     async def _exec_bwrap_async(
         self, cmd: str, timeout: int,
@@ -233,32 +302,9 @@ class Sandbox:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self.config.workspace_root),
+            start_new_session=True,
         )
-        try:
-            if cancel_check is not None and cancel_check():
-                process.terminate()
-                await process.wait()
-                return {"success": False, "error": "Cancelled", "sandbox": "bwrap"}
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=timeout,
-            )
-            stdout = stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else stdout
-            stderr = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else stderr
-            return {
-                "success": process.returncode == 0,
-                "stdout": stdout,
-                "stderr": stderr,
-                "returncode": process.returncode,
-                "sandbox": "bwrap",
-            }
-        except asyncio.TimeoutError:
-            process.terminate()
-            await process.wait()
-            return {"success": False, "error": "Command timed out", "sandbox": "bwrap"}
-        except Exception as e:
-            process.terminate()
-            await process.wait()
-            return {"success": False, "error": str(e), "sandbox": "bwrap"}
+        return await self._run_with_cancel(process, timeout, cancel_check, "bwrap")
 
     def _exec_bwrap(self, cmd: str, timeout: int) -> dict:
         bwrap_cmd = self._build_bwrap_cmd(cmd)
@@ -323,6 +369,62 @@ class Sandbox:
             return {"success": False, "error": "Docker not available", "sandbox": "docker"}
         except docker.errors.TimeoutError:
             return {"success": False, "error": "Container timed out", "sandbox": "docker"}
+        except Exception as e:
+            return {"success": False, "error": str(e), "sandbox": "docker"}
+
+    async def _exec_docker_async(
+        self, cmd: str, timeout: int,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict:
+        import docker
+
+        ws = str(self.config.workspace_root.resolve())
+        docker_cmd = ["sh", "-c", f"cd /workspace && {cmd}"]
+        loop = asyncio.get_event_loop()
+
+        try:
+            client = await loop.run_in_executor(None, docker.from_env)
+            container = await loop.run_in_executor(
+                None,
+                lambda: client.containers.run(
+                    "alpine:latest",
+                    docker_cmd,
+                    detach=True,
+                    mem_limit=f"{self.config.resource_limits.memory_mb}m",
+                    cpu_period=100000,
+                    cpu_quota=self.config.resource_limits.cpu_time * 1000,
+                    network_mode="none" if not self.config.network_enabled else "bridge",
+                    volumes={ws: {"bind": "/workspace", "mode": "rw"}},
+                    working_dir="/workspace",
+                    user=f"{os.getuid()}:{os.getgid()}",
+                    remove=True,
+                ),
+            )
+
+            deadline = loop.time() + timeout
+            while True:
+                if cancel_check and cancel_check():
+                    await loop.run_in_executor(None, container.stop)
+                    return {"success": False, "error": "Cancelled", "sandbox": "docker"}
+                if loop.time() >= deadline:
+                    await loop.run_in_executor(None, container.stop)
+                    return {"success": False, "error": "Container timed out", "sandbox": "docker"}
+                await asyncio.sleep(1)
+                await loop.run_in_executor(None, container.reload)
+                if container.status == "exited":
+                    break
+
+            exit_code = container.attrs["State"]["ExitCode"]
+            logs = container.logs().decode("utf-8", errors="replace")
+            return {
+                "success": exit_code == 0,
+                "stdout": logs,
+                "stderr": "",
+                "returncode": exit_code,
+                "sandbox": "docker",
+            }
+        except docker.errors.DockerException:
+            return {"success": False, "error": "Docker not available", "sandbox": "docker"}
         except Exception as e:
             return {"success": False, "error": str(e), "sandbox": "docker"}
 

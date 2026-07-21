@@ -28,6 +28,8 @@ class EventBridge:
 
     def on_tool_event(self, event: ToolEvent) -> None:
         if self.bus is None or not HAS_CDH:
+            logger.debug("EventBridge: bus unavailable, dropping %s event for %s",
+                         event.kind, event.tool_name)
             return
         event_type = EventTypes.TOOL_FAILED if event.is_error else EventTypes.TOOL_EXECUTED
         self.bus.publish(Event(

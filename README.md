@@ -104,8 +104,8 @@ cdh onecode codebase index   # Build the codebase index
 cdh onecode codebase search "query"
 cdh onecode skill list
 cdh onecode mcp list
-cdh project                  # List projects
-cdh project show <name>      # Show project details
+cdh aidlc project            # Open project management TUI
+cdh aidlc project list       # List projects
 cdh session list             # List sessions
 cdh session load <id>        # Load session
 cdh help                     # Show help

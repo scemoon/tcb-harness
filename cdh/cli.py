@@ -24,9 +24,10 @@ Usage:
   cdh                              Launch TUI (agent store)
   cdh tui                          Launch TUI (agent store)
   cdh onecode <sub>                onecode CLI surface (config / codebase / skill / mcp / help)
-  cdh aidlc                        AIDLC project management
-  cdh session list|load            Session management
-  cdh uninstall                    Remove ~/.cdh/ global state
+  cdh aidlc [project|phase|gate|sync|update]   AIDLC project management
+   cdh session list|load            Session management
+   cdh trace list|view|dashboard    Trace management (agenttrace)
+   cdh uninstall                    Remove ~/.cdh/ global state
   cdh version                      Show version information
 
 \b
@@ -280,7 +281,7 @@ if _onecode_config_group is not None:
 # - `cdh onecode codebase <sub>` is the same as the old `cdh codebase <sub>`.
 
 
-# --- aidlc (AIDLC project) command ---
+# --- aidlc group (project / phase / gate / sync / update) ---
 
 def _get_projects():
     projects_dir = _CDH_DIR / "projects"
@@ -382,192 +383,251 @@ def _resolve_components_flag(components: Optional[str]) -> list[str]:
     return selected
 
 
-@cli.command("aidlc", short_help="AIDLC project management")
-@click.argument("action", type=click.Choice(["new", "init", "check", "list", "load", "phase", "gate", "update"]))
-@click.argument("name", required=False)
-@click.argument("path", required=False, default=".")
-@click.option("--components", default=None, help="Comma-separated component ids (e.g. 'web,backend') or 'all'. Skips the interactive prompt.")
-@click.option("--status", default=None, help="Gate status: passed or failed")
-def aidlc(action, name, path, components, status):
+@cli.group("aidlc", short_help="AIDLC project management", invoke_without_command=True)
+@click.pass_context
+def aidlc(ctx):
     """Manage AIDLC projects.
 
     \b
-    Actions:
-      new <name> [path]    Create a new AIDC project (interactive component selection)
-      init [path]          Initialize .cdh in an existing directory as an AIDC project
-      check [path]         Check whether a directory is a valid AIDC project
-      list                 List all registered AIDC projects
-      load <name>          Load a registered AIDC project as the current project
-      phase <phase>        Set the current AI-DLC phase (init|understand|plan|verify|deliver)
-      gate <name>          Record a quality gate result (requires --status passed|failed)
-      update               Regenerate AGENTS.md and CLAUDE.md from aidlc/project.yaml
+    Sub-commands:
+      project list|new|init|check|load    Project management
+      phase <phase>                       Set the AI-DLC phase
+      gate <name> --status <passed|failed> Record a quality gate result
+      sync                                Regenerate AGENTS.md and CLAUDE.md
+      update                              Alias for sync (deprecated)
     """
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+@aidlc.group("project", short_help="Project management (list/new/init/check/load)", invoke_without_command=True)
+@click.pass_context
+def project(ctx):
+    """Manage AIDLC projects.
+
+    Without subcommand, opens the project management TUI.
+
+    \b
+    Sub-commands:
+      list                 List all registered projects
+      new <name> [path]    Create a new project
+      init [path]          Initialize .cdh in an existing directory
+      check [path]         Check whether a directory is a valid AIDLC project
+      load <name>          Load a registered project as the current project
+    """
+    if ctx.invoked_subcommand is None:
+        from tui.screens.projects_app import main as projects_main
+        projects_main()
+
+
+@project.command("list")
+def project_list():
+    """List all registered AIDLC projects."""
+    projects_dir = _CDH_DIR / "projects"
+    projects_dir.mkdir(parents=True, exist_ok=True)
+    project_files = sorted(list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json")))
+    if not project_files:
+        click.echo("No projects found.")
+        return
+    click.echo("Projects:")
+    for pf in project_files:
+        click.echo(f"  {pf.stem}")
+
+
+@project.command("new")
+@click.argument("name", required=False)
+@click.argument("path", required=False, default=".")
+@click.option("--components", default=None, help="Comma-separated component ids (e.g. 'web,backend') or 'all'. Skips the interactive prompt.")
+def project_new(name, path, components):
+    """Create a new AIDLC project with interactive component selection."""
+    import yaml
+    from cdh.project_loader import CdhProjectLoader
+    projects_dir = _CDH_DIR / "projects"
+    projects_dir.mkdir(parents=True, exist_ok=True)
+    if not name:
+        name = click.prompt("Project name", default="").strip()
+    if not name:
+        click.echo("Project name is required.")
+        raise click.Abort()
+    ws = Path(path).expanduser().resolve()
+    project_file = projects_dir / f"{name}.yaml"
+    if project_file.exists():
+        click.echo(f"Error: project '{name}' already exists in the project list.")
+        raise click.Abort()
+    if components is not None:
+        selected_components = _resolve_components_flag(components)
+    else:
+        selected_components = _prompt_components(
+            "application components", COMPONENTS, allow_empty=False
+        )
+    try:
+        scaffold_dlc_project(ws, name, components=selected_components)
+    except (ValueError, RuntimeError) as e:
+        click.echo(f"Error: {str(e) or type(e).__name__}")
+        raise click.Abort()
+    CdhProjectLoader.init_project(ws, name)
+    proj_data = {"name": name, "path": str(ws), "description": ""}
+    project_file.write_text(yaml.dump(proj_data))
+    write_active_project(name, str(ws))
+    click.echo(
+        f"Created AIDC project '{name}' at {ws} "
+        f"(components: {', '.join(selected_components)})"
+    )
+
+
+@project.command("init")
+@click.argument("path", required=False, default=".")
+@click.option("--components", default=None, help="Comma-separated component ids (e.g. 'web,backend') or 'all'. Skips the interactive prompt.")
+def project_init(path, components):
+    """Initialize .cdh in an existing directory as an AIDLC project."""
+    import yaml
+    from cdh.project_loader import CdhProjectLoader
+    projects_dir = _CDH_DIR / "projects"
+    projects_dir.mkdir(parents=True, exist_ok=True)
+    target = Path(path).expanduser().resolve()
+    project_name = target.name
+    proj_file = projects_dir / f"{project_name}.yaml"
+    if proj_file.exists():
+        click.echo(f"Error: project '{project_name}' already exists in the project list.")
+        raise click.Abort()
+    if components is not None:
+        selected_components = _resolve_components_flag(components)
+    else:
+        selected_components = _prompt_components(
+            "application components", COMPONENTS, allow_empty=True
+        )
+    try:
+        init_dlc_project(target, project_name)
+    except (ValueError, RuntimeError) as e:
+        click.echo(f"Error: {str(e) or type(e).__name__}")
+        raise click.Abort()
+    for cid in selected_components:
+        try:
+            add_component(target, cid)
+        except (ValueError, FileNotFoundError) as e:
+            click.echo(f"Error: {str(e) or type(e).__name__}")
+    CdhProjectLoader.init_project(target, project_name)
+    proj_data = {"name": project_name, "path": str(target), "description": ""}
+    proj_file.write_text(yaml.dump(proj_data))
+    suffix = (
+        f" (components: {', '.join(selected_components)})"
+        if selected_components
+        else ""
+    )
+    click.echo(f"Initialized AIDC project in {target}{suffix}")
+
+
+@project.command("check")
+@click.argument("path", required=False, default=".")
+def project_check(path):
+    """Check whether a directory is a valid AIDLC project."""
+    from cdh.scaffold import check_dlc_project
+    target = Path(path).expanduser().resolve()
+    result = check_dlc_project(target)
+    if result["valid"]:
+        click.echo(f"\u2713 Valid AIDC project: {result['name']}")
+        click.echo(f"  Location: {result['path']}")
+        if result["components"]:
+            click.echo(f"  Components: {', '.join(result['components'])}")
+        else:
+            click.echo("  Components: (none)")
+        click.echo(
+            f"  CDH state: \u2713 initialized" if result["has_cdh"]
+            else "  CDH state: \u2717 not initialized"
+        )
+    else:
+        click.echo(f"\u2717 Not a valid AIDC project: {target}")
+    for s in result["suggestions"]:
+        click.echo(f"  \u2022 {s}")
+
+
+@project.command("load")
+@click.argument("name", required=False)
+def project_load(name):
+    """Load a registered AIDLC project as the current project."""
     import yaml
     projects_dir = _CDH_DIR / "projects"
     projects_dir.mkdir(parents=True, exist_ok=True)
-
-    if action == "list":
-        project_files = sorted(list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json")))
-        if not project_files:
-            click.echo("No projects found.")
-            return
-        click.echo("Projects:")
-        for pf in project_files:
-            click.echo(f"  {pf.stem}")
+    if not name:
+        click.echo("Usage: cdh aidlc project load <name>")
         return
+    for ext in ["yaml", "yml", "json"]:
+        pf = projects_dir / f"{name}.{ext}"
+        if pf.exists():
+            proj_data = yaml.safe_load(pf.read_text()) if ext in ["yaml", "yml"] else __import__("json").loads(pf.read_text())
+            project_path = proj_data.get("path", ".")
+            write_active_project(name, project_path)
+            click.echo(f"Loaded project '{name}' (path: {project_path})")
+            return
+    click.echo(f"Project '{name}' not found.")
 
-    if action == "new":
-        from cdh.project_loader import CdhProjectLoader
-        if not name:
-            name = click.prompt("Project name", default="").strip()
-        if not name:
-            click.echo("Project name is required.")
-            raise click.Abort()
-        ws = Path(path).expanduser().resolve()
-        project_file = projects_dir / f"{name}.yaml"
-        if project_file.exists():
-            click.echo(f"Error: project '{name}' already exists in the project list.")
-            raise click.Abort()
-        if components is not None:
-            selected_components = _resolve_components_flag(components)
-        else:
-            selected_components = _prompt_components(
-                "application components", COMPONENTS, allow_empty=False
-            )
-        try:
-            scaffold_dlc_project(ws, name, components=selected_components)
-        except (ValueError, RuntimeError) as e:
-            click.echo(f"Error: {str(e) or type(e).__name__}")
-            raise click.Abort()
-        CdhProjectLoader.init_project(ws, name)
-        proj_data = {"name": name, "path": str(ws), "description": ""}
-        project_file.write_text(yaml.dump(proj_data))
-        write_active_project(name, str(ws))
+
+@aidlc.command("phase")
+@click.argument("phase", required=False)
+@click.argument("path", required=False, default=".")
+def phase_cmd(phase, path):
+    """Set the current AI-DLC phase (init|understand|plan|verify|deliver)."""
+    from cdh.project_loader import CdhProjectLoader
+    valid = {"init", "understand", "plan", "verify", "deliver"}
+    if not phase or phase not in valid:
+        click.echo(f"Usage: cdh aidlc phase <{'|'.join(sorted(valid))}>")
+        raise click.Abort()
+    target = Path(path).expanduser().resolve()
+    ok = CdhProjectLoader.advance_phase(target, phase)
+    if ok:
+        click.echo(f"Phase set to: {phase}")
+    else:
         click.echo(
-            f"Created AIDC project '{name}' at {ws} "
-            f"(components: {', '.join(selected_components)})"
+            "Error: Invalid phase transition. "
+            "Phases must advance one step at a time "
+            "(init\u2192understand\u2192plan\u2192verify\u2192deliver). "
+            "Use 'init' to reset."
         )
-        return
+        raise click.Abort()
 
-    if action == "init":
-        from cdh.project_loader import CdhProjectLoader
-        target = Path(name or ".").expanduser().resolve()
+
+@aidlc.command("gate")
+@click.argument("name", required=False)
+@click.argument("path", required=False, default=".")
+@click.option("--status", required=True, help="Gate status: passed or failed")
+def gate_cmd(name, path, status):
+    """Record a quality gate result (requires --status passed|failed)."""
+    from cdh.project_loader import CdhProjectLoader
+    if not name or status not in ("passed", "failed"):
+        click.echo("Usage: cdh aidlc gate <name> --status <passed|failed>")
+        raise click.Abort()
+    target = Path(path).expanduser().resolve()
+    ok = CdhProjectLoader.record_gate_result(target, name, status)
+    if ok:
+        click.echo(f"Gate '{name}': {status}")
+    else:
+        click.echo("No .cdh/ directory found. Run 'cdh aidlc init' first.")
+
+
+@aidlc.command("sync")
+@click.argument("path", required=False, default=".")
+def sync_cmd(path):
+    """Regenerate AGENTS.md and CLAUDE.md from aidlc/project.yaml."""
+    from cdh.scaffold import _regenerate_agents_and_claude_md, scaffold_dlc_project
+    from cdh.project_loader import CdhProjectLoader
+    target = Path(path).expanduser().resolve()
+    project_yaml = target / "aidlc" / "project.yaml"
+    if project_yaml.exists():
+        _regenerate_agents_and_claude_md(target)
+        click.echo("Regenerated AGENTS.md and CLAUDE.md")
+    else:
         project_name = target.name
-        proj_file = projects_dir / f"{project_name}.yaml"
-        if proj_file.exists():
-            click.echo(f"Error: project '{project_name}' already exists in the project list.")
-            raise click.Abort()
-        if components is not None:
-            selected_components = _resolve_components_flag(components)
-        else:
-            selected_components = _prompt_components(
-                "application components", COMPONENTS, allow_empty=True
-            )
-        try:
-            init_dlc_project(target, project_name)
-        except (ValueError, RuntimeError) as e:
-            click.echo(f"Error: {str(e) or type(e).__name__}")
-            raise click.Abort()
-        for cid in selected_components:
-            try:
-                add_component(target, cid)
-            except (ValueError, FileNotFoundError) as e:
-                click.echo(f"Error: {str(e) or type(e).__name__}")
+        scaffold_dlc_project(target, project_name)
         CdhProjectLoader.init_project(target, project_name)
-        proj_data = {"name": project_name, "path": str(target), "description": ""}
-        proj_file.write_text(yaml.dump(proj_data))
-        suffix = (
-            f" (components: {', '.join(selected_components)})"
-            if selected_components
-            else ""
-        )
-        click.echo(f"Initialized AIDC project in {target}{suffix}")
-        return
+        click.echo("Initialized AIDC project and regenerated AGENTS.md/CLAUDE.md")
 
-    if action == "check":
-        from cdh.scaffold import check_dlc_project
-        target = Path(name or ".").expanduser().resolve()
-        result = check_dlc_project(target)
-        if result["valid"]:
-            click.echo(f"\u2713 Valid AIDC project: {result['name']}")
-            click.echo(f"  Location: {result['path']}")
-            if result["components"]:
-                click.echo(f"  Components: {', '.join(result['components'])}")
-            else:
-                click.echo("  Components: (none)")
-            click.echo(
-                f"  CDH state: \u2713 initialized" if result["has_cdh"]
-                else "  CDH state: \u2717 not initialized"
-            )
-        else:
-            click.echo(f"\u2717 Not a valid AIDC project: {target}")
-        for s in result["suggestions"]:
-            click.echo(f"  \u2022 {s}")
-        return
 
-    if action == "phase":
-        from cdh.project_loader import CdhProjectLoader
-        phase = name or ""
-        valid = {"init", "understand", "plan", "verify", "deliver"}
-        if not phase or phase not in valid:
-            click.echo(f"Usage: cdh aidlc phase <{'|'.join(sorted(valid))}>")
-            raise click.Abort()
-        target = Path(path).expanduser().resolve()
-        ok = CdhProjectLoader.advance_phase(target, phase)
-        if ok:
-            click.echo(f"Phase set to: {phase}")
-        else:
-            click.echo(
-                "Error: Invalid phase transition. "
-                "Phases must advance one step at a time "
-                "(init→understand→plan→verify→deliver). "
-                "Use 'init' to reset."
-            )
-            raise click.Abort()
-        return
-
-    if action == "gate":
-        from cdh.project_loader import CdhProjectLoader
-        gate_name = name or ""
-        if not gate_name or status not in ("passed", "failed"):
-            click.echo("Usage: cdh aidlc gate <name> --status <passed|failed>")
-            raise click.Abort()
-        target = Path(path).expanduser().resolve()
-        ok = CdhProjectLoader.record_gate_result(target, gate_name, status)
-        if ok:
-            click.echo(f"Gate '{gate_name}': {status}")
-        else:
-            click.echo("No .cdh/ directory found. Run 'cdh aidlc init' first.")
-        return
-
-    if action == "update":
-        from cdh.scaffold import _regenerate_agents_and_claude_md, scaffold_dlc_project
-        from cdh.project_loader import CdhProjectLoader
-        target = Path(path).expanduser().resolve()
-        project_yaml = target / "aidlc" / "project.yaml"
-        if project_yaml.exists():
-            _regenerate_agents_and_claude_md(target)
-            click.echo("Updated AGENTS.md and CLAUDE.md")
-        else:
-            project_name = target.name
-            scaffold_dlc_project(target, project_name)
-            CdhProjectLoader.init_project(target, project_name)
-            click.echo(f"Initialized AIDC project and regenerated AGENTS.md/CLAUDE.md")
-        return
-
-    if action == "load":
-        if not name:
-            click.echo("Usage: cdh aidlc load <name>")
-            return
-        for ext in ["yaml", "yml", "json"]:
-            pf = projects_dir / f"{name}.{ext}"
-            if pf.exists():
-                proj_data = yaml.safe_load(pf.read_text()) if ext in ["yaml", "yml"] else __import__("json").loads(pf.read_text())
-                project_path = proj_data.get("path", ".")
-                write_active_project(name, project_path)
-                click.echo(f"Loaded project '{name}' (path: {project_path})")
-                return
-        click.echo(f"Project '{name}' not found.")
+@aidlc.command("update")
+@click.argument("path", required=False, default=".")
+@click.pass_context
+def update_cmd(ctx, path):
+    """Alias for sync (deprecated)."""
+    ctx.invoke(sync_cmd, path=path)
 
 
 # --- session command ---
@@ -625,6 +685,93 @@ def session(action, session_id):
             click.echo(f"  Agent Session ID: {s.get('agent_session_id', 'N/A')}")
 
     asyncio.run(run())
+
+
+# --- trace command ---
+
+@cli.group(short_help="Trace management (agenttrace)")
+def trace():
+    """Manage CDH traces via agenttrace.
+
+    \b
+    Commands:
+      list                List recent traces
+      view <session_id>   View trace spans for a session
+      dashboard           Open the agenttrace web dashboard
+    """
+
+
+@trace.command("list", short_help="List recent traces")
+@click.option("--limit", "-n", default=20, help="Number of traces to show")
+def trace_list(limit):
+    """List recent traces from the agenttrace SQLite database."""
+    from cdh.trace import get_tracer, get_db_path
+    db_path = get_db_path()
+    if not db_path.exists():
+        click.echo("No traces yet. Start an agent session to collect traces.")
+        return
+    tracer = get_tracer()
+    try:
+        traces = tracer.get_traces(limit=limit)
+    except Exception as e:
+        click.echo(f"Failed to read traces: {e}")
+        return
+    if not traces:
+        click.echo("No traces found.")
+        return
+    click.echo(f"Recent traces ({len(traces)} spans):")
+    click.echo("")
+    for t in traces:
+        ts = t.get("type", "?")
+        fn = t.get("function", "?")
+        dur = t.get("duration")
+        sid = t.get("session_id", "")[:12]
+        dur_str = f"{dur * 1000:.0f}ms" if dur is not None and dur < 1 else (f"{dur:.1f}s" if dur else "")
+        tags = t.get("tags", {}) or {}
+        agent = tags.get("agent", "") if isinstance(tags, dict) else ""
+        click.echo(f"  {ts:<12} {fn:<30} {dur_str:>8}  {agent}  [{sid}]")
+
+
+@trace.command("view", short_help="View trace spans for a session")
+@click.argument("session_id", required=True)
+def trace_view(session_id):
+    """View all spans for a given session_id."""
+    from cdh.trace import get_tracer, get_db_path
+    db_path = get_db_path()
+    if not db_path.exists():
+        click.echo("No traces yet.")
+        return
+    tracer = get_tracer()
+    try:
+        traces = tracer.get_traces(limit=500, session_id=session_id)
+    except Exception as e:
+        click.echo(f"Failed to read traces: {e}")
+        return
+    if not traces:
+        click.echo(f"No traces found for session {session_id}.")
+        return
+    click.echo(f"Session: {session_id}  |  {len(traces)} spans")
+    click.echo("")
+    for t in traces:
+        ts = t.get("type", "?")
+        fn = t.get("function", "?")
+        dur = t.get("duration")
+        dur_str = f"{dur * 1000:.0f}ms" if dur is not None and dur < 1 else (f"{dur:.1f}s" if dur else "")
+        tags = t.get("tags", {}) or {}
+        update_type = tags.get("update_type", "") if isinstance(tags, dict) else ""
+        click.echo(f"  {ts:<12} {fn:<30} {dur_str:>8}  {update_type}")
+
+
+@trace.command("dashboard", short_help="Open the built-in trace web dashboard")
+@click.option("--port", "-p", default=5173, help="Port to serve on")
+def trace_dashboard(port):
+    """Start a built-in trace web dashboard (Python stdlib, no npm needed).
+
+    Opens a self-contained web UI at http://localhost:<port> showing
+    all collected trace spans from the agenttrace SQLite database.
+    """
+    from cdh.trace.dashboard import run_dashboard
+    run_dashboard(port=port)
 
 
 # --- help command ---
@@ -730,7 +877,7 @@ def version():
 
 # All onecode subcommands are reachable through `cdh onecode <sub>`
 # (see the onecode_group defined above). The cdh top-level command
-# surface is intentionally limited to: tui, onecode, project, session,
+# surface is intentionally limited to: tui, onecode, aidlc, session,
 # help, and version.
 
 

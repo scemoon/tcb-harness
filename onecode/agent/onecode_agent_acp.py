@@ -916,6 +916,23 @@ class CDHACPAdapter:
             "update": update,
         })
 
+    def send_awaiting_user_input(self, prompt_preview: str = "") -> None:
+        """Notify the TUI that the agent has yielded control and is waiting
+        for user input but did NOT invoke the AskUser tool.
+
+        The TUI switches turn to "client" so the next user_input_submitted
+        is routed as a reply to the question currently on screen rather
+        than being appended to the prompt queue as a brand-new task.
+
+        Note: this method is opt-in. Callers (engine, sub-agents, custom
+        workflows) decide when to invoke it. Streaming output is left
+        intact; only the turn state changes on the TUI side.
+        """
+        self.send_session_update({
+            "sessionUpdate": "awaiting_user_input",
+            "promptPreview": prompt_preview or "",
+        })
+
     def send_session_event(self, event: dict, metrics: dict | None = None):
         """Send a session/event notification (onecode enhancement).
 

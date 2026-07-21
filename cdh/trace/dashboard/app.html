@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CDH Trace Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #e6edf3; font-size: 14px; }
+a { color: #58a6ff; text-decoration: none; }
+a:hover { color: #79c0ff; }
+
+/* Nav */
+nav { display: flex; gap: 0; background: #161b22; border-bottom: 1px solid #30363d; padding: 0 16px; position: sticky; top: 0; z-index: 100; overflow-x: auto; }
+nav a { padding: 12px 16px; color: #8b949e; font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; white-space: nowrap; }
+nav a:hover { color: #e6edf3; }
+nav a.active { color: #f78166; border-bottom-color: #f78166; }
+
+/* Layout */
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+.page { display: none; }
+.page.active { display: block; }
+
+/* Cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px 16px; }
+.card-num { font-size: 1.6rem; font-weight: 700; color: #58a6ff; line-height: 1.2; }
+.card-label { font-size: 0.75rem; color: #8b949e; margin-top: 2px; }
+.card-sub { font-size: 0.75rem; color: #8b949e; margin-top: 4px; }
+.card.warn .card-num { color: #d29922; }
+.card.danger .card-num { color: #f85149; }
+.card.success .card-num { color: #3fb950; }
+
+/* Charts */
+.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+.chart-box { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+.chart-box h3 { font-size: 0.85rem; color: #8b949e; margin-bottom: 12px; font-weight: 500; }
+.chart-box.full { grid-column: 1 / -1; }
+.chart-box { position: relative; }
+.chart-box canvas { max-height: 250px; height: 250px !important; width: 100% !important; }
+#chart-tools { max-height: 200px !important; height: 200px !important; }
+#chart-cost { max-height: 200px !important; height: 200px !important; }
+
+/* Table */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #21262d; color: #8b949e; font-weight: 600; white-space: nowrap; cursor: pointer; }
+td { padding: 6px 10px; border-bottom: 1px solid #21262d; white-space: nowrap; }
+tr:hover td { background: #161b22; }
+tr.clickable { cursor: pointer; }
+
+/* Badges */
+.badge { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 0.72rem; font-weight: 600; }
+.badge-acp { background: #1f6feb33; color: #58a6ff; }
+.badge-acp_event { background: #23863633; color: #3fb950; }
+.badge-lifecycle { background: #9e6a0333; color: #d29922; }
+.badge-complete { background: #8b5cf633; color: #a78bfa; }
+.badge-start { background: #1f6feb22; color: #58a6ff; }
+.badge-end { background: #f8514922; color: #f85149; }
+.badge-success { background: #23863633; color: #3fb950; }
+.badge-error { background: #f8514933; color: #f85149; }
+.badge-failed { background: #f8514933; color: #f85149; }
+.badge-default { background: #21262d; color: #8b949e; }
+
+/* Filters */
+.filters { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+.filters select, .filters input { background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 5px 10px; font-size: 0.82rem; }
+.filters input { flex: 1; min-width: 150px; }
+.filters label { color: #8b949e; font-size: 0.78rem; }
+.btn { background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 5px 12px; font-size: 0.82rem; cursor: pointer; }
+.btn:hover { background: #30363d; }
+.btn-primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.btn-primary:hover { background: #388bfd; }
+.btn-danger { background: #da3633; border-color: #da3633; color: #fff; }
+.pagination { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 0.82rem; color: #8b949e; }
+
+/* Session Detail */
+.sesh-header { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.sesh-header h2 { font-size: 1rem; color: #e6edf3; margin-bottom: 8px; }
+.sesh-meta { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; font-size: 0.82rem; }
+.sesh-meta dt { color: #8b949e; font-size: 0.72rem; text-transform: uppercase; }
+.sesh-meta dd { color: #e6edf3; }
+
+/* Call tree */
+.tree { font-size: 0.82rem; font-family: 'SF Mono', 'Fira Code', monospace; }
+.tree-node { border-left: 2px solid #30363d; margin: 2px 0; padding: 4px 0 4px 12px; cursor: pointer; }
+.tree-node:hover { border-left-color: #58a6ff; background: #161b22; border-radius: 0 4px 4px 0; }
+.tree-node.error { border-left-color: #f85149; }
+.tree-bar { display: inline-block; height: 16px; border-radius: 2px; margin-right: 8px; vertical-align: middle; min-width: 4px; background: #1f6feb; }
+.tree-bar.acp_event { background: #3fb950; }
+.tree-bar.error { background: #f85149; }
+
+/* Timeline */
+.timeline { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.78rem; margin-top: 4px; }
+.tl-row { display: flex; align-items: center; height: 22px; border-bottom: 1px solid #161b22; }
+.tl-label { flex: 0 0 220px; color: #8b949e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; cursor: pointer; }
+.tl-label:hover { color: #58a6ff; }
+.tl-track { position: relative; flex: 1 1 auto; height: 14px; background: #0d1117; border-radius: 3px; overflow: hidden; }
+.tl-bar { position: absolute; top: 1px; height: 12px; border-radius: 2px; min-width: 2px; background: #1f6feb; cursor: pointer; }
+.tl-bar.acp_event { background: #3fb950; }
+.tl-bar.error { background: #f85149; }
+.tl-axis { display: flex; flex: 1 1 auto; color: #6e7681; font-size: 0.7rem; margin-top: 2px; }
+.tl-axis span { flex: 1; text-align: left; }
+.tl-axis span:last-child { text-align: right; }
+
+/* Span detail */
+.span-detail { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; margin-top: 8px; }
+.span-detail h4 { font-size: 0.85rem; color: #58a6ff; margin-bottom: 8px; }
+.span-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; font-size: 0.8rem; }
+.span-detail-grid dt { color: #8b949e; }
+.span-detail-grid dd { color: #e6edf3; }
+.raw-json { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-family: 'SF Mono', monospace; font-size: 0.78rem; white-space: pre-wrap; max-height: 300px; overflow: auto; margin-top: 8px; display: none; }
+
+/* Error list */
+.error-list { margin-top: 12px; }
+.error-item { padding: 6px 10px; background: #f8514911; border-left: 3px solid #f85149; border-radius: 0 4px 4px 0; margin-bottom: 4px; font-size: 0.82rem; }
+.error-item .func { color: #f78166; }
+
+/* Notes */
+.note-item { padding: 6px 10px; background: #1f6feb11; border-left: 3px solid #58a6ff; border-radius: 0 4px 4px 0; margin-bottom: 4px; font-size: 0.82rem; }
+.note-item .time { color: #8b949e; margin-right: 8px; }
+
+/* Compare */
+.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.compare-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
+.compare-card h3 { font-size: 0.85rem; color: #58a6ff; margin-bottom: 8px; }
+.compare-table { width: 100%; font-size: 0.82rem; }
+.compare-table td { padding: 4px 8px; }
+.compare-table .highlight { color: #f78166; font-weight: 600; }
+
+/* Analytics */
+.analytics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.analytics-box { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
+.analytics-box h3 { font-size: 0.85rem; color: #8b949e; margin-bottom: 10px; }
+.analytics-box.full { grid-column: 1 / -1; }
+
+/* Loading */
+.loading { text-align: center; padding: 40px; color: #8b949e; }
+.loading::after { content: '...'; animation: dots 1.5s steps(4) infinite; }
+@keyframes dots { 0%,20% { content: '.'; } 40% { content: '..'; } 60%,100% { content: '...'; } }
+.error-msg { color: #f85149; padding: 16px; text-align: center; }
+
+/* Compare select */
+.comp-select { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.comp-select label { display: flex; align-items: center; gap: 4px; background: #21262d; padding: 4px 10px; border-radius: 6px; font-size: 0.82rem; cursor: pointer; }
+.comp-select label:hover { background: #30363d; }
+</style>
+</head>
+<body>
+<nav id="tabs">
+  <a href="#overview" class="active">Overview</a>
+  <a href="#traces">Traces</a>
+  <a href="#detail">Detail</a>
+  <a href="#compare">Compare</a>
+  <a href="#analytics">Analytics</a>
+</nav>
+<div class="container">
+
+<div id="page-overview" class="page active"></div>
+<div id="page-traces" class="page"></div>
+<div id="page-detail" class="page"></div>
+<div id="page-compare" class="page"></div>
+<div id="page-analytics" class="page"></div>
+
+</div>
+
+<script>
+/* ─── Globals ─── */
+let CHART_INSTANCES = {};
+
+/* ─── Router ─── */
+function router() {
+  let hash = location.hash.slice(1) || 'overview';
+  let [page, qs] = hash.split('?');
+  let params = Object.fromEntries(new URLSearchParams(qs));
+
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+
+  let el = document.getElementById('page-' + page);
+  if (el) el.classList.add('active');
+  let navEl = document.querySelector(`nav a[href="#${page}"]`);
+  if (navEl) navEl.classList.add('active');
+
+  // Destroy charts when leaving overview/analytics
+  if (page !== 'overview') destroyCharts();
+  if (page !== 'analytics') destroyCharts('chart-');
+
+  switch (page) {
+    case 'overview': loadOverview(); break;
+    case 'traces': loadTraces(params); break;
+    case 'detail': loadDetail(params.session_id); break;
+    case 'compare': loadCompare(params.ids); break;
+    case 'analytics': loadAnalytics(); break;
+  }
+}
+window.addEventListener('hashchange', router);
+
+function escape(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function fmtDur(seconds) {
+  // NOTE: the DB duration_ms column actually stores seconds (agenttrace stores the
+  // duration value verbatim), so the value passed here is already in seconds.
+  if (seconds == null || seconds === 0) return '-';
+  let s = seconds;
+  if (s < 1) return (s * 1000).toFixed(0) + 'ms';
+  if (s < 60) return s.toFixed(1) + 's';
+  let m = Math.floor(s / 60); s = s % 60;
+  return m + 'm ' + s.toFixed(0) + 's';
+}
+
+function fmtNum(n) {
+  if (n == null || n === 0) return '0';
+  if (n >= 1000) return Math.round(n).toLocaleString();
+  if (n >= 1) return n.toFixed(1);
+  return n.toFixed(2);
+}
+
+function parseTs(ts) {
+  if (!ts) return null;
+  // DB stores naive local ISO strings like "2024-07-15T14:23:01.123456".
+  // Truncate fractional seconds to 3 digits so all engines parse consistently,
+  // then treat as local time (no trailing Z means local per ECMAScript spec).
+  let m = String(ts).match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?\d*/);
+  let iso = m ? (m[1] + (m[2] ? '.' + m[2] : '')) : ts;
+  let d = new Date(iso);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function fmtTime(ts) {
+  let d = parseTs(ts);
+  if (!d) return '-';
+  return d.toLocaleTimeString() + '.' + String(d.getMilliseconds()).padStart(3,'0');
+}
+
+function fmtDate(ts) {
+  let d = parseTs(ts);
+  if (!d) return '-';
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+}
+
+function badge(type) {
+  let cls = 'badge-' + (type || 'default').toLowerCase().replace(/[^a-z0-9]/g, '_');
+  return `<span class="badge ${cls}">${escape(type || '?')}</span>`;
+}
+
+function statusBadge(s) {
+  if (!s) return '';
+  let cls = s === 'success' || s === 'completed' ? 'badge-success' : s === 'error' || s === 'failed' ? 'badge-error' : 'badge-default';
+  return `<span class="badge ${cls}">${escape(s)}</span>`;
+}
+
+function api(path) { return fetch(path).then(r => r.json()).then(d => { if (d.status === 'error') throw new Error(d.error); return d.data; }); }
+
+function destroyCharts(prefix) {
+  prefix = prefix || '';
+  for (let key in CHART_INSTANCES) {
+    if (key.startsWith(prefix)) {
+      CHART_INSTANCES[key].destroy();
+      delete CHART_INSTANCES[key];
+    }
+  }
+}
+
+/* ─── Overview ─── */
+async function loadOverview() {
+  let el = document.getElementById('page-overview');
+  el.innerHTML = '<div class="loading">Loading overview</div>';
+  try {
+    let d = await api('/api/overview');
+    renderOverview(el, d);
+  } catch(e) { el.innerHTML = `<div class="error-msg">${escape(e.message)}</div>`; }
+}
+
+async function renderOverview(el, d) {
+  let cards = `
+    <div class="cards">
+      <div class="card"><div class="card-num">${d.total}</div><div class="card-label">Total Spans</div><div class="card-sub">${d.total_today} today</div></div>
+      <div class="card"><div class="card-num">${d.sessions}</div><div class="card-label">Sessions</div></div>
+      <div class="card"><div class="card-num">${d.agents}</div><div class="card-label">Agents</div></div>
+      <div class="card"><div class="card-num">${d.avg_duration.toFixed(1)}s</div><div class="card-label">Avg Duration</div><div class="card-sub">P95: ${d.p95_duration.toFixed(1)}s</div></div>
+      <div class="card ${d.error_rate > 10 ? 'danger' : d.error_rate > 0 ? 'warn' : 'success'}"><div class="card-num">${d.error_rate}%</div><div class="card-label">Error Rate</div><div class="card-sub">${d.error_count} errors</div></div>
+      <div class="card"><div class="card-num">${(d.total_tokens || 0).toLocaleString()}</div><div class="card-label">Total Tokens</div></div>
+      <div class="card"><div class="card-num">${fmtNum(d.tokens_per_kloc || 0)}</div><div class="card-label">Tokens / 1K LOC</div><div class="card-sub">${(d.lines_added || 0).toLocaleString()} lines added</div></div>
+     </div>`;
+
+  let charts = `<div class="chart-row">
+    <div class="chart-box"><h3>Type Distribution</h3><canvas id="chart-type"></canvas></div>
+    <div class="chart-box"><h3>Agent Activity</h3><canvas id="chart-agent"></canvas></div>
+    <div class="chart-box full"><h3>Activity Trend (Last 7 Days)</h3><canvas id="chart-trend"></canvas></div>
+  </div>`;
+
+  let recentApi = '/api/traces?limit=20';
+  // Fetch recent
+  let recentHtml = '<h3 style="color:#8b949e;font-size:0.85rem;margin-bottom:8px;font-weight:500;">Recent Activity</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>Type</th><th>Function</th><th>Duration</th><th>Agent</th><th>Model</th><th>Status</th></tr></thead><tbody id="recent-body"><tr><td colspan="7" class="loading">loading</td></tr></tbody></table></div>';
+
+  el.innerHTML = cards + charts + recentHtml;
+
+  // Type chart
+  let typeLabels = Object.keys(d.type_distribution);
+  let typeData = Object.values(d.type_distribution);
+  let typeColors = { ACP: '#58a6ff', ACP_EVENT: '#3fb950', LIFECYCLE: '#d29922', COMPLETE: '#a78bfa', START: '#58a6ff', END: '#f85149' };
+  CHART_INSTANCES['chart-type'] = new Chart(document.getElementById('chart-type'), {
+    type: 'doughnut',
+    data: {
+      labels: typeLabels, datasets: [{ data: typeData, backgroundColor: typeLabels.map(l => typeColors[l] || '#8b949e'), borderWidth: 0 }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#8b949e' } } } }
+  });
+
+  // Agent chart
+  let agents = d.agent_breakdown || [];
+  CHART_INSTANCES['chart-agent'] = new Chart(document.getElementById('chart-agent'), {
+    type: 'bar',
+    data: {
+      labels: agents.map(a => a.agent), datasets: [{ label: 'Spans', data: agents.map(a => a.count), backgroundColor: '#1f6feb', borderRadius: 3 }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: { x: { ticks: { color: '#8b949e' } }, y: { ticks: { color: '#8b949e' }, beginAtZero: true } } }
+  });
+
+  // Trend chart
+  let hourly = d.hourly || [];
+  CHART_INSTANCES['chart-trend'] = new Chart(document.getElementById('chart-trend'), {
+    type: 'line',
+    data: {
+      labels: hourly.map(h => { let p = h.bucket.indexOf('T'); return h.bucket.slice(p+1, p+6); }),
+      datasets: [{ label: 'Spans', data: hourly.map(h => h.count), borderColor: '#58a6ff', backgroundColor: '#1f6feb33', fill: true, tension: 0.3, pointRadius: 2 }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: { x: { ticks: { color: '#8b949e', maxTicksLimit: 24 } }, y: { ticks: { color: '#8b949e' }, beginAtZero: true } } }
+  });
+
+  // Fetch recent
+  try {
+    let recentData = await api('/api/traces?limit=20');
+    let tbody = document.getElementById('recent-body');
+    if (!tbody) return;
+    let traces = recentData.traces || [];
+    tbody.innerHTML = traces.map(t => {
+      let tags = t.tags || {};
+      let data = t.data || {};
+      return `<tr class="clickable" onclick="goDetail('${escape(t.session_id || '')}')">
+        <td>${fmtTime(t.timestamp)}</td>
+        <td>${badge(t.type)}</td>
+        <td>${escape(t.function || '')}</td>
+        <td>${fmtDur(data.duration_ms)}</td>
+        <td>${escape(typeof tags.agent === 'string' ? tags.agent : '')}</td>
+        <td>${escape(data.model || '')}</td>
+        <td>${statusBadge(data.status)}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) {}
+}
+
+function goDetail(sessionId) {
+  if (sessionId) location.hash = '#detail?session_id=' + encodeURIComponent(sessionId);
+}
+
+/* ─── Traces ─── */
+let tracesState = { page: 0, limit: 50, total: 0 };
+
+async function loadTraces(params) {
+  let el = document.getElementById('page-traces');
+  el.innerHTML = `<div class="filters" id="trace-filters">
+    <label>Type:</label><select id="f-type" onchange="reloadTraces()"><option value="">All</option><option>ACP</option><option>ACP_EVENT</option><option>LIFECYCLE</option></select>
+    <label>Agent:</label><select id="f-agent" onchange="reloadTraces()"><option value="">All</option></select>
+    <label>Model:</label><select id="f-model" onchange="reloadTraces()"><option value="">All</option></select>
+    <label>Status:</label><select id="f-status" onchange="reloadTraces()"><option value="">All</option><option>success</option><option>error</option><option>completed</option><option>failed</option></select>
+    <label>Search:</label><input id="f-search" placeholder="Function name..." oninput="debounceReload()" style="max-width:200px;">
+    <label>Session:</label><input id="f-session" placeholder="Session ID..." oninput="debounceReload()" style="max-width:250px;">
+    <span style="flex:1"></span>
+    <button class="btn" onclick="exportTraces('json')">Export JSON</button>
+    <button class="btn" onclick="exportTraces('csv')">Export CSV</button>
+  </div>
+  <div class="table-wrap" id="trace-table"><div class="loading">Loading traces</div></div>
+  <div class="pagination" id="trace-pages"></div>`;
+
+  setTimeout(() => {
+    // Populate filter dropdowns from overview
+    api('/api/overview').then(d => {
+      let agents = (d.agent_breakdown || []).map(a => a.agent).filter(Boolean);
+      let sel = document.getElementById('f-agent');
+      agents.forEach(a => { let o = document.createElement('option'); o.value = a; o.textContent = a; sel.appendChild(o); });
+    }).catch(() => {});
+
+    tracesState.page = 0;
+    reloadTraces();
+  }, 50);
+}
+
+let _debounceTimer;
+
+function debounceReload() {
+  clearTimeout(_debounceTimer);
+  _debounceTimer = setTimeout(() => { tracesState.page = 0; reloadTraces(); }, 300);
+}
+
+async function reloadTraces() {
+  let el = document.getElementById('trace-table');
+  if (!el) return;
+  el.innerHTML = '<div class="loading">Loading</div>';
+
+  let type = document.getElementById('f-type')?.value;
+  let agent = document.getElementById('f-agent')?.value;
+  let model = document.getElementById('f-model')?.value;
+  let status = document.getElementById('f-status')?.value;
+  let search = document.getElementById('f-search')?.value;
+  let session = document.getElementById('f-session')?.value;
+
+  let qs = `limit=${tracesState.limit}&offset=${tracesState.page * tracesState.limit}`;
+  if (type) qs += `&type=${encodeURIComponent(type)}`;
+  if (agent) qs += `&agent=${encodeURIComponent(agent)}`;
+  if (model) qs += `&model=${encodeURIComponent(model)}`;
+  if (status) qs += `&status=${encodeURIComponent(status)}`;
+  if (search) qs += `&search=${encodeURIComponent(search)}`;
+  if (session) qs += `&session_id=${encodeURIComponent(session)}`;
+
+  try {
+    let d = await api('/api/traces?' + qs);
+    tracesState.total = d.total;
+    let traces = d.traces || [];
+    if (!traces.length) { el.innerHTML = '<div class="summary" style="color:#8b949e;text-align:center;padding:20px;">No traces match the filters.</div>'; renderPages(); return; }
+
+    let html = '<table><thead><tr><th>Time</th><th>Type</th><th>Function</th><th>Duration</th><th>Agent</th><th>Model</th><th>Status</th><th>Session</th></tr></thead><tbody>';
+    traces.forEach(t => {
+      let tags = t.tags || {};
+      let data = t.data || {};
+      html += `<tr class="clickable" onclick="goDetail('${escape(t.session_id || '')}')">
+        <td>${fmtTime(t.timestamp)}</td>
+        <td>${badge(t.type)}</td>
+        <td>${escape(t.function || '')}</td>
+        <td>${fmtDur(data.duration_ms)}</td>
+        <td>${escape(typeof tags.agent === 'string' ? tags.agent : '')}</td>
+        <td>${escape(data.model || '')}</td>
+        <td>${statusBadge(data.status)}</td>
+        <td style="max-width:100px;overflow:hidden;text-overflow:ellipsis;">${escape((t.session_id || '').slice(0, 18))}</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+    renderPages();
+  } catch(e) { el.innerHTML = `<div class="error-msg">${escape(e.message)}</div>`; }
+}
+
+function renderPages() {
+  let el = document.getElementById('trace-pages');
+  if (!el) return;
+  let totalPages = Math.ceil(tracesState.total / tracesState.limit);
+  let page = tracesState.page;
+  el.innerHTML = `<button class="btn" onclick="tracesState.page=Math.max(0,tracesState.page-1);reloadTraces();" ${page <= 0 ? 'disabled' : ''}>Previous</button>
+    <span>Page ${page + 1} / ${totalPages || 1} (${tracesState.total} total)</span>
+    <button class="btn" onclick="tracesState.page=Math.min(${totalPages - 1},tracesState.page+1);reloadTraces();" ${page >= totalPages - 1 ? 'disabled' : ''}>Next</button>`;
+}
+
+async function exportTraces(fmt) {
+  let type = document.getElementById('f-type')?.value;
+  let agent = document.getElementById('f-agent')?.value;
+  let qs = `format=${fmt}&limit=500`;
+  if (type) qs += `&type=${encodeURIComponent(type)}`;
+  if (agent) qs += `&agent=${encodeURIComponent(agent)}`;
+  window.open('/api/export?' + qs, '_blank');
+}
+
+/* ─── Session Detail ─── */
+async function loadDetail(sessionId) {
+  let el = document.getElementById('page-detail');
+  // Session selector so the user can switch sessions directly within the Detail tab.
+  let selector = '<div class="filters" style="margin-bottom:16px"><label>Session:</label>'
+    + '<select id="detail-session-select" onchange="onDetailSessionChange()"><option value="">— select a session —</option></select>'
+    + (sessionId ? '<button class="btn" onclick="loadDetail(\'' + encodeURIComponent(sessionId) + '\')">Reload</button>' : '')
+    + '</div>';
+
+  if (!sessionId) {
+    el.innerHTML = selector + '<div style="color:#8b949e;text-align:center;padding:40px;">Select a session from the dropdown above to view details.</div>';
+    loadDetailSessionOptions(sessionId);
+    return;
+  }
+  el.innerHTML = selector + '<div class="loading">Loading session detail</div>';
+  try {
+    let d = await api('/api/sessions/' + encodeURIComponent(sessionId));
+    renderDetail(el, d, sessionId);
+    loadDetailSessionOptions(sessionId);
+  } catch(e) { el.innerHTML = selector + `<div class="error-msg">${escape(e.message)}</div>`; }
+}
+
+async function loadDetailSessionOptions(currentId) {
+  let sel = document.getElementById('detail-session-select');
+  if (!sel) return;
+  try {
+    let sessions = await api('/api/sessions?limit=500');
+    let list = sessions.sessions || [];
+    sel.innerHTML = '<option value="">— select a session —</option>' + list.map(s => {
+      let label = (s.session_id || '').slice(0, 24) + '… (' + (s.agents || []).join(',') + ', ' + (s.span_count || 0) + ' spans)';
+      let checked = (s.session_id === currentId) ? 'selected' : '';
+      return `<option value="${escape(s.session_id)}" ${checked}>${escape(label)}</option>`;
+    }).join('');
+  } catch(e) {}
+}
+
+function onDetailSessionChange() {
+  let sel = document.getElementById('detail-session-select');
+  if (sel && sel.value) {
+    location.hash = '#detail?session_id=' + encodeURIComponent(sel.value);
+  }
+}
+
+function renderDetail(el, d, sessionId) {
+  let s = d.stats || {};
+  let spans = d.spans || [];
+  let tree = d.tree || [];
+  window._lastSpans = spans;
+
+  let header = `<div class="sesh-header">
+    <h2>Session <code>${escape(sessionId.slice(0, 24))}…</code></h2>
+    <dl class="sesh-meta">
+      <div><dt>Agents</dt><dd>${escape((s.agents || []).join(', ') || 'N/A')}</dd></div>
+      <div><dt>Duration</dt><dd>${fmtDur(s.duration_ms)}</dd></div>
+      <div><dt>Spans</dt><dd>${spans.length}</dd></div>
+      <div><dt>Total Tokens</dt><dd>${(s.total_tokens || 0).toLocaleString()}</dd></div>
+      <div><dt>Lines Added</dt><dd>${(s.lines_added || 0).toLocaleString()}</dd></div>
+      <div><dt>Tokens / 1K LOC</dt><dd>${fmtNum(s.tokens_per_kloc || 0)}</dd></div>
+      <div><dt>Tool Calls</dt><dd>${s.tool_calls || 0}</dd></div>
+      <div><dt>Models</dt><dd>${escape((s.models || []).join(', ') || 'N/A')}</dd></div>
+      <div><dt>Errors</dt><dd style="color:${s.error_count > 0 ? '#f85149' : '#3fb950'}">${s.error_count}</dd></div>
+      <div><dt>Start</dt><dd>${escape(fmtDate(s.first_ts) || '-')}</dd></div>
+      <div><dt>End</dt><dd>${escape(fmtDate(s.last_ts) || '-')}</dd></div>
+    </dl>
+  </div>`;
+
+  el.innerHTML = header + '<div id="tree-container"></div><div id="span-detail-container"></div>';
+
+  // Error summary
+  let errors = s.errors || [];
+  if (errors.length) {
+    let errHtml = '<h3 style="color:#f85149;font-size:0.85rem;margin:12px 0 8px;font-weight:600;">Errors (' + errors.length + ')</h3><div class="error-list">';
+    errors.forEach(e => {
+      errHtml += `<div class="error-item"><span class="func">${escape(e.function || '')}</span>: ${escape(String(e.error || '').slice(0, 200))}</div>`;
+    });
+    errHtml += '</div>';
+    document.getElementById('tree-container').insertAdjacentHTML('afterend', errHtml);
+  }
+
+  // Notes
+  let notes = spans.filter(s => { let d = s.data || {}; return d.note; });
+  if (notes.length) {
+    let noteHtml = '<h3 style="color:#58a6ff;font-size:0.85rem;margin:12px 0 8px;font-weight:600;">Notes (' + notes.length + ')</h3>';
+    notes.forEach(n => {
+      let d = n.data || {};
+      noteHtml += `<div class="note-item"><span class="time">${fmtTime(n.timestamp)}</span>${escape(d.note || '')}</div>`;
+    });
+    document.getElementById('span-detail-container').insertAdjacentHTML('afterbegin', noteHtml);
+  }
+
+  // Call tree
+  let treeContainer = document.getElementById('tree-container');
+  let totalMs = s.duration_ms || 1;
+  treeContainer.innerHTML = '<h3 style="color:#8b949e;font-size:0.85rem;margin-bottom:8px;font-weight:500;">Call Tree</h3><div class="tree">' +
+    renderTreeNodes(tree, totalMs, 0) + '</div>' +
+    renderTimeline(tree, s);
+}
+
+function renderTreeNodes(nodes, totalMs, depth) {
+  if (!nodes || !nodes.length) return '';
+  let html = '';
+  nodes.forEach(n => {
+    let data = n.data || {};
+    let tags = n.tags || {};
+    let dur = data.duration_ms || 0;
+    let pct = totalMs > 0 ? (dur / totalMs * 100) : 0;
+    let hasChildren = n.children && n.children.length;
+    let isError = data.status === 'error' || data.status === 'failed' || data.error;
+    let cls = 'tree-node' + (isError ? ' error' : '');
+    let barCls = 'tree-bar' + (n.type === 'ACP_EVENT' ? ' acp_event' : '') + (isError ? ' error' : '');
+
+    html += `<div class="${cls}" style="margin-left:${depth * 16}px" onclick="toggleSpanDetail(this, '${escape(n.id || '')}')">
+      <span class="${barCls}" style="width:${Math.max(pct, 2)}%"></span>
+      <span style="color:#8b949e">${escape(n.function || '?')}</span>
+      <span style="color:#8b949e;font-size:0.72rem">${dur ? fmtDur(dur) : ''}</span>
+      ${isError ? ' <span style="color:#f85149">⚠</span>' : ''}
+      ${data.model ? ' <span style="color:#8b949e;font-size:0.72rem">[' + escape(data.model) + ']</span>' : ''}
+    </div>
+    <div id="span-${escape(n.id || '')}" style="display:none" class="span-detail"></div>`;
+
+    if (hasChildren) {
+      html += renderTreeNodes(n.children, totalMs, depth + 1);
+    }
+  });
+  return html;
+}
+
+function toggleSpanDetail(clickedEl, spanId) {
+  let detailEl = document.getElementById('span-' + spanId);
+  if (!detailEl) return;
+
+  if (detailEl.style.display !== 'none') {
+    detailEl.style.display = 'none';
+    return;
+  }
+
+  // Hide all other details
+  document.querySelectorAll('.span-detail').forEach(el => el.style.display = 'none');
+
+  if (!detailEl.dataset.loaded) {
+    // Find span data
+    let n = findSpanById(window._lastSpans, spanId);
+    if (n) {
+      let data = n.data || {};
+      let tags = n.tags || {};
+      let html = `<h4>Span Detail <span style="font-weight:400;color:#8b949e">${badge(n.type)} ${escape(n.function || '')}</span></h4>
+        <dl class="span-detail-grid">
+          <dt>ID</dt><dd><code>${escape(n.id || '')}</code></dd>
+          <dt>Session</dt><dd>${escape(n.session_id || '').slice(0, 30)}</dd>
+          <dt>Timestamp</dt><dd>${escape(n.timestamp || '')}</dd>
+          <dt>Duration</dt><dd>${data.duration_ms ? fmtDur(data.duration_ms) : '-'}</dd>
+          <dt>Agent</dt><dd>${escape(typeof tags.agent === 'string' ? tags.agent : '')}</dd>
+          ${data.model ? '<dt>Model</dt><dd>' + escape(data.model) + '</dd>' : ''}
+          ${data.token_count ? '<dt>Tokens</dt><dd>' + data.token_count.toLocaleString() + '</dd>' : ''}
+          ${data.input_tokens ? '<dt>Input Tokens</dt><dd>' + data.input_tokens.toLocaleString() + '</dd>' : ''}
+          ${data.output_tokens ? '<dt>Output Tokens</dt><dd>' + data.output_tokens.toLocaleString() + '</dd>' : ''}
+          ${data.tool_name ? '<dt>Tool</dt><dd>' + escape(data.tool_name) + '</dd>' : ''}
+          ${data.tool_kind ? '<dt>Tool Kind</dt><dd>' + escape(data.tool_kind) + '</dd>' : ''}
+          ${data.agent_type ? '<dt>Agent Type</dt><dd>' + escape(data.agent_type) + '</dd>' : ''}
+          ${data.status ? '<dt>Status</dt><dd>' + statusBadge(data.status) + '</dd>' : ''}
+          ${data.error ? '<dt>Error</dt><dd style="color:#f85149">' + escape(data.error) + '</dd>' : ''}
+          ${data.cost_amount ? '<dt>Cost</dt><dd>' + escape(data.cost_amount + ' ' + (data.cost_currency || '')) + '</dd>' : ''}
+          ${data.note ? '<dt>Note</dt><dd>' + escape(data.note) + '</dd>' : ''}
+          ${data.context_used ? '<dt>Context Used</dt><dd>' + data.context_used.toLocaleString() + '</dd>' : ''}
+          ${data.cached_input_tokens ? '<dt>Cached Input</dt><dd>' + data.cached_input_tokens.toLocaleString() + '</dd>' : ''}
+        </dl>
+        <button class="btn" onclick="toggleRawJson(this, '${escape(n.id || '')}')" style="margin-top:8px">Show Raw JSON</button>
+        <div id="raw-${escape(n.id || '')}" class="raw-json">${escape(JSON.stringify(n, null, 2))}</div>`;
+      detailEl.innerHTML = html;
+      detailEl.dataset.loaded = '1';
+    }
+  }
+  detailEl.style.display = 'block';
+}
+
+function findSpanById(spans, id) {
+  for (let s of spans) {
+    if (s.id === id) return s;
+    if (s.children) {
+      let found = findSpanById(s.children, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function flattenSpans(nodes, depth, out) {
+  nodes.forEach(n => {
+    out.push({ span: n, depth });
+    if (n.children && n.children.length) flattenSpans(n.children, depth + 1, out);
+  });
+  return out;
+}
+
+function spanDurationSec(span) {
+  let d = span.data || {};
+  let v = d.duration_ms != null ? d.duration_ms : (span.duration_ms != null ? span.duration_ms : 0);
+  return Number(v) || 0;
+}
+
+function renderTimeline(tree, stats) {
+  let firstTs = stats && stats.first_ts;
+  let t0 = parseTs(firstTs);
+  if (!t0) return '';
+  let total = (stats && stats.duration_ms) ? Number(stats.duration_ms) : 0;
+  if (total <= 0) total = 1;
+
+  let rows = flattenSpans(tree || [], 0, []);
+  if (!rows.length) return '';
+
+  let html = '<h3 style="color:#8b949e;font-size:0.85rem;margin:16px 0 8px;font-weight:500;">Timeline</h3><div class="timeline">';
+  rows.forEach(({ span, depth }) => {
+    let ts = parseTs(span.timestamp);
+    let startSec = ts ? (ts - t0) / 1000 : 0;
+    if (startSec < 0) startSec = 0;
+    let dur = spanDurationSec(span);
+    let leftPct = Math.min(100, (startSec / total) * 100);
+    let widthPct = Math.max(0.6, Math.min(100 - leftPct, (dur / total) * 100));
+    let isError = span.data && (span.data.status === 'error' || span.data.status === 'failed' || span.data.error);
+    let cls = 'tl-bar' + (span.type === 'ACP_EVENT' ? ' acp_event' : '') + (isError ? ' error' : '');
+    let label = escape((span.function || '?')) + (span.data && span.data.model ? ' [' + escape(span.data.model) + ']' : '');
+    html += `<div class="tl-row">
+      <div class="tl-label" style="padding-left:${depth * 12}px" onclick="toggleSpanDetailFromTree('${escape(span.id || '')}')" title="${label}">${label}</div>
+      <div class="tl-track"><div class="${cls}" style="left:${leftPct}%;width:${widthPct}%" onclick="toggleSpanDetailFromTree('${escape(span.id || '')}')" title="${fmtDur(dur)}"></div></div>
+    </div>`;
+  });
+  html += '</div>';
+  // Axis (4 ticks)
+  html += '<div class="tl-axis"><span>0s</span><span>' + fmtDur(total * 0.25) + '</span><span>' + fmtDur(total * 0.5) + '</span><span>' + fmtDur(total * 0.75) + '</span><span>' + fmtDur(total) + '</span></div>';
+  return html;
+}
+
+function toggleSpanDetailFromTree(spanId) {
+  // Span detail containers (id="span-{id}") are created by renderTreeNodes,
+  // so toggleSpanDetail can locate and populate them.
+  toggleSpanDetail(document.createElement('div'), spanId);
+}
+
+function toggleRawJson(btn, spanId) {
+  let raw = document.getElementById('raw-' + spanId);
+  if (raw) {
+    if (raw.style.display !== 'none') { raw.style.display = 'none'; btn.textContent = 'Show Raw JSON'; }
+    else { raw.style.display = 'block'; btn.textContent = 'Hide Raw JSON'; }
+  }
+}
+
+/* ─── Compare ─── */
+let compareAllSessions = [];
+let compareSelected = [];
+
+async function loadCompare(ids) {
+  let el = document.getElementById('page-compare');
+  el.innerHTML = '<div class="loading">Loading compare</div>';
+
+  try {
+    let sessions = await api('/api/sessions?limit=500');
+    compareAllSessions = sessions.sessions || [];
+    compareSelected = ids ? ids.split(',').filter(Boolean) : [];
+    renderCompareSelector(el);
+  } catch(e) { el.innerHTML = `<div class="error-msg">${escape(e.message)}</div>`; }
+}
+
+function renderCompareSelector(el) {
+  let selectHtml = '<div class="comp-select">';
+  compareAllSessions.forEach(s => {
+    let agentStr = (s.agents || []).join(', ');
+    let checked = compareSelected.includes(s.session_id) ? 'checked' : '';
+    selectHtml += `<label><input type="checkbox" value="${escape(s.session_id)}" ${checked} onchange="onCompToggle(this)"> ${escape((s.session_id || '').slice(0, 16))}… (${escape(agentStr)}, ${s.span_count} spans)</label>`;
+  });
+  selectHtml += '</div><button class="btn btn-primary" onclick="doCompare()">Compare Selected</button>';
+  el.innerHTML = selectHtml + '<div id="compare-results"></div>';
+}
+
+function onCompToggle(cb) {
+  let id = cb.value;
+  if (cb.checked) {
+    if (!compareSelected.includes(id)) compareSelected.push(id);
+  } else {
+    compareSelected = compareSelected.filter(x => x !== id);
+  }
+  // NOTE: do NOT update location.hash here — it would re-trigger the router and
+  // re-run loadCompare, wiping any comparison results already shown.
+}
+
+async function doCompare() {
+  let checked = compareSelected.slice();
+  if (checked.length < 2) return;
+  let el = document.getElementById('compare-results');
+  if (!el) return;
+  el.innerHTML = '<div class="loading">Loading comparison</div>';
+
+  try {
+    let details = await Promise.all(checked.map(id => api('/api/sessions/' + encodeURIComponent(id))));
+    renderCompare(el, checked, details);
+  } catch(e) { el.innerHTML = `<div class="error-msg">${escape(e.message)}</div>`; }
+}
+
+function renderCompare(el, checked, details) {
+  let gridHtml = '<div class="compare-grid">';
+  details.forEach((d, i) => {
+    let s = d.stats || {};
+    gridHtml += `<div class="compare-card">
+      <h3>Session ${i + 1}: ${escape((checked[i] || '').slice(0, 20))}…</h3>
+      <table class="compare-table">
+        <tr><td>Duration</td><td class="highlight">${fmtDur(s.duration_ms)}</td></tr>
+        <tr><td>Spans</td><td>${(d.spans || []).length}</td></tr>
+        <tr><td>Tool Calls</td><td>${s.tool_calls || 0}</td></tr>
+        <tr><td>Total Tokens</td><td>${(s.total_tokens || 0).toLocaleString()}</td></tr>
+        <tr><td>Errors</td><td style="color:${s.error_count > 0 ? '#f85149' : '#3fb950'}">${s.error_count}</td></tr>
+        <tr><td>Agents</td><td>${escape((s.agents || []).join(', '))}</td></tr>
+      </table>`;
+    if (s.tools && Object.keys(s.tools).length) {
+      gridHtml += '<div style="margin-top:8px;font-size:0.8rem;color:#8b949e">Tools: ' + Object.entries(s.tools).map(([k, v]) => escape(k) + ' (' + v + ')').join(', ') + '</div>';
+    }
+    gridHtml += '</div>';
+  });
+  gridHtml += '</div>';
+  el.innerHTML = gridHtml;
+}
+
+/* ─── Analytics ─── */
+async function loadAnalytics() {
+  let el = document.getElementById('page-analytics');
+  el.innerHTML = '<div class="loading">Loading analytics</div>';
+
+  try {
+    let [models, tools, errors, loc] = await Promise.all([
+      api('/api/stats/models').catch(() => []),
+      api('/api/stats/tools').catch(() => []),
+      api('/api/stats/errors').catch(() => []),
+      api('/api/stats/loc').catch(() => ({})),
+    ]);
+
+    let html = '<div class="analytics-grid">';
+
+    // Coding efficiency (tokens per 1K LOC)
+    loc = loc || {};
+    let tkl = loc.tokens_per_kloc || 0;
+    html += `<div class="analytics-box full"><h3>Coding Efficiency <span style="font-weight:400;color:#8b949e;font-size:0.78rem">Tokens per 1K lines of code added</span></h3>
+      <div class="cards" style="margin-bottom:4px">
+        <div class="card"><div class="card-num">${(loc.lines_added || 0).toLocaleString()}</div><div class="card-label">Lines Added</div></div>
+        <div class="card"><div class="card-num">${(loc.total_tokens || 0).toLocaleString()}</div><div class="card-label">Total Tokens</div></div>
+        <div class="card"><div class="card-num">${fmtNum(tkl)}</div><div class="card-label">Tokens / 1K LOC</div></div>
+      </div>
+      <div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Model</th><th>Lines Added</th><th>Tokens</th><th>Tokens / 1K LOC</th></tr></thead><tbody>`;
+    (loc.by_model || []).forEach(m => {
+      html += `<tr><td>${escape(m.model)}</td><td>${(m.lines_added || 0).toLocaleString()}</td><td>${(m.tokens || 0).toLocaleString()}</td><td>${fmtNum(m.tokens_per_kloc || 0)}</td></tr>`;
+    });
+    if (!loc.by_model || !loc.by_model.length) html += '<tr><td colspan="4" style="color:#8b949e;text-align:center">No line data yet — edit/write files to populate</td></tr>';
+    html += '</tbody></table></div></div>';
+
+    // Models
+    html += `<div class="analytics-box"><h3>Model Performance</h3><div class="table-wrap">
+      <table><thead><tr><th>Model</th><th>Spans</th><th>Total Tokens</th><th>Avg Duration</th></tr></thead><tbody>`;
+    (models || []).forEach(m => {
+      html += `<tr><td>${escape(m.model)}</td><td>${m.span_count}</td><td>${(m.total_tokens || 0).toLocaleString()}</td><td>${m.avg_duration ? m.avg_duration.toFixed(1) + 's' : '-'}</td></tr>`;
+    });
+    if (!models || !models.length) html += '<tr><td colspan="4" style="color:#8b949e;text-align:center">No model data</td></tr>';
+    html += '</tbody></table></div></div>';
+
+    // Tools
+    html += `<div class="analytics-box"><h3>Tool Usage</h3><canvas id="chart-tools" style="height:200px"></canvas>
+      <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Tool</th><th>Calls</th><th>Avg Duration</th><th>Errors</th></tr></thead><tbody>`;
+    (tools || []).forEach(t => {
+      html += `<tr><td>${escape(t.tool)}</td><td>${t.call_count}</td><td>${t.avg_duration ? t.avg_duration.toFixed(1) + 's' : '-'}</td><td style="color:${t.error_count > 0 ? '#f85149' : '#8b949e'}">${t.error_count}</td></tr>`;
+    });
+    if (!tools || !tools.length) html += '<tr><td colspan="4" style="color:#8b949e;text-align:center">No tool data</td></tr>';
+    html += '</tbody></table></div></div>';
+
+    // Errors
+    html += `<div class="analytics-box full"><h3>Error Aggregation</h3><div class="table-wrap">
+      <table><thead><tr><th>Error Message</th><th>Count</th><th>Latest</th><th>Latest Session</th></tr></thead><tbody>`;
+    (errors || []).forEach(e => {
+      html += `<tr class="clickable" onclick="goDetail('${escape(e.latest_session || '')}')"><td style="color:#f85149">${escape((e.error || '').slice(0, 120))}</td><td>${e.count}</td><td>${fmtDate(e.latest)}</td><td style="max-width:100px;overflow:hidden;text-overflow:ellipsis">${escape((e.latest_session || '').slice(0, 16))}</td></tr>`;
+    });
+    if (!errors || !errors.length) html += '<tr><td colspan="4" style="color:#8b949e;text-align:center;padding:20px">No errors found</td></tr>';
+    html += '</tbody></table></div></div>';
+
+    html += '</div>'; // close grid
+
+    // Cost chart
+    try {
+      let cost = await api('/api/stats/cost');
+      if (cost && cost.daily && cost.daily.length) {
+        let costCard = `<div class="analytics-box full" style="margin-top:16px"><h3>Token Usage Over Time <span style="font-weight:400;color:#8b949e;font-size:0.78rem">(Total: ${(cost.total_tokens || 0).toLocaleString()})</span></h3><canvas id="chart-cost" style="height:200px"></canvas></div>`;
+        html += costCard;
+      }
+    } catch(e) {}
+
+    el.innerHTML = html;
+
+    // Tool chart
+    if (tools && tools.length) {
+      CHART_INSTANCES['chart-tools'] = new Chart(document.getElementById('chart-tools'), {
+        type: 'bar',
+        data: {
+          labels: tools.map(t => t.tool),
+          datasets: [{ label: 'Calls', data: tools.map(t => t.call_count), backgroundColor: '#1f6feb', borderRadius: 3 }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+          plugins: { legend: { display: false } },
+          scales: { x: { ticks: { color: '#8b949e' }, beginAtZero: true }, y: { ticks: { color: '#8b949e' } } } }
+      });
+    }
+
+    // Cost chart
+    let costChartCanvas = document.getElementById('chart-cost');
+    if (costChartCanvas) {
+      try {
+        let cost = await api('/api/stats/cost');
+        if (cost && cost.daily && cost.daily.length) {
+          CHART_INSTANCES['chart-cost'] = new Chart(costChartCanvas, {
+            type: 'line',
+            data: {
+              labels: cost.daily.map(d => d.day),
+              datasets: [
+                { label: 'Total Tokens', data: cost.daily.map(d => d.total_tokens), borderColor: '#58a6ff', backgroundColor: '#1f6feb33', fill: true, tension: 0.3 },
+                { label: 'Input Tokens', data: cost.daily.map(d => d.total_input), borderColor: '#3fb950', backgroundColor: '#23863633', fill: true, tension: 0.3 },
+                { label: 'Output Tokens', data: cost.daily.map(d => d.total_output), borderColor: '#f78166', backgroundColor: '#da363333', fill: true, tension: 0.3 },
+              ]
+            },
+            options: { responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { labels: { color: '#8b949e' } } },
+              scales: { x: { ticks: { color: '#8b949e' } }, y: { ticks: { color: '#8b949e' }, beginAtZero: true } } }
+          });
+        }
+      } catch(e) {}
+    }
+
+  } catch(e) { el.innerHTML = `<div class="error-msg">${escape(e.message)}</div>`; }
+}
+
+/* ─── Boot ─── */
+router();
+</script>
+</body>
+</html>

@@ -320,6 +320,29 @@ class Provider(ABC):
             return resolve_env(key)
         return key or ""
 
+    @staticmethod
+    def _content_text(content: object) -> str:
+        """Extract plain-text from content (string or multimodal list)."""
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for p in content:
+                if isinstance(p, dict):
+                    parts.append(str(p.get("text", "") or p.get("image_url", "")))
+                else:
+                    parts.append(str(p))
+            return " ".join(parts).strip()
+        return str(content or "").strip()
+
+    def _non_system_to_dict(self, msg: "Message") -> dict:
+        """Convert a non-system message to an API-ready dict.
+
+        Override in subclasses to use a different serialisation
+        (e.g. ``to_multimodal_dict`` for vision providers).
+        """
+        return msg.to_api_dict()
+
     def prepare_messages(self, messages: list["Message"]) -> list[dict]:
         """Prepare messages for API call. Handles tool, tool_use, tool_result blocks properly.
 
@@ -371,20 +394,20 @@ class Provider(ABC):
                 if body:
                     system_parts.append((marker, body))
             elif m.role == "tool":
-                api = m.to_api_dict()
+                api = self._non_system_to_dict(m)
                 has_id = bool(api.get("tool_call_id"))
-                has_content = bool((api.get("content") or "").strip())
+                has_content = bool(self._content_text(api.get("content")))
                 if not has_id or not has_content:
                     dropped_empty_tools += 1
                     log.debug(
                         "prepare_messages: dropped empty tool message (id=%r content_len=%d)",
                         api.get("tool_call_id"),
-                        len(api.get("content") or ""),
+                        len(self._content_text(api.get("content"))),
                     )
                     continue
                 non_system.append(api)
             else:
-                non_system.append(m.to_api_dict())
+                non_system.append(self._non_system_to_dict(m))
 
         coalesced: list[dict] = []
         for msg in non_system:
@@ -608,6 +631,7 @@ class Provider(ABC):
         model: str,
         on_text_chunk: Optional[Callable[[str], None]] = None,
         on_tool_call_delta: Optional[Callable[[str, str, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
         **kwargs,
     ) -> ChatResponse:
         """Stream with structured ChatResponse return (Clawd-Code style).
@@ -615,6 +639,8 @@ class Provider(ABC):
         Default implementation: falls back to chat() for providers that
         don't implement structured streaming.
         """
+        if cancel_check and cancel_check():
+            raise asyncio.CancelledError("cancelled before chat_stream_response")
         logging.getLogger("onecode.models.provider").warning(
             "[PROVIDER-STREAM] %s does not override chat_stream_response — "
             "falling back to non-streaming chat() (on_text_chunk will NOT fire)",
