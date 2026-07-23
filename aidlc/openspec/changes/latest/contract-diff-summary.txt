@@ -1,0 +1,11 @@
+Contract Diff Summary
+========================================
+Base ref: HEAD~1
+Head ref: HEAD
+Files checked: 1
+Total changes: 8
+  Breaking (major): 1
+  Minor: 7
+  Patch: 0
+Recommended version bump: MAJOR
+Breaking changes detected: YES

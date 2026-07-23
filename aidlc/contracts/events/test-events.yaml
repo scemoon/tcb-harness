@@ -1,0 +1,48 @@
+asyncapi: "3.0.0"
+info:
+  title: Test Events
+  version: "1.0.0"
+channels:
+  user.created:
+    address: user.created
+    messages:
+      userCreated:
+        name: userCreated
+        payload:
+          $ref: "#/components/schemas/User"
+    operations:
+      publish:
+        message:
+          $ref: "#/components/messages/userCreated"
+  user.updated:
+    address: user.updated
+    messages:
+      userUpdated:
+        name: userUpdated
+        payload:
+          $ref: "#/components/schemas/User"
+    operations:
+      publish:
+        message:
+          $ref: "#/components/messages/userUpdated"
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+      required:
+        - id
+        - name
+  messages:
+    userCreated:
+      name: userCreated
+      payload:
+        $ref: "#/components/schemas/User"
+    userUpdated:
+      name: userUpdated
+      payload:
+        $ref: "#/components/schemas/User"
