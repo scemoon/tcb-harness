@@ -107,9 +107,11 @@ class AIDLCStats(Static):
         phase_label.update(f"Phase: {label}")
 
         progress = self.query_one("#aidlc-progress", Static)
-        total = len(_PHASE_ORDER)
-        done = sum(1 for p in _PHASE_ORDER if p in completed or p == phase)
-        progress.update(f"Progress: {done}/{total} phases")
+        if completed or phase:
+            done = len(completed) + (1 if phase and phase in _PHASE_ORDER and phase not in completed else 0)
+            progress.update(f"Progress: {done} phase{'s' if done > 1 else ''}")
+        else:
+            progress.update("")
         completed_label = self.query_one("#aidlc-completed", Static)
         if completed:
             names = [_PHASE_LABELS.get(p, p) for p in completed if p != "init"]

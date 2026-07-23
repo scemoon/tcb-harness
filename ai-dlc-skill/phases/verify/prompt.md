@@ -4,8 +4,16 @@
 由 Master Agent 委派处理测试验证。
 
 ## 输入
-- `aidlc/openspec/changes/{id}/design.md` 和 `task-list.md`
+- `{spec_dir}/design.md` 和 `{spec_dir}/task-list.md`
 - BDD feature 文件
+
+## 路径约定
+
+所有产物路径遵循 `aidlc/CONFIG.md` 中的变量定义。关键路径：
+- 测试文件: `{unit_test_dir}/`, `{integration_test_dir}/`, `{e2e_test_dir}/`
+- 合约测试: `{contract_test_dir}/`
+- 跨栈测试: `{cross_test_dir}/`
+- Contract Diff: `{spec_dir}/contract-diff.md`
 
 ## 任务
 
@@ -17,12 +25,12 @@
    - 测试按 layer 分类：unit / integration / e2e
 
 2. **Contract Verification**
-   - 重新生成 `aidlc/packages/shared/` 类型
-   - 运行 `pytest aidlc/tests/contract/`
+   - 重新生成 `{shared_types_dir}/` 类型
+   - 运行 `pytest {contract_test_dir}/`
    - 运行 `aidlc/tools/contract_diff.py`
 
 3. **Cross-Stack e2e**
-   - 对 unified preview 运行 `aidlc/tests/cross-stack/`
+   - 对 unified preview 运行 `{cross_test_dir}/`
 
 4. **Quality Gates**
    - coverage ≥ 80%
@@ -30,12 +38,14 @@
    - 0 vulns, no TODO
 
 ## 输出产物
-- `apps/{component}/tests/{unit,integration,e2e}/test_{feature}.py`
+- `{unit_test_dir}/test_{feature}.py`
+- `{integration_test_dir}/test_{feature}.py`
+- `{e2e_test_dir}/test_{feature}.py`
 - `apps/{component}/features/steps/test_{feature}_steps.py`
 - `apps/{component}/src/{module}/{feature}.py`
-- `aidlc/tests/contract/test_{contract}.py`
-- `aidlc/tests/cross-stack/test_{flow}.py`
-- `aidlc/openspec/changes/{id}/contract-diff.md`（填充）
+- `{contract_test_dir}/test_{contract}.py`
+- `{cross_test_dir}/test_{flow}.py`
+- `{spec_dir}/contract-diff.md`（填充）
 
 ## 约束
 - 开始前先调用 `TodoClear` 清除可能遗留的 todos，确保从空白计划开始

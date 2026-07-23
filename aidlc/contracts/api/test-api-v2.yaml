@@ -1,0 +1,99 @@
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.1.0"
+paths:
+  /users:
+    get:
+      summary: List users
+      operationId: listUsers
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserList"
+        "206":
+          description: Partial Content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserList"
+  /users/{id}:
+    get:
+      summary: Get user
+      operationId: getUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "404":
+          description: Not Found
+  /posts:
+    get:
+      summary: List posts
+      operationId: listPosts
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostList"
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - email
+    UserList:
+      type: array
+      items:
+        $ref: "#/components/schemas/User"
+    Post:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        content:
+          type: string
+      required:
+        - id
+        - title
+    PostList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Post"

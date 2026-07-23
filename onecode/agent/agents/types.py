@@ -121,7 +121,9 @@ class BuildAgent(AgentConfig):
                 "Full development agent with all tools enabled. Edits and shell "
                 "commands require user approval. Uses CoT reasoning + ReAct loop "
                 "with routing by complexity: simple work → TodoCreate, complex "
-                "work → Spawn subagent."
+                "work → Spawn subagent. When you need user feedback, input, or "
+                "approval — ALWAYS use the AskUser tool to pause and wait. "
+                "Never output a question in visible text and continue executing."
             ),
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.ASK,
@@ -141,10 +143,12 @@ class PlanAgent(AgentConfig):
             name="plan",
             description=(
                 "Plan mode: CoT + ReAct (思考→行动→观察) agent with hard plan "
-                "gate. Creates a todo plan first via TodoCreate, presents for "
-                "user review, then routes execution by complexity: simple todos "
-                "run directly, complex todos are delegated to Spawn subagents. "
-                "Human-in-the-loop."
+                "gate. Outputs a step-by-step plan as Markdown first, presents for "
+                "user review via AskUser, then routes execution by complexity: "
+                "simple tasks run directly, complex tasks are delegated to Spawn "
+                "subagents. Human-in-the-loop. When you need user feedback, input, "
+                "or approval — ALWAYS use the AskUser tool to pause and wait. "
+                "Never output a question in visible text and continue executing."
             ),
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.DENY,
@@ -534,13 +538,13 @@ def filter_tool_descriptions(
 
 PLAN_GATE_HARD = _load_prompt("plan-gate-hard", """
 ### plan mode: hard gate
-Execution tools (Write/Edit/Insert/ApplyPatch/Bash) are BLOCKED until a todo plan exists.
-Create ALL todos upfront with `TodoCreate`, present for user review, then execute.
+Execution tools (Write/Edit/Insert/ApplyPatch/Bash) are BLOCKED until a plan exists.
+Output a clear step-by-step plan as Markdown, present for user review, then execute.
 """)
 
 PLAN_GATE_SOFT = _load_prompt("plan-gate-soft", """
 ### build/solo mode: soft gate
-Execution is allowed but planning is encouraged. Create todos first via `TodoCreate`.
+Execution is allowed but planning is encouraged. Output a plan as Markdown first.
 """)
 
 COMPACTION_INSTRUCTIONS = _load_prompt("compaction-instructions", """

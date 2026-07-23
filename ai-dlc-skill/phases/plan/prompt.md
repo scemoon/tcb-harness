@@ -4,18 +4,25 @@
 由 Master Agent 委派处理方案设计。
 
 ## 输入
-- `aidlc/openspec/changes/{id}/spec-delta.md`
+- `{spec_dir}/spec-delta.md`
 - BDD feature 文件
+
+## 路径约定
+
+所有产物路径遵循 `aidlc/CONFIG.md` 中的变量定义。关键路径：
+- Design Doc: `{spec_dir}/design.md`
+- Task List: `{spec_dir}/task-list.md`
+- Contract Diff: `{spec_dir}/contract-diff.md`
 
 ## 任务
 
 1. **SDD: Design Doc**
-   - 在 `aidlc/openspec/changes/{id}/design.md` 输出
+   - 在 `{spec_dir}/design.md` 输出
    - 包含：架构图（Mermaid）、数据模型、API 表、状态机
    - 每组件独立 section + 集成 section
 
 2. **SDD: Task Decomposition**
-   - 在 `aidlc/openspec/changes/{id}/task-list.md` 输出
+   - 在 `{spec_dir}/task-list.md` 输出
    - YAML 格式，unit 带 `depends_on` DAG
    - 跨组件 task 显示声明 `depends_on` 关系
 
@@ -28,15 +35,15 @@
    - 如需 breaking change 标记为 human-approval 阻塞
 
 ## 输出产物
-- `aidlc/openspec/changes/{id}/design.md`
-- `aidlc/openspec/changes/{id}/task-list.md`
-- `aidlc/openspec/changes/{id}/contract-diff.md`（占位）
+- `{spec_dir}/design.md`
+- `{spec_dir}/task-list.md`
+- `{spec_dir}/contract-diff.md`（占位）
 
 ## 约束
 - 开始前先调用 `TodoClear` 清除可能遗留的 todos，确保从空白计划开始
 - 遵守 `rules.md` 中的 PLN-001 到 PLN-004
 - 遵守 STK-001, STK-002（affects 声明 + cross-component 依赖）
-- 完成前必须通过 Human Gate 审查
+- 完成后将产物返回给 Master Agent，由 Master Agent 执行 Human Gate 审查（AskUser）
 
 ## 完成报告
 

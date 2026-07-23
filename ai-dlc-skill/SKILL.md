@@ -5,17 +5,6 @@ description: |
   Core phases: Understand (SDD+BDD), Plan (SDD+TDD), Verify (BDD+TDD),
   Deliver (SDD+Cloud). Adaptive orchestration: Master Agent evaluates
   complexity, delegates sub-tasks.
-allowed_tools:
-  - read
-  - grep
-  - glob
-  - bash
-  - edit
-  - write
-  - webfetch
-  - websearch
-  - task
-  - skill
 triggers:
   - ai-dlc
   - ai dlc
@@ -69,21 +58,30 @@ metadata:
 See `core/adaptive-flow.md` for complexity assessment.
 See `core/task-registry.md` for task status tracking.
 
-1. **Check Registry**: Read `.opencode/plans/task-registry.json`, check if intent already processed
+**State file**: `.cdh/state.json` — read/write via bash (`cat`, `python -c`).
+
+```json
+{
+  "current_phase": "understand",
+  "completed_phases": [],
+  "gate_results": {},
+  "task_registry": []
+}
+```
+
+1. **Check Registry**: Read `.cdh/state.json`, scan `task_registry` for matching intent
    - Found + all phases completed → SKIP, return existing result
    - Found + partially completed → skip completed phases, run pending only
-   - Not found → create new task entry
+   - Not found → create new entry in `task_registry`
 2. Analyze intent → determine complexity (L1-L5)
 3. Select phases to execute (skip any already completed per registry)
-4. `taskRegistry.create()` — record task with phase list
+4. Write to `.cdh/state.json`: `current_phase` = first phase, `task_registry` new entry
 5. For each pending phase:
    a. Call `TodoClear` to reset the plan
-   b. Delegate via `Task(agent_type="general", prompt=...)` using the phase's `prompt.md`
+   b. Delegate via `Task(agent_type="ai-dlc-{phase}", prompt=...)` using phase's `prompt.md`
    c. Collect result, enforce gate
-   d. `taskRegistry.completePhase()` — mark phase completed with artifacts
-6. All phases done → mark task `completed` in registry
-
-```
+   d. Write to `.cdh/state.json`: move phase to `completed_phases`, update `current_phase`
+6. All phases done → mark task_registry entry `completed`
 
 ## Phase Reference
 

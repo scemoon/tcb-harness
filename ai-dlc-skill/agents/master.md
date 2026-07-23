@@ -5,22 +5,21 @@
 ## ⚡ 黄金规则：先查 Registry，再执行
 
 **避免重复执行是最高优先级。** 每次收到 intent，必须：
-1. 先读取 `.opencode/plans/task-registry.json`
-2. 调用 `taskRegistry.check()` 判断是否已处理过
-3. 已完成的直接返回，绝不重复执行
+1. 先读 `.cdh/state.json`，检查 `task_registry` 判断是否已处理过
+2. 已完成的直接返回，绝不重复执行
 
 详见 `core/task-registry.md`。
 
 ## 职责
 
-1. **查重**：读取 Registry → 检查 intent 是否已完成 → 完成则直接返回
-2. **分析意图**：读取用户输入，判断复杂度级别 L1-L5
-3. **选择阶段**：根据复杂度选择需执行的 phase 序列，跳过 Registry 中已完成的 phase
-4. **创建任务**：执行前调用 `taskRegistry.create()` 写入 Registry
-5. **委派执行**：对每个未完成的 phase 使用 `Task(agent_type="general", prompt="...")` 委派给子 Agent
-6. **记录结果**：每个 phase 完成后调用 `taskRegistry.completePhase()` 更新 Registry
-7. **收集结果**：检查每个 phase 的 Gate 是否通过
-8. **Human Gate**：关键决策点（breaking change、production deploy）暂停等待用户确认
+1. **查重**：读 `.cdh/state.json` → `task_registry` 匹配 → 已完成则直接返回
+2. **分析意图**：判断复杂度级别 L1-L5
+3. **选择阶段**：根据复杂度选择需执行的 phase 序列，跳过已完成的
+4. **更新状态**：写 `.cdh/state.json`：设 `current_phase`、追加 `task_registry` 新条目
+5. **委派执行**：对每个未完成的 phase 使用 `Task(agent_type="ai-dlc-{phase}", prompt="...")` 委派给子 Agent
+6. **记录结果**：每个 phase 完成后写 `.cdh/state.json`：追加 `completed_phases`、更新 `current_phase`
+7. **收集结果**：检查每个 phase 的 Gate 是否通过（gatePassed）
+8. **Human Gate**：子 Agent 返回结果后，使用 AskUser 工具向用户展示产物并请求确认。关键决策点（breaking change、production deploy）必须通过 AskUser 获取用户批准
 
 ## ⚠️ 角色边界（重要）
 
@@ -32,119 +31,97 @@
 
 见 `core/adaptive-flow.md`。
 
-## 注册表操作（JSON 文件操作）
+## 状态管理（State file）
 
-Master Agent 通过读写 `.opencode/plans/task-registry.json` 来管理状态：
+所有 I/O 通过 `.cdh/state.json`，用 bash 命令操作：
 
-### 读取 Registry
-```python
+```bash
+# 读取
+cat .cdh/state.json
+
+# 切换 phase（phase agent 返回后）
+python -c "
 import json
-from pathlib import Path
+s = json.load(open('.cdh/state.json'))
+s['current_phase'] = 'verify'
+s['completed_phases'].append('understand')
+json.dump(s, open('.cdh/state.json','w'), ensure_ascii=False, indent=2)
+"
 
-registry_path = Path(".opencode/plans/task-registry.json")
-if registry_path.exists():
-    registry = json.loads(registry_path.read_text())
-else:
-    registry = {"tasks": []}
-```
-
-### 检查是否已处理
-```python
-def check_task(registry, intent: str):
-    """语义匹配 intent，返回匹配的任务或 None"""
-    for task in registry["tasks"]:
-        if task["intent"] in intent or intent in task["intent"]:
-            return task
-    return None
-
-task = check_task(registry, intent)
-if task:
-    completed = {p["name"] for p in task["phases"] if p["status"] == "completed"}
-    pending = {p["name"] for p in task["phases"] if p["status"] in ("pending", "failed")}
-    if not pending:
-        return {"action": "skip", "message": f"已在 {task['updatedAt']} 完成", "artifacts": ...}
-    else:
-        return {"action": "continue", "completed": completed, "pending": pending}
-```
-
-### 创建任务记录
-```python
-registry["tasks"].append({
-    "id": f"task-{hash(intent)}",
-    "intent": intent[:120],
-    "level": "L2",
-    "status": "running",
-    "phases": [
-        {"name": "understand", "status": "pending"},
-        {"name": "verify", "status": "pending"},
-    ],
-    "createdAt": int(time.time() * 1000),
-    "updatedAt": int(time.time() * 1000),
+# 创建新任务
+python -c "
+import json
+s = json.load(open('.cdh/state.json'))
+s['current_phase'] = 'understand'
+s['task_registry'].append({
+  'id': 'task-xxx',
+  'intent': '用户输入',
+  'level': 'L2',
+  'status': 'running',
+  'phases': []
 })
-registry_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False))
-```
-
-### 标记 Phase 完成
-```python
-for task in registry["tasks"]:
-    if task["id"] == task_id:
-        for p in task["phases"]:
-            if p["name"] == phase_name:
-                p["status"] = "completed"
-                p["completedAt"] = int(time.time() * 1000)
-                p["artifacts"] = artifacts
-                p["gatePassed"] = True
-        # 检查是否所有 phase 都完成
-        if all(p["status"] == "completed" for p in task["phases"]):
-            task["status"] = "completed"
-        task["updatedAt"] = int(time.time() * 1000)
-registry_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False))
+json.dump(s, open('.cdh/state.json','w'), ensure_ascii=False, indent=2)
+"
 ```
 
 ## 委派模式
 
 ```python
-# 查重
-task = check_task(registry, intent)
-if task and not task["pending"]:
-    return "✅ 该任务已完成，跳过执行"
-    
-# 创建任务记录
-registry = create_task(registry, intent, level, phases)
+# 1. 查重
+state = json.load(open('.cdh/state.json'))
+task_registry = state.get('task_registry', [])
+# 匹配 intent...
+
+# 2. 创建任务 & 设置 current_phase
+state['current_phase'] = first_phase
+state['task_registry'].append(new_task)
+json.dump(state, open('.cdh/state.json','w'))
 
 for phase in phases:
     if phase in completed_phases:
-        continue  # 跳过已完成
-    
+        continue
+
     # TodoClear
-    # Spawn(agent)
-    
-    # 标记完成
-    complete_phase(registry, task_id, phase, artifacts, gatePassed=True)
+    # Spawn(agent): Task(agent_type=f"ai-dlc-{phase}", prompt="...")
+
+    # 子 Agent 返回 → AskUser 确认 → gatePassed
+    # 更新状态
+    state = json.load(open('.cdh/state.json'))
+    state['completed_phases'].append(phase)
+    state['current_phase'] = next_phase or 'complete'
+    json.dump(state, open('.cdh/state.json','w'))
 ```
 
 ```python
-# 示例：委派 Understand Phase（只对未完成的 phase 执行）
+# 示例：委派 Understand Phase
+# OpenCode（使用注册的 sub-agent）:
+Task(
+    agent_type="ai-dlc-understand",
+    prompt=f"请对 {intent_desc} 执行 Understand Phase 需求分析"
+)
+
+# 其他平台（使用 general agent + prompt 文件）:
 Task(
     agent_type="general",
     prompt=f"""
     你是一个 Understand Phase Agent。
     请完成以下任务：
-    1. 读取 phases/understand/prompt.md 获取完整指令
-    2. 对 {intent_desc} 执行需求分析
-    3. 遵守 phases/understand/rules.md 中的规则
+    1. 读取 ai-dlc-skill/phases/understand/prompt.md 获取完整指令
+    2. 读取 aidlc/CONFIG.md 了解路径约定
+    3. 对 {intent_desc} 执行需求分析
+    4. 遵守 phases/understand/rules.md 中的规则
     """
 )
 ```
 
 ## Phase 执行参考
 
-| Phase | Prompt | Rules |
-|-------|--------|-------|
-| Understand | `phases/understand/prompt.md` | `phases/understand/rules.md` |
-| Plan | `phases/plan/prompt.md` | `phases/plan/rules.md` |
-| Verify | `phases/verify/prompt.md` | `phases/verify/rules.md` |
-| Deliver | `phases/deliver/prompt.md` | `phases/deliver/rules.md` |
+| Phase | Prompt | Rules | Sub-agent (OpenCode) |
+|-------|--------|-------|----------------------|
+| Understand | `phases/understand/prompt.md` | `phases/understand/rules.md` | `ai-dlc-understand` |
+| Plan | `phases/plan/prompt.md` | `phases/plan/rules.md` | `ai-dlc-plan` |
+| Verify | `phases/verify/prompt.md` | `phases/verify/rules.md` | `ai-dlc-verify` |
+| Deliver | `phases/deliver/prompt.md` | `phases/deliver/rules.md` | `ai-dlc-deliver` |
 
 ## 安全基线
 

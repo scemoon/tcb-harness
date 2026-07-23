@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -78,19 +80,27 @@ class CdhProjectLoader:
     @staticmethod
     def save_state(cdh_dir: Path, state_data: dict) -> None:
         path = cdh_dir / CdhProjectLoader.STATE_FILENAME
-        path.write_text(
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(
             json.dumps(state_data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        tmp.replace(path)
 
     # ── last-session persistence ───────────────────────────────
 
     @staticmethod
+    def _atomic_write(path: Path, data: str) -> None:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(data, encoding="utf-8")
+        tmp.replace(path)
+
+    @staticmethod
     def save_last_session(cdh_dir: Path, session_data: dict) -> None:
         path = cdh_dir / CdhProjectLoader.LAST_SESSION_FILENAME
-        path.write_text(
+        CdhProjectLoader._atomic_write(
+            path,
             json.dumps(session_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
 
     @staticmethod
@@ -108,9 +118,9 @@ class CdhProjectLoader:
     @staticmethod
     def save_todos(cdh_dir: Path, todos_data: dict) -> None:
         path = cdh_dir / CdhProjectLoader.TODOS_FILENAME
-        path.write_text(
+        CdhProjectLoader._atomic_write(
+            path,
             json.dumps(todos_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
 
     @staticmethod
@@ -128,9 +138,9 @@ class CdhProjectLoader:
     @staticmethod
     def save_permissions(cdh_dir: Path, perm_data: dict) -> None:
         path = cdh_dir / CdhProjectLoader.PERMISSIONS_FILENAME
-        path.write_text(
+        CdhProjectLoader._atomic_write(
+            path,
             json.dumps(perm_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
 
     @staticmethod
@@ -205,15 +215,16 @@ class CdhProjectLoader:
 
         seq = CdhProjectLoader._PHASE_SEQUENCE
         try:
-            prev_idx = seq.index(prev)
+            prev_idx = seq.index(prev) if prev else -1
             target_idx = seq.index(phase)
         except ValueError:
             return False
 
-        if target_idx != prev_idx + 1:
+        # Allow any forward jump (AI-DLC adaptive flow may skip phases)
+        if target_idx <= prev_idx:
             return False
 
-        if prev and prev != "init":
+        if prev and prev != "init" and prev in seq:
             completed = state.get("completed_phases", [])
             if prev not in completed:
                 completed.append(prev)
@@ -273,7 +284,6 @@ class CdhProjectLoader:
         config_path.write_text(yaml.dump(config, default_flow_style=False), encoding="utf-8")
 
         state = {"current_phase": phase, "completed_phases": [], "gate_results": {}}
-        state_path = cdh_dir / CdhProjectLoader.STATE_FILENAME
-        state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        CdhProjectLoader.save_state(cdh_dir, state)
 
         return cdh_dir

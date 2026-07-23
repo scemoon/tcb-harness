@@ -538,6 +538,11 @@ class AgentEngine:
         self._cron_scheduler = CronScheduler()
         self._lsp_tool = LSPTool()
 
+        # Register default CloudBase MCP entry (shows in ``mcp list`` even
+        # without credentials — actual connect happens when skill loads).
+        from onecode.mcp.cloudbase import ensure_configured as _ensure_cb
+        _ensure_cb(self._mcp)
+
         # Loop system (L2 Verification + L3 Event)
         from onecode.config import load_config
         _cfg = load_config()
@@ -937,11 +942,17 @@ class AgentEngine:
         if pending:
             labels = "\n".join(_label(t) for t in pending)
             lines.append(f"\nPending:\n{labels}")
-        lines.append(
-            "\nFor each completed todo, call TodoUpdate(status=\"completed\") "
-            "immediately. Then proceed to the next pending todo. "
-            "Do NOT summarise or stop — keep working."
-        )
+        if not self._is_plan_mode():
+            lines.append(
+                "\nFor each completed todo, call TodoUpdate(status=\"completed\") "
+                "immediately. Then proceed to the next pending todo. "
+                "Do NOT summarise or stop — keep working."
+            )
+        else:
+            lines.append(
+                "\nProceed to the next pending task. "
+                "Do NOT summarise or stop — keep working."
+            )
         body = f"{marker}\n" + "\n".join(lines)
         if not self.context.replace_system_section(marker, body):
             self.context.insert_system_before_non_system(body)
@@ -1021,6 +1032,10 @@ class AgentEngine:
                 '"done" or "complete" unless ALL work is actually finished.\n'
                 "- **FINAL round** (all work done): output a visible summary "
                 "describing what was accomplished, changed, or decided.\n"
+                "- **Asking the user**: when you need user feedback, input, or "
+                "approval, ALWAYS use the AskUser tool to pause and wait for a "
+                "response. Never output a question in visible text and continue "
+                "executing — the session will not pause for your question.\n"
             )
         elif self.current_agent.permission_task != AgentPermission.DENY:
             system_parts.append(
@@ -1030,24 +1045,23 @@ class AgentEngine:
                 "  1. Review what the last round's tools produced — any errors?\n"
                 "  2. Assess progress against todos — done / pending?\n"
                 "  3. Decide the next single action — direct tool or `Spawn`?\n"
-                "- **Todo-driven execution**:\n"
-                "  - No todo for this work? → `TodoCreate` first.\n"
-                "  - Simple / single-step todo → execute directly, then "
-                "`TodoUpdate(status=\"completed\")`.\n"
-                "  - Complex / multi-step todo → `Spawn(agent_type, prompt)` to "
-                "delegate execution, then `TodoUpdate(status=\"completed\")`.\n"
-                "  - New task batch? → `TodoClear` then `TodoCreate`. "
-                "Never append new todos to an old plan.\n"
+                "- **Plan-driven execution**:\n"
+                "  - Output a step-by-step plan as Markdown first.\n"
+                "  - Simple / single-step task → execute directly.\n"
+                "  - Complex / multi-step task → `Spawn(agent_type, prompt)` to "
+                "delegate execution.\n"
                 "- If you need to reason between tool calls, wrap your "
                 "reasoning in `<thinking>...</thinking>`.\n"
                 "- **Intermediate rounds**: visible text is for progress "
                 "updates only.  Do NOT announce "
-                '"done" or "complete" unless ALL todos are actually completed.\n'
-                "- Do NOT call `TodoUpdate(status=\"completed\")` unless you "
-                "have actually executed the work (tool calls or Spawn).\n"
-                "- **FINAL round** (all todos completed, all work done): "
+                '"done" or "complete" unless ALL work is actually completed.\n'
+                "- **FINAL round** (all work done): "
                 "output a visible summary describing what was accomplished, "
                 "what was changed, and any important outcomes or limitations.\n"
+                "- **Asking the user**: when you need user feedback, input, or "
+                "approval, ALWAYS use the AskUser tool to pause and wait for a "
+                "response. Never output a question in visible text and continue "
+                "executing — the session will not pause for your question.\n"
             )
         else:
             system_parts.append(
@@ -1064,6 +1078,10 @@ class AgentEngine:
                 '"done" or "complete" unless ALL work is actually finished.\n'
                 "- **FINAL round** (all work done): output a visible summary "
                 "describing what was accomplished, changed, or decided.\n"
+                "- **Asking the user**: when you need user feedback, input, or "
+                "approval, ALWAYS use the AskUser tool to pause and wait for a "
+                "response. Never output a question in visible text and continue "
+                "executing — the session will not pause for your question.\n"
             )
 
         tagged_content = "<!-- AGENT_CONFIG -->\n" + "\n".join(system_parts)
@@ -1109,9 +1127,23 @@ class AgentEngine:
         self.context.remove_system_by_marker("<!-- CDH_PROJECT -->")
         self._skills_loaded = True
 
+        has_cloudbase = False
         for skill in self._skill_loader.get_enabled():
             tagged = f"<!-- SKILL:{skill.name} -->\n{skill.content}"
             self.context.add_system(tagged)
+            if skill.name == "cloudbase":
+                has_cloudbase = True
+
+        if has_cloudbase:
+            from onecode.mcp.cloudbase import ensure_configured as _ensure_cb
+            _ensure_cb(self._mcp)
+            if not self._mcp.is_connected("cloudbase"):
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.create_task(self._mcp.connect("cloudbase"))
+                except Exception:
+                    pass
 
         # Project-level single-file doc (AGENTS.md at workspace root)
         from onecode.agent.project_doc import load_project_doc
@@ -1699,16 +1731,26 @@ class AgentEngine:
                     break
                 level = self.context.compact()
                 ctx_tokens_after = self.context._token_count
-                if level == "none" and ctx_retries >= 2:
+                tokens_unchanged = ctx_tokens_after >= ctx_tokens_before
+                if tokens_unchanged and ctx_retries >= 2:
                     self._ctx_crisis = True
-                    for marker in ("<!-- SKILL:", "<!-- PROJECT_DOC -->",
-                                   "<!-- CODEBASE -->", "<!-- MEMORY -->"):
+                    for marker in ("<!-- SKILL:", "<!-- AI-DLC:",
+                                   "<!-- PROJECT_DOC -->",
+                                   "<!-- CODEBASE -->", "<!-- MEMORY -->",
+                                   "<!-- CDH_PROJECT -->", "<!-- COMPACT_SUMMARY -->"):
                         removed = self.context.remove_system_by_marker(marker)
                         if removed:
                             logger.info(
-                                "ContextLengthError recovery: removed %d system "
-                                "msg(s) with marker %s (ctx_crisis set)", removed, marker,
+                                "ContextLengthError crisis: removed %d system "
+                                "msg(s) with marker %s", removed, marker,
                             )
+                    level = self.context.compact()
+                    ctx_tokens_after = self.context._token_count
+                if ctx_tokens_after >= ctx_tokens_before and self._ctx_crisis:
+                    for m in self.context.messages:
+                        if m.role == "system" and isinstance(m.content, str) and len(m.content) > 2000:
+                            m.content = m.content[:2000] + "\n... [emergency truncation]"
+                    self.context._update_token_count()
                     ctx_tokens_after = self.context._token_count
                 if ctx_tokens_after < ctx_tokens_before:
                     logger.info(
@@ -1909,9 +1951,9 @@ class AgentEngine:
                             "## CRITICAL: Unfinished todos detected",
                             "You stopped without completing all planned todos.",
                             "You MUST continue working:",
-                            "1. Call TodoUpdate(status=\"completed\") for any finished work.",
-                            "2. Then Spawn or execute the next pending todo.",
-                            "3. Repeat until ALL todos are Done.",
+                        "1. Mark any finished work as complete.",
+                        "2. Then Spawn or execute the next pending todo.",
+                        "3. Repeat until ALL todos are Done.",
                             "Do NOT stop. Do NOT summarise. Keep executing.",
                         ]
                         self._inject_nudge(lines)
@@ -1922,10 +1964,10 @@ class AgentEngine:
                     confirm_lines = [
                         "# Final check",
                         "",
-                        "You haven't created any todos in this session. "
+                        "You haven't created any plan in this session. "
                         "Are you sure all work is complete?",
                         "",
-                        "If work remains → `TodoCreate` and continue.",
+                        "If work remains → output a plan as Markdown and continue.",
                         "If done → output a visible summary of what you accomplished.",
                     ]
                     self._inject_nudge(confirm_lines)
@@ -1969,8 +2011,8 @@ class AgentEngine:
                                 "error": (
                                     f"Tool '{tu['name']}' is not available in Plan mode. "
                                     "Plan mode is read-only: you may use Read/Glob/Grep/WebFetch/"
-                                    "WebSearch for analysis, and TodoCreate/TodoUpdate/AskUser "
-                                    "for planning. Writing files, running shell commands, or any "
+                                    "WebSearch for analysis, and AskUser for questions. "
+                                    "Writing files, running shell commands, or any "
                                     "other mutation requires switching to Build mode."
                                 ),
                             }),
@@ -2156,15 +2198,8 @@ class AgentEngine:
                                 "success": False,
                                 "error": (
                                     "Plan required. You are in plan mode (ReAct: Thought → Action → Observation). "
-                                    "Before using execution tools, create a todo plan via `TodoCreate()`. "
-                                    "Choose the right granularity:\n"
-                                    "- Each todo = one focused unit of work (file, function, or concern).\n"
-                                    "- Set `addBlockedBy` on dependent todos to express the DAG.\n"
-                                    "- For complex multi-step work, mark the todo with "
-                                    "`metadata={\"delegate_to\": \"general\"}` to indicate it should be "
-                                    "executed by a `Spawn` subagent rather than direct tool calls.\n"
-                                    "Create ALL todos upfront, present the plan for user review, "
-                                    "and only then proceed to execute."
+                                    "Before using execution tools, output a step-by-step plan as "
+                                    "Markdown for user review, and only then proceed to execute."
                                 ),
                             }),
                         }
@@ -2173,17 +2208,12 @@ class AgentEngine:
                         self.context.insert_system_before_non_system(
                             "<!-- PLAN_REMINDER -->\n"
                             "## Routing Decision\n"
-                            "Every task is a todo: create it with `TodoCreate` first (it "
-                            "persists to .cdh/todos.json and shows in the sidebar Plan).\n"
+                            "Output a step-by-step plan as Markdown before executing.\n"
                             "Then route EXECUTION by complexity:\n\n"
-                            "**Simple / single-step** → execute the todo directly with "
-                            "`Read`/`Edit`/`Bash`, then `TodoUpdate(status=\"completed\")`.\n\n"
+                            "**Simple / single-step** → execute directly with "
+                            "`Read`/`Edit`/`Bash`.\n\n"
                             "**Complex / multi-step / needs isolated context** → "
-                            "`Spawn(agent_type, prompt)` delegates to a focused subagent; "
-                            "on return, `TodoUpdate(status=\"completed\")`.\n\n"
-                            "**Plan vs execution**: TodoCreate = planning (always); "
-                            "Spawn = execution delegation (complex only). They are not "
-                            "alternatives — Spawn executes a todo, it does not replace one.\n"
+                            "`Spawn(agent_type, prompt)` delegates to a focused subagent.\n"
                         )
                         result = await self._execute_tool(tu)
                 else:
@@ -2195,14 +2225,11 @@ class AgentEngine:
                             self.context.insert_system_before_non_system(
                                 "<!-- ROUTING_REMINDER -->\n"
                                 "You've used direct execution tools repeatedly. Pause and decide:\n"
-                                "- Is this work tracked by a todo? If not, `TodoCreate` first.\n"
-                                "- If the todo is a single-step trivial change → continue, then "
-                                "`TodoUpdate(status=\"completed\")`.\n"
+                                "- Is this work part of a plan? If not, output a plan as Markdown first.\n"
+                                "- If the task is a single-step trivial change → continue directly.\n"
                                 "- If this work involves >1 tool call, multiple files, or "
                                 "research → STOP direct execution and delegate via "
-                                "`Spawn(agent_type=\"general\", prompt=\"...\")` instead. The "
-                                "subagent isolates context and returns a structured summary; "
-                                "then mark the todo completed."
+                                "`Spawn(agent_type=\"general\", prompt=\"...\")` instead."
                             )
                 result_str = str(result.get("content", ""))
                 is_error = result.get("is_error", False)

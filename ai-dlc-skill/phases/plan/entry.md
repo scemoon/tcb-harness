@@ -21,6 +21,6 @@ See `prompt.md` for the sub-agent delegation prompt template.
 
 0. 先调用 `TodoClear` 清除上阶段遗留的 todos，确保从空白计划开始
 1. 读取 spec-delta 和 feature 文件
-2. 生成设计文档（per-component + integration）
-3. 分解为带 DAG 依赖的任务单元
+2. 生成设计文档（per-component + integration）→ `{spec_dir}/design.md`
+3. 分解为带 DAG 依赖的任务单元 → `{spec_dir}/task-list.md`
 4. 编写测试计划（每层）

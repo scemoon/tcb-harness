@@ -1,7 +1,0 @@
-description: ''
-name: cloud-dev-harness
-stack:
-  components: []
-  cross_cutting:
-    fr_prefix: INT
-  topology: monorepo

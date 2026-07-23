@@ -1,18 +1,1 @@
-# AI-DLC Development Rules (Cline)
-
-This project follows the AI-DLC methodology. See `AGENTS.md` for full details.
-
-## Core Methodology
-AI-DLC: Intent → Spec (EARS) → BDD → Design → TDD → Deploy
-
-## FR Namespaces
-NATIVE apps/native | DESKTOP apps/desktop | WEB apps/web
-BE apps/backend | WXA apps/wxa | MYA apps/mya | TTA apps/tta
-INT aidlc/contracts/ + aidlc/packages/shared/
-
-## Quality Gates
-- Coverage >= 80%
-- BDD scenarios 100% pass
-- 0 vulns, no TODO in src/
-- Contract backward-compat by default
-- Cross-stack e2e mandatory for multi-component changes
+AGENTS.md

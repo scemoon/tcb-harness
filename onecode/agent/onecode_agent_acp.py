@@ -701,6 +701,9 @@ class CDHACPAdapter:
         self._subagent_fwd_bytes: dict[str, int] = {}
         # Turn counter for session/event notifications
         self._turn_count: int = 0
+        # Accumulated plain-text output from the agent during the current turn,
+        # used to detect text-based questions and auto-convert to AskUser.
+        self._agent_text_output: str = ""
         # Display state for tools invoked *inside* a subagent, keyed by a
         # namespaced id ``"sa:{subagent_id}:{inner_tool_id}"`` (kept separate
         # from ``self.tool_calls`` so subagent tool cards never collide with
@@ -1780,6 +1783,7 @@ class CDHACPAdapter:
         self._subagent_fwd_count = {}
         self._subagent_fwd_bytes = {}
         self._subagent_tool_calls = {}
+        self._agent_text_output = ""
         info_log(
             "[ACP-PROMPT] entering chat_stream loop; agent._cancelled reset to "
             "False; session=%s", session_id,
@@ -1844,6 +1848,7 @@ class CDHACPAdapter:
             async for event in self.agent.chat_stream(user_content):
                 if event.type == StreamEventType.TEXT_DELTA:
                     self._text_chunker.append(event.text)
+                    self._agent_text_output += event.text
                 elif event.type == StreamEventType.THINKING:
                     self._thought_chunker.append(event.thinking)
                 elif event.type == StreamEventType.TOOL_CALL_START:
@@ -2370,6 +2375,71 @@ class CDHACPAdapter:
 
         self._text_chunker.flush()
         self._thought_chunker.flush()
+
+        # ── Auto-question detection ────────────────────────────────────
+        # If the agent asked a question as plain text (instead of using the
+        # AskUser tool), convert it to an interactive AskUser dialog so the
+        # user's response does not get lost in the prompt queue.
+        # We then recursively call session_prompt with the answer to get an
+        # immediate follow-up from the LLM.
+        _auto_text = self._agent_text_output.rstrip()
+        _auto_is_q = False
+        if _auto_text.endswith('\uff1f'):  # fullwidth ？
+            _auto_is_q = True
+        elif _auto_text.endswith('?') and len(_auto_text) >= 2:
+            _prev = _auto_text[-2]
+            if '\u4e00' <= _prev <= '\u9fff' or '\u3000' <= _prev <= '\u303f':
+                _auto_is_q = True
+        if _auto_is_q and not self.agent._cancelled:
+            # Show a compact version of the question (last few hundred chars)
+            _q_idx = _auto_text.rfind('\uff1f')
+            if _q_idx < 0:
+                _q_idx = _auto_text.rfind('?')
+            _q_show = _auto_text
+            if _q_idx >= 0 and len(_auto_text) > 500:
+                _start = max(0, _q_idx - 200)
+                _prefix = "…" if _start > 0 else ""
+                _q_show = _prefix + _auto_text[_start:]
+            self.send_session_update({
+                "sessionUpdate": "ask_user",
+                "question": _q_show,
+                "options": [
+                    {"label": "✓ 是", "value": "yes", "key": "y", "default": True},
+                    {"label": "✗ 取消", "value": "no", "key": "n"},
+                ],
+                "toolId": "auto-text-ask",
+            })
+            _auto_ans = ""
+            _auto_cancelled = False
+            for _attempt in range(2):
+                try:
+                    self._ask_user_future = asyncio.get_event_loop().create_future()
+                    _resp = await asyncio.wait_for(
+                        self._ask_user_future, timeout=60,
+                    )
+                    _auto_ans = _resp.get("answer", "")
+                    _auto_cancelled = _resp.get("cancelled", False)
+                    break
+                except (asyncio.TimeoutError, Exception):
+                    if _attempt == 0:
+                        self.send_session_update({
+                            "sessionUpdate": "ask_user_remind",
+                            "text": "请确认？",
+                            "toolId": "auto-text-ask",
+                        })
+                    else:
+                        _auto_cancelled = True
+                finally:
+                    self._ask_user_future = None
+            if not _auto_cancelled and _auto_ans:
+                # Feed the answer as a new prompt so the LLM responds to it
+                # immediately, using the full streaming pipeline.
+                return await self.session_prompt(
+                    prompt=[{"type": "text", "text": _auto_ans}],
+                    session_id=session_id,
+                )
+
+        self.send_awaiting_user_input()
 
         try:
             self.agent.save_session()

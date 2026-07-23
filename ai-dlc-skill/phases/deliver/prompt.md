@@ -4,13 +4,17 @@
 由 Master Agent 委派处理部署交付。
 
 ## 输入
-- `aidlc/openspec/changes/{id}/contract-diff.md`
+- `{spec_dir}/contract-diff.md`
 - 所有 e2e 测试报告
+
+## 路径约定
+
+产物路径遵循 `aidlc/CONFIG.md` 中的变量定义。
 
 ## 任务
 
 1. **Unified Stack Preview**
-   - `deploy_stack --preview --provider {tcb|aliyun} [--compute-mode {fc|sae}]`
+   - `aidlc/tools/deploy_stack.sh --preview --provider {tcb|aliyun} [--compute-mode {fc|sae}]`
    - 输出 STACK_URL + per-component URLs
 
 2. **Per-Component e2e**
@@ -18,15 +22,15 @@
    - 使用动态解析的 URL
 
 3. **Cross-Stack e2e**
-   - `pytest aidlc/tests/cross-stack/ --stack-url ${STACK_URL}`
+   - `pytest {cross_test_dir}/ --stack-url ${STACK_URL}`
 
 4. **Staging Deploy + Smoke**
-   - `deploy_stack --env staging`
+   - `aidlc/tools/deploy_stack.sh --env staging`
    - 运行 smoke-test + health-check
 
 5. **Production Gate + Deploy**
-   - 等待 Human Approval
-   - `deploy_stack --env production`
+   - 将预览和测试结果返回给 Master Agent，由 Master Agent 通过 AskUser 等待 Human Approval
+   - `aidlc/tools/deploy_stack.sh --env production`
    - BVT 验证 + 自动回滚
 
 ## 输出产物

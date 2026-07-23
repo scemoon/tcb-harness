@@ -1398,6 +1398,12 @@ class Conversation(containers.Vertical):
         if self._replay:
             return
         self.turn = "client"
+        if self._loading is not None:
+            try:
+                await self._loading.remove()
+            except Exception:
+                pass
+            self._loading = None
         self._complete_thought()
 
     @on(AskUserSubmitted)
@@ -2886,7 +2892,7 @@ class Conversation(containers.Vertical):
             else:
                 self.notify(
                     "No .cdh/ directory found or invalid phase transition. "
-                    "Phases must advance one step at a time "
+                    "Phases must advance forward in sequence "
                     "(init\u2192understand\u2192plan\u2192verify\u2192deliver). "
                     "Use 'init' to reset.\n"
                     f"Current: {self._current_aidlc_phase()}",

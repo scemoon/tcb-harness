@@ -756,6 +756,94 @@ def config_mcp_disable(name):
 
 
 @cli.group(invoke_without_command=True)
+def cloudbase():
+    """Manage Tencent CloudBase (TCB) MCP integration.
+
+    \b
+    CloudBase MCP provides structured access to serverless functions,
+    database, hosting, and storage via the @cloudbase/cloudbase-mcp package.
+    Use `cdh cloudbase init` to configure credentials and enable the MCP server.
+    """
+    pass
+
+
+@cloudbase.command("init")
+@click.option("--secret-id", envvar="TENCENTCLOUD_SECRETID", help="Tencent Cloud secret ID")
+@click.option("--secret-key", envvar="TENCENTCLOUD_SECRETKEY", help="Tencent Cloud secret key")
+@click.option("--env-id", envvar="TCB_ENV_ID", help="Default CloudBase environment ID")
+def cloudbase_init(secret_id, secret_key, env_id):
+    """Initialize CloudBase MCP server with credentials.
+
+    \b
+    Examples:
+      cdh cloudbase init
+      cdh cloudbase init --secret-id xxx --secret-key xxx
+    """
+    if not secret_id:
+        secret_id = click.prompt("Tencent Cloud Secret ID", hide_input=False)
+    if not secret_key:
+        secret_key = click.prompt("Tencent Cloud Secret Key", hide_input=True)
+
+    from onecode.mcp.manager import MCPManager
+    mgr = MCPManager()
+
+    env = {"TENCENTCLOUD_SECRETID": secret_id, "TENCENTCLOUD_SECRETKEY": secret_key}
+    if env_id:
+        env["TCB_ENV_ID"] = env_id
+
+    if mgr.get("cloudbase"):
+        click.echo("CloudBase MCP server already configured. Updating credentials...")
+        mgr.remove("cloudbase")
+
+    mgr.add_stdio(
+        "cloudbase",
+        command="npx",
+        args=["@cloudbase/cloudbase-mcp@latest"],
+        env=env,
+    )
+    mgr.enable("cloudbase", True)
+    click.echo("CloudBase MCP server configured (stdio).")
+
+    from pathlib import Path
+    tokens_path = Path.home() / ".cloud-harness-tokens.json"
+    tokens = {}
+    if tokens_path.exists():
+        import json
+        tokens = json.loads(tokens_path.read_text())
+    tokens["TENCENTCLOUD_SECRETID"] = secret_id
+    tokens["TENCENTCLOUD_SECRETKEY"] = secret_key
+    tokens_path.write_text(__import__("json").dumps(tokens, indent=2))
+    click.echo(f"Credentials saved to {tokens_path}")
+
+
+@cloudbase.command("status")
+def cloudbase_status():
+    """Check CloudBase MCP connection status."""
+    from onecode.mcp.manager import MCPManager
+    mgr = MCPManager()
+
+    cfg = mgr.get("cloudbase")
+    if not cfg:
+        click.echo("CloudBase MCP server is not configured.")
+        click.echo("Run `cdh cloudbase init` to set up.")
+        return
+
+    enabled = cfg.get("enabled", False)
+    transport = cfg.get("transport", "stdio")
+    click.echo(f"CloudBase MCP server: {'[enabled]' if enabled else '[disabled]'} ({transport})")
+
+    if enabled:
+        connected = mgr.is_connected("cloudbase")
+        click.echo(f"Connection: {'connected' if connected else 'not connected'}")
+        if connected:
+            import asyncio
+            tools = asyncio.run(mgr.list_tools("cloudbase"))
+            click.echo(f"Available tools: {len(tools)}")
+            for t in tools[:5]:
+                click.echo(f"  - {t.name}: {t.description}")
+
+
+@cli.group(invoke_without_command=True)
 def codebase():
     """Manage codebase index and search.
 

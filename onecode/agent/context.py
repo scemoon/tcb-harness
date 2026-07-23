@@ -225,20 +225,22 @@ class ContextManager:
 
         Returns the level applied: ``"none"``, ``"light"``, ``"medium"``, or ``"heavy"``.
         """
-        if len(self.messages) <= 2:
-            return "none"
-
         system_msgs = [m for m in self.messages if m.role == "system"]
         other_msgs = [m for m in self.messages if m.role != "system"]
-        if not other_msgs:
+        if not other_msgs and len(system_msgs) <= 1:
             return "none"
 
         threshold = self.config.max_tokens * self.config.compact_threshold
 
-        # Tier 0 — System: truncate overly large system messages in-place,
-        # preserving critical markers (AGENT_CONFIG) and truncating only
-        # auxiliary bodies (SKILL, PROJECT_DOC, CODEBASE, MEMORY).
+        # Tier 0 — System: truncate overly large system messages in-place.
+        # This runs even with only 1-2 messages (e.g. first turn) to prevent
+        # context-length errors from oversized system context.
         self._tier_compress_system_messages(system_msgs)
+        if self._token_count_under(system_msgs, other_msgs, threshold):
+            self.messages = system_msgs + other_msgs
+            self._update_token_count()
+            logger.info("compact: light — compressed system messages")
+            return "light"
 
         # Tier 1 — Light: compress verbose tool results in-place
         self._tier_compress_tool_results(other_msgs)
@@ -257,10 +259,23 @@ class ContextManager:
             return "medium"
 
         # Tier 3 — Heavy: full summarization, preserving last 5 structured messages
-        summary = self._summarize_messages(other_msgs[:-5] if len(other_msgs) > 5 else other_msgs)
-        self.messages = system_msgs + [
-            Message(role="system", content=f"<!-- COMPACT_SUMMARY -->\n[Previous context summarized]\n{summary}")
-        ] + other_msgs[-min(5, len(other_msgs)):]
+        if len(other_msgs) > 5:
+            summary = self._summarize_messages(other_msgs[:-5])
+            self.messages = system_msgs + [
+                Message(role="system", content=f"<!-- COMPACT_SUMMARY -->\n[Previous context summarized]\n{summary}")
+            ] + other_msgs[-5:]
+        else:
+            # For ≤5 non-system messages, summarization buys nothing (we'd keep
+            # all originals anyway). Aggressively truncate each message instead.
+            truncated = []
+            for m in other_msgs:
+                if isinstance(m.content, str):
+                    truncated.append(Message(m.role, m.content[:200] + "..."))
+                elif isinstance(m.content, list):
+                    truncated.append(Message(m.role, "[truncated]"))
+                else:
+                    truncated.append(m)
+            self.messages = system_msgs + truncated
         self._update_token_count()
         logger.info("compact: heavy — full summarization")
         return "heavy"
@@ -277,17 +292,25 @@ class ContextManager:
         CRITICAL_MARKERS = {
             "<!-- AGENT_CONFIG -->",
             "<!-- REACT_PHASE -->",
+        }
+        TRUNCATABLE_MARKERS = {
             "<!-- SKILL:",
+            "<!-- AI-DLC:",
             "<!-- CODEBASE -->",
             "<!-- MEMORY -->",
             "<!-- CDH_PROJECT -->",
             "<!-- PROJECT_DOC -->",
         }
+        sys_char_limit = max(4000, int(self.config.max_tokens * self.config.compact_threshold * 0.3))
         for m in msgs:
-            if isinstance(m.content, str) and len(m.content) > 8000:
+            if isinstance(m.content, str) and len(m.content) > sys_char_limit:
                 if any(marker in m.content for marker in CRITICAL_MARKERS):
                     continue
-                m.content = m.content[:4000] + "\n... [system message truncated]"
+                if any(marker in m.content for marker in TRUNCATABLE_MARKERS):
+                    keep = sys_char_limit // 2
+                    m.content = m.content[:keep] + "\n... [truncated]" + m.content[-keep:]
+                else:
+                    m.content = m.content[:sys_char_limit] + "\n... [system message truncated]"
 
     def _tier_compress_tool_results(self, msgs: list[Message]) -> None:
         for m in msgs:

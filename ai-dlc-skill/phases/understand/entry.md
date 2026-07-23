@@ -24,4 +24,4 @@ See `prompt.md` for the sub-agent delegation prompt template.
 1. 读取 intent 输入
 2. 按 SDD 方法生成 spec-delta（EARS 格式）
 3. 为每个 FR 写 BDD feature 文件（≥3 scenarios: positive, negative, edge）
-4. 输出到 `aidlc/openspec/changes/{id}/`
+4. 输出到 `{spec_dir}/`（路径变量见 `aidlc/CONFIG.md`）

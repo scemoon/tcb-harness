@@ -662,12 +662,13 @@ class Provider(ABC):
 
 ### 7.1 加载路径 (分层发现)
 
-1. `~/.onecode/skills/<name>/SKILL.md` — 用户技能
-2. `builtin_skills/` — 内置技能
-3. `.opencode/skills/<name>/SKILL.md` — OpenCode 兼容
-4. `.claude/skills/<name>/SKILL.md` — Claude Code 兼容
-5. `.agents/skills/<name>/SKILL.md` — Agent 协议兼容
-6. 项目根目录含 `SKILL.md` 的目录
+按优先级从高到低：
+
+1. `~/.onecode/skills/<name>/SKILL.md` — 用户技能（最高优先级）
+2. `.agents/skills/<name>/SKILL.md` — Agent 协议标准
+3. `onecode/builtin_skills/` — 内置技能（最低优先级 fallback）
+
+同名技能以优先级高的为准。
 
 ### 7.2 SKILL.md 格式
 

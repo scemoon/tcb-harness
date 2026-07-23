@@ -20,7 +20,7 @@ See `prompt.md` for the sub-agent delegation prompt template.
 ## 当被委派时
 
 0. 先调用 `TodoClear` 清除上阶段遗留的 todos，确保从空白计划开始
-1. `deploy_stack --preview` 统一部署
+1. `aidlc/tools/deploy_stack.sh --preview` 统一部署
 2. 运行 per-component e2e + cross-stack e2e
 3. Staging 部署 + smoke test
 4. Human approval gate

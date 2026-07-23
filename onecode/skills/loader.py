@@ -12,6 +12,7 @@ from onecode.config import ONECODE_DIR
 
 
 USER_SKILLS_DIR = ONECODE_DIR / "skills"
+BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent.parent / "builtin_skills"
 
 
 class SkillLoader:
@@ -21,8 +22,20 @@ class SkillLoader:
 
     def _get_search_dirs(self) -> list[tuple[str, Path]]:
         dirs = []
+
+        # ① 用户技能（最高优先级）
         if USER_SKILLS_DIR.exists():
             dirs.append(("onecode", USER_SKILLS_DIR))
+
+        # ② 项目级 .agents/skills/（Agent 协议标准）
+        agents_skills = self._workspace_root / ".agents" / "skills"
+        if agents_skills.exists():
+            dirs.append(("agents", agents_skills))
+
+        # ③ 内置技能（最低优先级 fallback）
+        if BUILTIN_SKILLS_DIR.exists():
+            dirs.append(("builtin", BUILTIN_SKILLS_DIR))
+
         return dirs
 
     def _discover(self) -> dict[str, Skill]:

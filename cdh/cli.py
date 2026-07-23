@@ -10,6 +10,7 @@ from cdh.scaffold import (
     scaffold_dlc_project,
     check_dlc_project,
 )
+from cdh.validators import run_ears_check, run_fr_check, run_bdd_check, run_dag_check
 from cdh.cli_logging import setup_logging
 from cdh.config import write_active_project
 from onecode.cli import cli as onecode_cli
@@ -393,6 +394,10 @@ def aidlc(ctx):
       project list|new|init|check|load    Project management
       phase <phase>                       Set the AI-DLC phase
       gate <name> --status <passed|failed> Record a quality gate result
+      validate                            Validate spec quality (EARS/FR/BDD/DAG)
+      tools install|status|update         Manage AIDLC tools (generate_shared/contract_diff/deploy_stack)
+      status                              Show project health overview
+      config show|component|provider      Manage project configuration
       sync                                Regenerate AGENTS.md and CLAUDE.md
       update                              Alias for sync (deprecated)
     """
@@ -438,7 +443,11 @@ def project_list():
 @click.argument("name", required=False)
 @click.argument("path", required=False, default=".")
 @click.option("--components", default=None, help="Comma-separated component ids (e.g. 'web,backend') or 'all'. Skips the interactive prompt.")
-def project_new(name, path, components):
+@click.option("--with-ci", is_flag=True, default=False, help="Generate CI templates (GitHub Actions + pre-commit)")
+@click.option("--with-tests", is_flag=True, default=False, help="Generate test templates (conftest.py, pyproject.toml)")
+@click.option("--with-local", is_flag=True, default=False, help="Generate local dev templates (docker-compose.yaml, .env.local)")
+@click.option("--provider", default=None, help="Cloud provider: tcb (default) or aliyun")
+def project_new(name, path, components, with_ci, with_tests, with_local, provider):
     """Create a new AIDLC project with interactive component selection."""
     import yaml
     from cdh.project_loader import CdhProjectLoader
@@ -461,7 +470,11 @@ def project_new(name, path, components):
             "application components", COMPONENTS, allow_empty=False
         )
     try:
-        scaffold_dlc_project(ws, name, components=selected_components)
+        scaffold_dlc_project(
+            ws, name, components=selected_components,
+            with_ci=with_ci, with_tests=with_tests,
+            with_local=with_local, provider=provider,
+        )
     except (ValueError, RuntimeError) as e:
         click.echo(f"Error: {str(e) or type(e).__name__}")
         raise click.Abort()
@@ -478,10 +491,15 @@ def project_new(name, path, components):
 @project.command("init")
 @click.argument("path", required=False, default=".")
 @click.option("--components", default=None, help="Comma-separated component ids (e.g. 'web,backend') or 'all'. Skips the interactive prompt.")
-def project_init(path, components):
+@click.option("--with-ci", is_flag=True, default=False, help="Generate CI templates (GitHub Actions + pre-commit)")
+@click.option("--with-tests", is_flag=True, default=False, help="Generate test templates (conftest.py, pyproject.toml)")
+@click.option("--with-local", is_flag=True, default=False, help="Generate local dev templates (docker-compose.yaml, .env.local)")
+@click.option("--provider", default=None, help="Cloud provider: tcb (default) or aliyun")
+def project_init(path, components, with_ci, with_tests, with_local, provider):
     """Initialize .cdh in an existing directory as an AIDLC project."""
     import yaml
     from cdh.project_loader import CdhProjectLoader
+    from cdh.scaffold import _scaffold_ci_templates, _scaffold_test_templates, _scaffold_local_env, _scaffold_provider_templates
     projects_dir = _CDH_DIR / "projects"
     projects_dir.mkdir(parents=True, exist_ok=True)
     target = Path(path).expanduser().resolve()
@@ -497,7 +515,7 @@ def project_init(path, components):
             "application components", COMPONENTS, allow_empty=True
         )
     try:
-        init_dlc_project(target, project_name)
+        init_dlc_project(target, project_name, with_ci=with_ci, with_tests=with_tests, with_local=with_local, provider=provider)
     except (ValueError, RuntimeError) as e:
         click.echo(f"Error: {str(e) or type(e).__name__}")
         raise click.Abort()
@@ -630,6 +648,290 @@ def update_cmd(ctx, path):
     ctx.invoke(sync_cmd, path=path)
 
 
+# ── validate ─────────────────────────────────────────────────
+
+
+@aidlc.command("validate")
+@click.argument("path", required=False, default=".")
+@click.option("--ears", "ears_only", is_flag=True, help="EARS format check only")
+@click.option("--fr", "fr_only", is_flag=True, help="FR namespace consistency check only")
+@click.option("--bdd", "bdd_only", is_flag=True, help="BDD scenario coverage check only")
+@click.option("--dag", "dag_only", is_flag=True, help="Task DAG cycle check only")
+@click.option("--all", "all_checks", is_flag=True, default=False, help="Run all checks (default)")
+@click.option("--format", "output_format", type=click.Choice(["text", "json"]), default="text", help="Output format (default: text)")
+def validate_cmd(path, ears_only, fr_only, bdd_only, dag_only, all_checks, output_format):
+    """Validate AIDLC spec quality: EARS format, FR namespaces, BDD coverage, DAG cycles.
+
+    Runs all checks by default. Use --ears/--fr/--bdd/--dag to run specific checks.
+    """
+    import json as json_module
+    target = Path(path).expanduser().resolve()
+
+    selected = []
+    if ears_only:
+        selected = ["ears"]
+    elif fr_only:
+        selected = ["fr"]
+    elif bdd_only:
+        selected = ["bdd"]
+    elif dag_only:
+        selected = ["dag"]
+    else:
+        selected = ["ears", "fr", "bdd", "dag"]
+
+    runners = {
+        "ears": ("EARS Format", run_ears_check),
+        "fr": ("FR Namespace", run_fr_check),
+        "bdd": ("BDD Coverage", run_bdd_check),
+        "dag": ("Task DAG", run_dag_check),
+    }
+
+    all_passed = True
+    results = {}
+    for key in selected:
+        label, runner = runners[key]
+        result = runner(target)
+        results[key] = result
+        if not result["passed"]:
+            all_passed = False
+
+        if output_format == "json":
+            continue
+
+        click.echo(f"\n── {label} ─{'─' * max(0, 48 - len(label))}")
+        click.echo(f"  Result: {'✓ PASS' if result['passed'] else '✗ FAIL'}")
+
+        for check in result.get("checks", []):
+            icon = {"pass": "✓", "fail": "✗", "warn": "!"}.get(
+                check["status"], "?"
+            )
+            click.echo(f"  {icon} {check['name']}: {check['message']}")
+
+        if not result["passed"]:
+            all_passed = False
+
+    if output_format == "json":
+        summary = {
+            "passed": all_passed,
+            "checks": {
+                key: {
+                    "passed": results[key]["passed"],
+                    "checks": results[key].get("checks", []),
+                }
+                for key in selected
+            },
+        }
+        click.echo(json_module.dumps(summary, indent=2, ensure_ascii=False))
+        if not all_passed:
+            raise click.Abort()
+        return
+
+    if all_passed:
+        click.echo(f"\n{'=' * 52}\n  All checks passed ✓")
+    else:
+        click.echo(f"\n{'=' * 52}\n  Some checks failed — review the {''}above")
+        raise click.Abort()
+
+
+# ── tools ────────────────────────────────────────────────────
+
+
+@aidlc.group("tools", short_help="Manage AIDLC tools (install/status/update)")
+def tools_group():
+    """Manage AIDLC core tools: generate_shared, contract_diff, deploy_stack.
+
+    Sub-commands:
+      install              Install real tool implementations (replaces stubs)
+      status               Show installation status of each tool
+      update               Update installed tools to latest version
+    """
+
+
+@tools_group.command("install")
+@click.argument("path", required=False, default=".")
+def tools_install(path):
+    """Install real AIDLC tool implementations into aidlc/tools/.
+
+    Replaces stub files generated by 'cdh aidlc project init' with
+    working implementations (generate_shared, contract_diff, deploy_stack).
+    """
+    from cdh.tools import install_tools as _do_install
+    target = Path(path).expanduser().resolve()
+    installed = _do_install(target)
+    if installed:
+        click.echo(f"Installed {len(installed)} tools:")
+        for t in installed:
+            click.echo(f"  ✓ {t}")
+    else:
+        click.echo("No tools needed installation (all up to date)")
+
+
+@tools_group.command("status")
+@click.argument("path", required=False, default=".")
+def tools_status(path):
+    """Show installation status of each AIDLC tool."""
+    from cdh.tools import tools_status as _do_status
+    target = Path(path).expanduser().resolve()
+    results = _do_status(target)
+    click.echo("Tool Status:")
+    for name, status in results.items():
+        icon = "✓" if status == "installed" else "!" if status == "stub" else "✗"
+        click.echo(f"  {icon} {name}: {status}")
+    if any(s == "stub" for s in results.values()):
+        click.echo("\nRun 'cdh aidlc tools install' to replace stubs with real implementations.")
+
+
+@tools_group.command("update")
+@click.argument("path", required=False, default=".")
+def tools_update(path):
+    """Update installed AIDLC tools to the latest version."""
+    from cdh.tools import update_tools as _do_update
+    target = Path(path).expanduser().resolve()
+    updated = _do_update(target)
+    if updated:
+        click.echo(f"Updated: {', '.join(updated)}")
+    else:
+        click.echo("All tools are up to date")
+
+
+# ── status ───────────────────────────────────────────────────
+
+
+@aidlc.command("status")
+@click.argument("path", required=False, default=".")
+def status_cmd(path):
+    """Show AIDLC project health overview.
+
+    Aggregates phase, gates, tools status, and basic project info.
+    """
+    from cdh.project_loader import CdhProjectLoader
+
+    target = Path(path).expanduser().resolve()
+    cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+    if cdh_dir is None:
+        click.echo("No .cdh/ directory found. Run 'cdh aidlc project init' first.")
+        return
+
+    state = CdhProjectLoader.load_project_state(cdh_dir)
+    config_data = CdhProjectLoader.load_project_config(cdh_dir)
+
+    click.echo("╔══════════════════════════════════════════╗")
+    click.echo("║        AIDLC Project Status             ║")
+    click.echo("╚══════════════════════════════════════════╝")
+    click.echo(f"  Name:   {config_data.get('name', target.name)}")
+    click.echo(f"  Path:   {target}")
+
+    phase = state.get("current_phase", "?")
+    click.echo(f"  Phase:  {phase}")
+    completed = state.get("completed_phases", [])
+    if completed:
+        click.echo(f"  Done:   {', '.join(completed)}")
+
+    gates = state.get("gate_results", {})
+    if gates:
+        click.echo(f"  Gates:  {len(gates)} recorded")
+        for name, g in list(gates.items())[:5]:
+            icon = "✓" if g.get("status") == "passed" else "✗"
+            click.echo(f"    {icon} {name}: {g.get('status', '?')}")
+    else:
+        click.echo("  Gates:  (none)")
+
+    project_yaml = target / "aidlc" / "project.yaml"
+    if project_yaml.exists():
+        import yaml
+        data = yaml.safe_load(project_yaml.read_text(encoding="utf-8")) or {}
+        comps = data.get("stack", {}).get("components", [])
+        click.echo(f"  Components: {len(comps)} defined")
+        for c in comps:
+            click.echo(f"    - {c.get('id', '?')} ({c.get('fr_prefix', '?')})")
+
+    tools_dir = target / "aidlc" / "tools"
+    if tools_dir.exists():
+        tool_files = list(tools_dir.glob("*.py"))
+        click.echo(f"  Tools:  {len(tool_files)} files in aidlc/tools/")
+        stub_count = 0
+        for tf in tool_files:
+            content = tf.read_text(encoding="utf-8")
+            if "not yet implemented" in content:
+                stub_count += 1
+        if stub_count:
+            click.echo(f"  ⚠ {stub_count} tool(s) are still stubs — run 'cdh aidlc tools install'")
+    else:
+        click.echo("  Tools:  aidlc/tools/ not found")
+
+
+# ── config ───────────────────────────────────────────────────
+
+
+@aidlc.group("config", short_help="Manage project configuration")
+def config_group():
+    """Manage AIDLC project configuration (project.yaml).
+
+    Sub-commands:
+      show              Display current configuration
+      component <id>    Add a component to the project
+      provider <name>   Set the cloud provider (tcb|aliyun)
+    """
+
+
+@config_group.command("show")
+@click.argument("path", required=False, default=".")
+def config_show(path):
+    """Display the current AIDLC project configuration."""
+    target = Path(path).expanduser().resolve()
+    yaml_path = target / "aidlc" / "project.yaml"
+    if not yaml_path.exists():
+        click.echo("aidlc/project.yaml not found")
+        return
+    import yaml
+    data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    click.echo(yaml.dump(data, default_flow_style=False).strip())
+
+
+@config_group.command("component")
+@click.argument("component_id")
+@click.argument("path", required=False, default=".")
+def config_component(component_id, path):
+    """Add a component to the project (e.g. web, backend, wxa)."""
+    target = Path(path).expanduser().resolve()
+    try:
+        added = add_component(target, component_id)
+    except (ValueError, FileNotFoundError) as e:
+        click.echo(f"Error: {str(e) or type(e).__name__}")
+        raise click.Abort()
+    if added:
+        click.echo(f"Component '{component_id}' added")
+    else:
+        click.echo(f"Component '{component_id}' already exists")
+
+
+@config_group.command("provider")
+@click.argument("provider", type=click.Choice(["tcb", "aliyun"]))
+@click.argument("path", required=False, default=".")
+def config_provider(provider, path):
+    """Set the cloud provider (tcb or aliyun)."""
+    target = Path(path).expanduser().resolve()
+    yaml_path = target / "aidlc" / "project.yaml"
+    if not yaml_path.exists():
+        click.echo("aidlc/project.yaml not found. Run 'cdh aidlc project init' first.")
+        return
+    import yaml
+    data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+    cross = data.setdefault("stack", {}).setdefault("cross_cutting", {})
+    cross["provider"] = provider
+    yaml_path.write_text(yaml.dump(data, default_flow_style=False), encoding="utf-8")
+
+    providers_dir = target / "aidlc" / "providers"
+    if providers_dir.exists():
+        click.echo(f"Provider set to: {provider}")
+        click.echo(f"  Provider config at: aidlc/providers/{provider}/")
+        for pf in (providers_dir / provider).glob("*.yaml"):
+            click.echo(f"    - {pf.name}")
+    else:
+        click.echo(f"Provider set to: {provider}")
+        click.echo("  (aidlc/providers/ directory not scaffolded — run init with --with-ci)")
+
+
 # --- session command ---
 
 @cli.command(short_help="Session management")
@@ -760,6 +1062,107 @@ def trace_view(session_id):
         tags = t.get("tags", {}) or {}
         update_type = tags.get("update_type", "") if isinstance(tags, dict) else ""
         click.echo(f"  {ts:<12} {fn:<30} {dur_str:>8}  {update_type}")
+
+
+@trace.command("prune", short_help="Remove old trace sessions")
+@click.option("--session", "-s", "session_id", help="Remove a specific session_id")
+@click.option("--keep-days", "-k", type=int, default=0, help="Keep only sessions from the last N days")
+@click.option("--before", "-b", "before_date", help="Remove sessions before this date (YYYY-MM-DD)")
+@click.option("--dry-run", "-n", is_flag=True, help="Show what would be removed without deleting")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+def trace_prune(session_id, keep_days, before_date, dry_run, yes):
+    """Remove old trace sessions to clean up stale data.
+
+    Examples:
+
+    \b
+      cdh trace prune --keep-days 7          Keep only last 7 days
+      cdh trace prune --before 2026-06-01    Remove sessions before June 1
+      cdh trace prune --session 6f8e0db6     Remove a specific session
+      cdh trace prune --dry-run --keep-days 7  Preview without deleting
+    """
+    import json
+    import sqlite3
+    from datetime import datetime, timedelta
+
+    db_path = Path.home() / ".cdh" / "traces" / "traces.db"
+    if not db_path.exists():
+        click.echo("No traces database found.")
+        return
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        # Build the WHERE clause
+        conditions = []
+        params = []
+
+        if session_id:
+            conditions.append("session_id = ?")
+            params.append(session_id)
+
+        if before_date:
+            if len(before_date) == 10:
+                before_date += "T23:59:59"
+            conditions.append("timestamp < ?")
+            params.append(before_date)
+
+        if keep_days > 0:
+            cutoff = (datetime.utcnow() - timedelta(days=keep_days)).isoformat()
+            conditions.append("timestamp < ?")
+            params.append(cutoff)
+
+        if not conditions:
+            click.echo("Specify --session, --keep-days, or --before to prune.")
+            click.echo("  Use --dry-run to preview without deleting.")
+            conn.close()
+            return
+
+        where = " AND ".join(conditions)
+
+        # Find matching sessions
+        stale = conn.execute(
+            f"SELECT DISTINCT session_id FROM traces WHERE {where}", params
+        ).fetchall()
+
+        if not stale:
+            click.echo("No matching sessions to prune.")
+            conn.close()
+            return
+
+        stale_ids = [r[0] for r in stale]
+        span_count = conn.execute(
+            f"SELECT COUNT(*) FROM traces WHERE {where}", params
+        ).fetchone()[0]
+
+        click.echo(f"Found {len(stale_ids)} session(s) ({span_count} spans) to remove:")
+        for sid in stale_ids:
+            cnt = conn.execute(
+                "SELECT COUNT(*) FROM traces WHERE session_id = ?", (sid,)
+            ).fetchone()[0]
+            # Show model info if present
+            models = conn.execute(
+                "SELECT DISTINCT {} FROM traces WHERE session_id = ? AND {} IS NOT NULL".format(
+                    "JSON_EXTRACT(data, '$.kwargs.model')", "JSON_EXTRACT(data, '$.kwargs.model')"
+                ),
+                (sid,),
+            ).fetchall()
+            model_str = f"  models: {', '.join(m[0] for m in models if m[0])}" if models else ""
+            click.echo(f"  {sid[:20]}...  ({cnt} spans){model_str}")
+
+        if dry_run:
+            click.echo("Dry-run mode. No changes made. Pass --yes to actually delete.")
+            conn.close()
+            return
+
+        if not yes:
+            click.confirm("Delete these sessions?", abort=True)
+
+        conn.execute(f"DELETE FROM traces WHERE {where}", params)
+        conn.execute("PRAGMA optimize")
+        conn.commit()
+        click.echo(f"Removed {span_count} spans from {len(stale_ids)} session(s).")
+    finally:
+        conn.close()
 
 
 @trace.command("dashboard", short_help="Open the built-in trace web dashboard")
