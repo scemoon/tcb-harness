@@ -168,7 +168,7 @@ def _diff_openapi(base: dict, head: dict, base_resolver: Optional[YAMLLocationRe
 
             if method not in base_methods:
                 changes.append(Change(ChangeType.ADDED, ChangeSeverity.MINOR, "endpoint", f"{method.upper()} {p}",
-                                    f"New endpoint: {method.upper()} {p}", file, line, severity=ChangeSeverity.MINOR))
+                                    f"New endpoint: {method.upper()} {p}", file, line))
                 continue
             if method not in head_methods:
                 changes.append(Change(ChangeType.REMOVED, ChangeSeverity.MAJOR, "endpoint", f"{method.upper()} {p}",
@@ -308,7 +308,7 @@ def _diff_asyncapi(base: dict, head: dict, base_resolver: Optional[YAMLLocationR
 
         if ch not in base_channels:
             changes.append(Change(ChangeType.ADDED, ChangeSeverity.MINOR, "channel", ch,
-                                f"New channel: {ch}", file, line, severity=ChangeSeverity.MINOR))
+                                f"New channel: {ch}", file, line))
         elif ch not in head_channels:
             changes.append(Change(ChangeType.REMOVED, ChangeSeverity.MAJOR, "channel", ch,
                                 f"BREAKING: Removed channel: {ch}", file, base_line, breaking=True))
@@ -462,7 +462,7 @@ def diff(project_root: Path, base_ref: str = "main", head_ref: str = "HEAD") -> 
             base_content = ""
             result.changes.append(Change(ChangeType.CHANGED, ChangeSeverity.PATCH, "git", str(rel),
                                        f"Warning: Could not read base ref {base_ref}:{rel}: {e}",
-                                       file=str(rel), severity=ChangeSeverity.PATCH))
+                                       str(rel), 0))
 
         try:
             head_content = subprocess.run(
@@ -476,7 +476,7 @@ def diff(project_root: Path, base_ref: str = "main", head_ref: str = "HEAD") -> 
                 head_content = ""
                 result.changes.append(Change(ChangeType.CHANGED, ChangeSeverity.PATCH, "git", str(rel),
                                            f"Warning: Could not read head ref {head_ref}:{rel} or local file: {e2}",
-                                           file=str(rel), severity=ChangeSeverity.PATCH))
+                                           str(rel), 0))
 
         if not base_content.strip() and not head_content.strip():
             continue
