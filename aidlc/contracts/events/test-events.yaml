@@ -1,7 +1,7 @@
 asyncapi: "3.0.0"
 info:
   title: Test Events
-  version: "1.0.0"
+  version: "1.1.0"
 channels:
   user.created:
     address: user.created
@@ -14,17 +14,17 @@ channels:
       publish:
         message:
           $ref: "#/components/messages/userCreated"
-  user.updated:
-    address: user.updated
+  user.deleted:
+    address: user.deleted
     messages:
-      userUpdated:
-        name: userUpdated
+      userDeleted:
+        name: userDeleted
         payload:
-          $ref: "#/components/schemas/User"
+          $ref: "#/components/schemas/UserDeleted"
     operations:
       publish:
         message:
-          $ref: "#/components/messages/userUpdated"
+          $ref: "#/components/messages/userDeleted"
 components:
   schemas:
     User:
@@ -34,15 +34,29 @@ components:
           type: string
         name:
           type: string
+        email:
+          type: string
       required:
         - id
         - name
+        - email
+    UserDeleted:
+      type: object
+      properties:
+        id:
+          type: string
+        deleted_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deleted_at
   messages:
     userCreated:
       name: userCreated
       payload:
         $ref: "#/components/schemas/User"
-    userUpdated:
-      name: userUpdated
+    userDeleted:
+      name: userDeleted
       payload:
-        $ref: "#/components/schemas/User"
+        $ref: "#/components/schemas/UserDeleted"
