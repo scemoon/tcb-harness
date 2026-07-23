@@ -261,7 +261,7 @@ def _write_default_config():
             "minimaxi": {
                 "api_key": "${MINMAXI_API_KEY}",
                 "endpoint": "https://api.minimaxi.com/v1",
-                "models": ["MiniMax-M2.7", "MiniMax-M2.5"],
+                "models": ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
             },
             "glm": {
                 "api_key": "${GLM_API_KEY}",
