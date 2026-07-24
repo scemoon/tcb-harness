@@ -16,6 +16,11 @@ AGENT_SEARCH_BASE_URL = os.environ.get(
     "http://localhost:3939",
 )
 
+WEB_SEARCH_PROVIDER = os.environ.get("WEB_SEARCH_PROVIDER", "")
+BRAVE_SEARCH_API_KEY = os.environ.get("BRAVE_SEARCH_API_KEY", "")
+SERPER_API_KEY = os.environ.get("SERPER_API_KEY", "")
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
+
 
 @dataclass
 class WebResult:
@@ -111,6 +116,22 @@ class WebSearch:
         except Exception:
             pass
 
+        if WEB_SEARCH_PROVIDER == "brave" and BRAVE_SEARCH_API_KEY:
+            try:
+                return self._search_brave(query, num_results, BRAVE_SEARCH_API_KEY)
+            except Exception:
+                pass
+        elif WEB_SEARCH_PROVIDER == "serper" and SERPER_API_KEY:
+            try:
+                return self._search_serper(query, num_results, SERPER_API_KEY)
+            except Exception:
+                pass
+        elif WEB_SEARCH_PROVIDER == "tavily" and TAVILY_API_KEY:
+            try:
+                return self._search_tavily(query, num_results, TAVILY_API_KEY)
+            except Exception:
+                pass
+
         search_urls = [
             f"https://duckduckgo.com/html/?q={self._quote(query)}",
             f"https://html.duckduckgo.com/html/?q={self._quote(query)}",
@@ -136,6 +157,25 @@ class WebSearch:
             return await self._search_agent_search_async(query, num_results, cancel_check)
         except Exception:
             pass
+
+        if cancel_check and cancel_check():
+            return f"Search cancelled for '{query}'"
+
+        if WEB_SEARCH_PROVIDER == "brave" and BRAVE_SEARCH_API_KEY:
+            try:
+                return await self._search_brave_async(query, num_results, BRAVE_SEARCH_API_KEY, cancel_check)
+            except Exception:
+                pass
+        elif WEB_SEARCH_PROVIDER == "serper" and SERPER_API_KEY:
+            try:
+                return await self._search_serper_async(query, num_results, SERPER_API_KEY, cancel_check)
+            except Exception:
+                pass
+        elif WEB_SEARCH_PROVIDER == "tavily" and TAVILY_API_KEY:
+            try:
+                return await self._search_tavily_async(query, num_results, TAVILY_API_KEY, cancel_check)
+            except Exception:
+                pass
 
         search_urls = [
             f"https://duckduckgo.com/html/?q={self._quote(query)}",
@@ -196,6 +236,139 @@ class WebSearch:
             title = r.get("title", "")
             url = r.get("url", "")
             snippet = (r.get("snippet") or r.get("content") or "")[:200]
+            output.append(f"{i+1}. {title}\n   URL: {url}\n   {snippet}")
+        return "\n\n".join(output)
+
+    def _search_brave(self, query: str, num_results: int, api_key: str) -> str:
+        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            resp = client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                params={"q": query, "count": min(num_results, 20)},
+                headers={"Accept": "application/json", "X-Subscription-Token": api_key},
+            )
+            resp.raise_for_status()
+        data = resp.json()
+        results = data.get("web", {}).get("results", [])
+        if not results:
+            return f"No results found for '{query}'"
+        output = [f"Search results for '{query}':\n"]
+        for i, r in enumerate(results[:num_results]):
+            title = r.get("title", "")
+            url = r.get("url", "")
+            snippet = r.get("description", "")[:200]
+            output.append(f"{i+1}. {title}\n   URL: {url}\n   {snippet}")
+        return "\n\n".join(output)
+
+    async def _search_brave_async(
+        self, query: str, num_results: int, api_key: str,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> str:
+        if cancel_check and cancel_check():
+            return ""
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                params={"q": query, "count": min(num_results, 20)},
+                headers={"Accept": "application/json", "X-Subscription-Token": api_key},
+            )
+            resp.raise_for_status()
+        data = resp.json()
+        results = data.get("web", {}).get("results", [])
+        if not results:
+            return f"No results found for '{query}'"
+        output = [f"Search results for '{query}':\n"]
+        for i, r in enumerate(results[:num_results]):
+            title = r.get("title", "")
+            url = r.get("url", "")
+            snippet = r.get("description", "")[:200]
+            output.append(f"{i+1}. {title}\n   URL: {url}\n   {snippet}")
+        return "\n\n".join(output)
+
+    def _search_serper(self, query: str, num_results: int, api_key: str) -> str:
+        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            resp = client.post(
+                "https://google.serper.dev/search",
+                json={"q": query, "num": min(num_results, 10)},
+                headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+        data = resp.json()
+        results = data.get("organic", [])
+        if not results:
+            return f"No results found for '{query}'"
+        output = [f"Search results for '{query}':\n"]
+        for i, r in enumerate(results[:num_results]):
+            title = r.get("title", "")
+            url = r.get("link", "")
+            snippet = r.get("snippet", "")[:200]
+            output.append(f"{i+1}. {title}\n   URL: {url}\n   {snippet}")
+        return "\n\n".join(output)
+
+    async def _search_serper_async(
+        self, query: str, num_results: int, api_key: str,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> str:
+        if cancel_check and cancel_check():
+            return ""
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            resp = await client.post(
+                "https://google.serper.dev/search",
+                json={"q": query, "num": min(num_results, 10)},
+                headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+        data = resp.json()
+        results = data.get("organic", [])
+        if not results:
+            return f"No results found for '{query}'"
+        output = [f"Search results for '{query}':\n"]
+        for i, r in enumerate(results[:num_results]):
+            title = r.get("title", "")
+            url = r.get("link", "")
+            snippet = r.get("snippet", "")[:200]
+            output.append(f"{i+1}. {title}\n   URL: {url}\n   {snippet}")
+        return "\n\n".join(output)
+
+    def _search_tavily(self, query: str, num_results: int, api_key: str) -> str:
+        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            resp = client.post(
+                "https://api.tavily.com/search",
+                json={"api_key": api_key, "query": query, "max_results": min(num_results, 20), "search_depth": "basic"},
+            )
+            resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results", [])
+        if not results:
+            return f"No results found for '{query}'"
+        output = [f"Search results for '{query}':\n"]
+        for i, r in enumerate(results[:num_results]):
+            title = r.get("title", "")
+            url = r.get("url", "")
+            snippet = (r.get("content") or "")[:200]
+            output.append(f"{i+1}. {title}\n   URL: {url}\n   {snippet}")
+        return "\n\n".join(output)
+
+    async def _search_tavily_async(
+        self, query: str, num_results: int, api_key: str,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> str:
+        if cancel_check and cancel_check():
+            return ""
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            resp = await client.post(
+                "https://api.tavily.com/search",
+                json={"api_key": api_key, "query": query, "max_results": min(num_results, 20), "search_depth": "basic"},
+            )
+            resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results", [])
+        if not results:
+            return f"No results found for '{query}'"
+        output = [f"Search results for '{query}':\n"]
+        for i, r in enumerate(results[:num_results]):
+            title = r.get("title", "")
+            url = r.get("url", "")
+            snippet = (r.get("content") or "")[:200]
             output.append(f"{i+1}. {title}\n   URL: {url}\n   {snippet}")
         return "\n\n".join(output)
 
