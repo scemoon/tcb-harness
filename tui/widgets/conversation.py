@@ -961,6 +961,7 @@ class Conversation(containers.Vertical):
                 return
 
             if self.turn == "agent":
+                self._pending_ask_user = False
                 self._pending_prompts.append(text)
                 self.prompt.pending_prompts = list(self._pending_prompts)
                 return
@@ -994,7 +995,6 @@ class Conversation(containers.Vertical):
         if self.agent is not None:
             await self._auto_name_session(prompt)
             stop_reason: str | None = None
-            self._pending_ask_user = False
             self.busy_count += 1
             try:
                 self.turn = "agent"
@@ -1375,6 +1375,7 @@ class Conversation(containers.Vertical):
             self._loading = None
 
         self._pending_ask_user = True
+        self.busy_count -= 1
 
         widget = AskUserWidget(
             message.tool_id,
@@ -1410,6 +1411,7 @@ class Conversation(containers.Vertical):
     def on_ask_user_submitted(self, message: AskUserSubmitted) -> None:
         message.stop()
         self._pending_ask_user = False
+        self.busy_count += 1
         if self.agent is not None:
             cancelled = message.value == "__cancel__"
             self.agent.send_ask_user_answer(
@@ -2038,6 +2040,7 @@ class Conversation(containers.Vertical):
                     self._agent_data,
                     self._agent_session_id,
                     self._session_pk,
+                    default_model=self.app.settings.get("model", str),
                 )
                 await self.agent.start(self)
 
@@ -2758,6 +2761,7 @@ class Conversation(containers.Vertical):
                 write_active_project(sub_name, project_path)
                 new_project_dir = Path(project_path) if project_path else Path.cwd()
                 self.app.project_dir = new_project_dir
+                self._emit_aidlc_state(new_project_dir)
                 self.post_message(messages.ProjectDirectoryUpdated(project_dir=new_project_dir))
                 self.flash(f"Switched to project: {sub_name}", style="success")
                 return True
