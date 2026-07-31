@@ -706,7 +706,7 @@ class Provider(ABC):
         if status_code == 529 or (500 <= status_code < 600):
             msg = f"upstream {status_code}: {body_excerpt}" if body_excerpt else f"upstream {status_code}"
             return TransientProviderError(
-                msg, status_code=status_code, body=snippet,
+                msg, status_code=status_code, retry_after=retry_after, body=snippet,
             )
         msg = f"upstream error {status_code}: {body_excerpt}" if body_excerpt else f"upstream error {status_code}"
         return ProviderError(

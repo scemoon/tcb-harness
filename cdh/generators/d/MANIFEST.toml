@@ -1,0 +1,14 @@
+# Plugin manifest for d
+[plugin]
+name = "d"
+display_name = "D"
+file_extension = ".d"
+mime_type = "text/x-d"
+default_outdir = "d"
+output_filename_template = "{name}}.d"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

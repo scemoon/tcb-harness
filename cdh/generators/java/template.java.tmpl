@@ -1,0 +1,13 @@
+// Auto-generated from {{.SourceFile}}
+package {{.PackageName}};
+
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.UUID;
+
+{{range .Types}}public record {{.Name}}(
+{{range .Properties}}    {{.Type}} {{.Name}}{{if .IsNullable}} /* nullable */{{end}},
+{{end}}) {}
+
+{{end}}

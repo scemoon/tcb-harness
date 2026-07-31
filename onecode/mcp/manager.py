@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 from typing import Any, Optional
 
 import httpx
@@ -13,34 +14,108 @@ from onecode.mcp.client import MCPClient, MCPTool
 
 logger = logging.getLogger("onecode.mcp")
 
+# Default config for MCP connections
+_MCP_TIMEOUT = 60
+_MCP_HEARTBEAT_INTERVAL = 15
+_MCP_RECONNECT_BASE_DELAY = 1.0
+_MCP_RECONNECT_MAX_DELAY = 30.0
+_MCP_RECONNECT_JITTER = 0.5
+
 
 class MCPSSEClient:
-    """SSE-based MCP client (Clawd-Code pattern)."""
+    """SSE-based MCP client with persistent connection and auto-reconnect.
 
-    def __init__(self, name: str, url: str):
+    A single background loop owns the SSE connection and automatically
+    reconnects with exponential back-off when the connection drops.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        url: str,
+        timeout: float = _MCP_TIMEOUT,
+        heartbeat_interval: float = _MCP_HEARTBEAT_INTERVAL,
+    ):
         self.name = name
         self.url = url
-        self._client = httpx.AsyncClient(timeout=30)
+        self._timeout = timeout
+        self._heartbeat_interval = heartbeat_interval
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
         self._session_id: Optional[str] = None
         self._tools: list[MCPTool] = []
         self._running = False
+        self._sse_task: Optional[asyncio.Task] = None
+        self._connected = asyncio.Event()
+        self._reconnect_delay = _MCP_RECONNECT_BASE_DELAY
 
     async def start(self) -> bool:
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout))
+        self._sse_task = asyncio.create_task(self._run_sse_loop())
         try:
-            async with self._client.stream("GET", self.url) as resp:
-                async for line in resp.aiter_lines():
-                    if line.startswith("data: "):
-                        data = json.loads(line[6:])
-                        if isinstance(data, dict) and "sessionId" in data:
-                            self._session_id = data["sessionId"]
-                            self._running = True
-                            break
-            if self._running:
-                await self._list_tools()
-            return self._running
-        except Exception as e:
-            logger.error(f"MCP SSE start failed: {e}")
+            await asyncio.wait_for(self._connected.wait(), timeout=self._timeout)
+            return True
+        except (asyncio.TimeoutError, Exception):
+            logger.error(f"MCP SSE start timed out for '{self.name}'")
+            self._running = False
             return False
+
+    async def _run_sse_loop(self) -> None:
+        """Background task: own the SSE connection, reconnect on drop."""
+        self._running = True
+        while self._running:
+            resp = None
+            try:
+                resp = await self._client.send(
+                    httpx.Request("GET", self.url),
+                    stream=True,
+                )
+                resp.raise_for_status()
+                self._reconnect_delay = _MCP_RECONNECT_BASE_DELAY
+
+                has_tools = False
+                async for line in resp.aiter_lines():
+                    if not self._running:
+                        return
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        data = json.loads(line[6:])
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    if "sessionId" in data:
+                        self._session_id = data["sessionId"]
+                        if not self._connected.is_set():
+                            self._connected.set()
+                            await self._list_tools()
+                            has_tools = True
+                logger.info("MCP SSE stream ended for '%s', reconnecting...", self.name)
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                if self._running:
+                    logger.warning("MCP SSE error for '%s': %s", self.name, e)
+            finally:
+                if resp is not None:
+                    await resp.aclose()
+                if not self._connected.is_set():
+                    self._connected.set()
+
+            if not self._running:
+                return
+            await self._backoff_wait()
+
+    async def _backoff_wait(self) -> None:
+        delay = self._reconnect_delay + random.random() * _MCP_RECONNECT_JITTER * self._reconnect_delay
+        if delay > _MCP_RECONNECT_MAX_DELAY:
+            delay = _MCP_RECONNECT_MAX_DELAY
+        self._reconnect_delay = min(self._reconnect_delay * 2, _MCP_RECONNECT_MAX_DELAY)
+        logger.info("MCP SSE reconnect in %.1fs for '%s'", delay, self.name)
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            raise
 
     async def _list_tools(self) -> list[MCPTool]:
         try:
@@ -71,6 +146,13 @@ class MCPSSEClient:
 
     async def stop(self):
         self._running = False
+        if self._sse_task:
+            self._sse_task.cancel()
+            try:
+                await self._sse_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._sse_task = None
         await self._client.aclose()
 
     def is_running(self) -> bool:
@@ -87,11 +169,17 @@ class MCPHTTPClient:
     Used by services like TCB CloudBase hosted mode.
     """
 
-    def __init__(self, name: str, url: str, headers: Optional[dict[str, str]] = None):
+    def __init__(
+        self,
+        name: str,
+        url: str,
+        headers: Optional[dict[str, str]] = None,
+        timeout: float = _MCP_TIMEOUT,
+    ):
         self.name = name
         self.url = url
         self._headers = headers or {}
-        self._client = httpx.AsyncClient(timeout=30)
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
         self._tools: list[MCPTool] = []
         self._running = False
 
@@ -144,12 +232,19 @@ class MCPHTTPClient:
 
 
 class MCPManager:
-    def __init__(self):
+    def __init__(
+        self,
+        timeout: float = _MCP_TIMEOUT,
+        heartbeat_interval: float = _MCP_HEARTBEAT_INTERVAL,
+    ):
+        self._timeout = timeout
+        self._heartbeat_interval = heartbeat_interval
         self.config_dir = ONECODE_DIR / "mcps"
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.config_path = self.config_dir / "mcps.yaml"
         self._data: dict = {}
         self._clients: dict[str, Any] = {}
+        self._reconnect_tasks: dict[str, asyncio.Task] = {}
         if self.config_path.exists():
             self._data = yaml.safe_load(self.config_path.read_text()) or {}
 
@@ -193,6 +288,7 @@ class MCPManager:
 
     def remove(self, name: str):
         self._data.pop(name, None)
+        self._cancel_reconnect(name)
         if name in self._clients:
             try:
                 loop = asyncio.get_event_loop()
@@ -203,7 +299,7 @@ class MCPManager:
             del self._clients[name]
         self._save()
 
-    async def connect(self, name: str) -> bool:
+    async def connect(self, name: str, auto_reconnect: bool = True) -> bool:
         cfg = self._data.get(name, {})
         if not cfg.get("enabled"):
             return False
@@ -216,11 +312,22 @@ class MCPManager:
                 command=cfg["command"],
                 args=cfg.get("args", []),
                 env=cfg.get("env", {}),
+                timeout=self._timeout,
             )
         elif transport == "sse":
-            client = MCPSSEClient(name=name, url=cfg["url"])
+            client = MCPSSEClient(
+                name=name,
+                url=cfg["url"],
+                timeout=self._timeout,
+                heartbeat_interval=self._heartbeat_interval,
+            )
         elif transport == "http":
-            client = MCPHTTPClient(name=name, url=cfg["url"], headers=cfg.get("headers", {}))
+            client = MCPHTTPClient(
+                name=name,
+                url=cfg["url"],
+                headers=cfg.get("headers", {}),
+                timeout=self._timeout,
+            )
         else:
             logger.warning(f"Unknown MCP transport: {transport}")
             return False
@@ -228,6 +335,8 @@ class MCPManager:
         success = await client.start()
         if success:
             self._clients[name] = client
+        elif auto_reconnect:
+            self._schedule_reconnect(name)
         return success
 
     async def connect_all(self) -> list[str]:
@@ -237,12 +346,62 @@ class MCPManager:
                 connected.append(name)
         return connected
 
+    def _schedule_reconnect(self, name: str) -> None:
+        """Schedule a reconnection task for a failed MCP connection."""
+        if name in self._reconnect_tasks:
+            return
+        self._reconnect_tasks[name] = asyncio.create_task(self._reconnect_loop(name))
+
+    def _cancel_reconnect(self, name: str) -> None:
+        task = self._reconnect_tasks.pop(name, None)
+        if task and not task.done():
+            task.cancel()
+
+    async def _reconnect_loop(self, name: str) -> None:
+        delay = _MCP_RECONNECT_BASE_DELAY
+        cfg = self._data.get(name, {})
+        if not cfg.get("enabled"):
+            self._reconnect_tasks.pop(name, None)
+            return
+        while self._data.get(name, {}).get("enabled"):
+            try:
+                await asyncio.sleep(delay)
+                if name in self._clients and self._clients[name].is_running():
+                    self._reconnect_tasks.pop(name, None)
+                    return
+                logger.info("Auto-reconnecting MCP '%s'...", name)
+                success = await self.connect(name, auto_reconnect=False)
+                if success:
+                    logger.info("MCP '%s' reconnected successfully", name)
+                    self._reconnect_tasks.pop(name, None)
+                    return
+                delay = min(delay * 2, _MCP_RECONNECT_MAX_DELAY)
+                delay += random.random() * _MCP_RECONNECT_JITTER * delay
+            except asyncio.CancelledError:
+                self._reconnect_tasks.pop(name, None)
+                return
+            except Exception as e:
+                logger.warning("MCP reconnect failed for '%s': %s", name, e)
+        self._reconnect_tasks.pop(name, None)
+
+    def cancel_all(self) -> None:
+        """Cancel all in-flight MCP requests across all clients."""
+        for client in self._clients.values():
+            try:
+                if hasattr(client, 'cancel_all'):
+                    client.cancel_all()
+            except Exception as e:
+                logger.warning("MCP cancel_all failed for %s: %s", getattr(client, 'name', '?'), e)
+
     async def disconnect(self, name: str) -> None:
+        self._cancel_reconnect(name)
         if name in self._clients:
             await self._clients[name].stop()
             del self._clients[name]
 
     async def disconnect_all(self) -> None:
+        for name in list(self._reconnect_tasks.keys()):
+            self._cancel_reconnect(name)
         for name in list(self._clients.keys()):
             await self.disconnect(name)
 
@@ -262,15 +421,6 @@ class MCPManager:
     def is_connected(self, name: str) -> bool:
         client = self._clients.get(name)
         return client.is_running() if client else False
-
-    def cancel_all(self) -> None:
-        """Cancel all in-flight MCP requests across all clients."""
-        for client in self._clients.values():
-            try:
-                if hasattr(client, 'cancel_all'):
-                    client.cancel_all()
-            except Exception as e:
-                logger.warning("MCP cancel_all failed for %s: %s", getattr(client, 'name', '?'), e)
 
     def _save(self):
         self.config_path.write_text(yaml.dump(self._data, default_flow_style=False))

@@ -1,0 +1,32 @@
+// Auto-generated from {{.SourceFile}}
+#pragma once
+
+#include <optional>
+#include <string>
+#include <vector>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
+
+{{range .Types}}
+struct {{.Name}} {
+{{range .Properties}}    {{if .IsNullable}}std::optional<{{.Type}}>{{else}}{{.Type}}{{end}} {{.Name}};
+{{end}}
+
+    static {{.Name}} from_json(const json& j);
+    json to_json() const;
+};
+{{end}}
+
+namespace nlohmann {
+    template <typename T>
+    void to_json(json& j, const std::optional<T>& opt) {
+        if (opt.has_value()) j = opt.value();
+    }
+
+    template <typename T>
+    void from_json(const json& j, std::optional<T>& opt) {
+        if (j.is_null()) opt.reset();
+        else opt = j.get<T>();
+    }
+}

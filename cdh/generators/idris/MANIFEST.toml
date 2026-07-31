@@ -1,0 +1,14 @@
+# Plugin manifest for idris
+[plugin]
+name = "idris"
+display_name = "Idris"
+file_extension = ".idr"
+mime_type = "text/x-idris"
+default_outdir = "idris"
+output_filename_template = "{name}}.idr"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

@@ -14,6 +14,16 @@ def install_tools(project_root: Path) -> list[str]:
     target_dir = project_root / "aidlc" / "tools"
     target_dir.mkdir(parents=True, exist_ok=True)
 
+    generators_source = source_dir.parent / "generators"
+    generators_target = target_dir.parent / "generators"
+    if generators_source.is_dir():
+        shutil.copytree(
+            generators_source,
+            generators_target,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+
     installed = []
     for tf in _TOOL_FILES:
         src = source_dir / tf

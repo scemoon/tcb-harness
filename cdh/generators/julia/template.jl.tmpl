@@ -1,0 +1,27 @@
+# Auto-generated from {{.SourceFile}}
+module Types
+
+using Dates
+using UUIDs
+
+{{range .Types}}
+mutable struct {{.Name}}
+{{range .Properties}}    {{.Name}}::{{if .IsNullable}}Union{Nothing, {{.Type}}}{{else}}{{.Type}}{{end}}
+{{end}}
+end
+
+function {{.Name}}(;{{range .Properties}}{{.Name}}=nothing::Union{Nothing, {{.Type}}}{{end}})
+    {{.Name}}(
+{{range .Properties}}        {{.Name}}={{.Name}},
+{{end}}    )
+end
+
+function from_json(::Type;{{.Name}}, json::Dict)
+    {{.Name}}(
+{{range .Properties}}        get(json, "{{.JsonName}}", nothing),
+{{end}}    )
+end
+
+Base.show(io::IO, x::{{.Name}}) = print(io, JSON.json(x))
+{{end}}
+end

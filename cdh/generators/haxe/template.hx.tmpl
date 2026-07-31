@@ -1,0 +1,20 @@
+// Auto-generated from {{.SourceFile}}
+package types;
+
+import haxe.Json;
+
+{{range .Types}}
+typedef {{.Name}} = {
+{{range .Properties}}    {{.Name}} : {{if .IsNullable}}Null<String>{{else}}String{{end}},
+{{end}}}
+
+class {{.Name}}Parser {
+    public static function fromJson(json:String):{{.Name}} {
+        return Json.parse(json);
+    }
+
+    public static function toJson(data:{{.Name}}):String {
+        return Json.stringify(data);
+    }
+}
+{{end}}

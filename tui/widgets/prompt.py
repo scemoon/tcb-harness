@@ -19,6 +19,7 @@ from textual import containers
 from textual.widget import Widget
 from textual.widgets.option_list import Option
 from textual.widgets.text_area import Selection
+from textual.document._document import EditResult
 from textual import events
 
 from tui.app import A2TUIApp
@@ -209,6 +210,68 @@ See on-screen instructions for details.
     def on_mount(self) -> None:
         self.highlight_cursor_line = False
         self.hide_suggestion_on_blur = False
+        self._paste_queue: list[tuple[str, str]] = []
+        self._paste_fingerprint = ""
+        self._paste_summary_enabled: bool = not bool(
+            self.app.settings.get("experimental.disable_paste_summary", bool)
+        )
+
+    def _replace_via_keyboard(self, text: str, start, end) -> EditResult | None:
+        if self.read_only:
+            return None
+
+        fingerprint = text.replace('\r\n', '\n').replace('\r', '\n').strip()
+
+        if fingerprint and self._paste_fingerprint == fingerprint:
+            self._paste_fingerprint = ""
+            return None
+
+        is_large_paste = text.count('\n') + 1 >= 3 or len(text) > 150
+
+        if is_large_paste and self._paste_summary_enabled:
+            self._paste_fingerprint = fingerprint
+            MAX_PASTE_CHARS = 50000
+            normalized = text.replace('\r\n', '\n').replace('\r', '\n')
+            line_count = normalized.rstrip('\n').count('\n') + 1
+            char_count = len(text)
+            text_to_store = text
+            truncated = False
+
+            if char_count > MAX_PASTE_CHARS:
+                text_to_store = text[:MAX_PASTE_CHARS]
+                truncated = True
+                self.post_message(
+                    messages.Flash(
+                        f"[Pasted ~{line_count} lines, 内容过大已截断]",
+                        style="warning",
+                        duration=3,
+                    )
+                )
+            elif line_count > 30:
+                self.post_message(
+                    messages.Flash(
+                        f"[Pasted ~{line_count} lines]",
+                        style="default",
+                        duration=2,
+                    )
+                )
+
+            marker = f"[Pasted ~{line_count} lines]" + (" (truncated)" if truncated else "")
+            self._paste_queue.append((text_to_store, marker))
+            self.insert(marker + " ")
+            return None
+
+        self._paste_fingerprint = ""
+        self._paste_queue.clear()
+        return super()._replace_via_keyboard(text, start, end)
+
+    def action_copy(self) -> None:
+        """Copy selection to clipboard; if no selection, clear the text area."""
+        if not self.selection.is_empty:
+            self.app.copy_to_clipboard(self.selected_text)
+        else:
+            self.clear()
+            self._paste_queue.clear()
 
     def on_key(self, event: events.Key) -> None:
         if (
@@ -220,7 +283,9 @@ See on-screen instructions for details.
             event.prevent_default()
         elif self.shell_mode and event.key == "tab":
             event.prevent_default()
-        elif event.key != "escape":
+        elif event.key == "escape":
+            self._paste_queue.clear()
+        else:
             self.suggestions = None
             self.suggestion = ""
 
@@ -255,7 +320,12 @@ See on-screen instructions for details.
                 )
             )
             return
-        self.post_message(UserInputSubmitted(self.text, self.shell_mode))
+        body = self.text
+        for original, marker in self._paste_queue:
+            if marker in body:
+                body = body.replace(marker, original, 1)
+        self._paste_queue.clear()
+        self.post_message(UserInputSubmitted(body, self.shell_mode))
         self.clear()
 
     def action_newline(self) -> None:
@@ -284,7 +354,12 @@ See on-screen instructions for details.
                     self.insert(self.suggestion + " ")
                 self.suggestion = ""
             return
-        self.post_message(UserInputSubmitted(self.text, self.shell_mode))
+        body = self.text
+        for original, marker in self._paste_queue:
+            if marker in body:
+                body = body.replace(marker, original, 1)
+        self._paste_queue.clear()
+        self.post_message(UserInputSubmitted(body, self.shell_mode))
         self.clear()
 
     def action_cursor_up(self, select: bool = False):

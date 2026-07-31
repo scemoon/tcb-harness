@@ -1,0 +1,27 @@
+-- Auto-generated from {{.SourceFile}}
+local Types = {}
+Types.{{.Name}} = {}
+Types.{{.Name}}.__index = Types.{{.Name}}
+
+{{range .Types}}
+function Types.{{.Name}}.new({{range .Properties}}{{.Name}}{{end}})
+    local self = setmetatable({}, Types.{{.Name}})
+{{range .Properties}}    self.{{.Name}} = {{.Name}}
+{{end}}    return self
+end
+
+function Types.{{.Name}}:to_json()
+    return cjson.encode({
+{{range .Properties}}        ["{{.JsonName}}"] = self.{{.Name}},
+{{end}}    })
+end
+
+function Types.{{.Name}}.from_json(json_str)
+    local data = cjson.decode(json_str)
+    return Types.{{.Name}}.new(
+{{range .Properties}}        data["{{.JsonName}}"],
+{{end}}    )
+end
+{{end}}
+
+return Types

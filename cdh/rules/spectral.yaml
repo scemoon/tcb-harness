@@ -1,0 +1,301 @@
+# Spectral-style OpenAPI/AsyncAPI linting rules for CDH.
+#
+# These rules are inspired by Spectral (https://stoplight.io/open-source/spectral)
+# and provide contract quality checks for OpenAPI 3.x documents.
+#
+# Rules are organized by category and can be enabled/disabled individually.
+#
+# Usage:
+#   cdh aidlc validate run --spectral
+#   cdh aidlc validate run --spectral --spectral-ruleset extended
+
+standard:
+  # ─── Info Object ────────────────────────────────────────────
+  info-contact:
+    given: "$.info"
+    then:
+      field: "contact"
+      function: truthy
+    message: "Info object should have contact information"
+    severity: warn
+    type: rule
+    enabled: true
+
+  info-description:
+    given: "$.info"
+    then:
+      field: "description"
+      function: truthy
+    message: "Info object must have a description"
+    severity: warn
+    type: rule
+    enabled: true
+
+  info-license:
+    given: "$.info"
+    then:
+      field: "license"
+      function: truthy
+    message: "Info object should have license information"
+    severity: info
+    type: rule
+    enabled: false
+
+  info-version:
+    given: "$.info"
+    then:
+      field: "version"
+      function: truthy
+    message: "Info object must have a version"
+    severity: error
+    type: rule
+    enabled: true
+
+  # ─── Paths ──────────────────────────────────────────────────
+  paths-exist:
+    given: "$"
+    then:
+      field: "paths"
+      function: truthy
+    message: "Document must have a paths object"
+    severity: error
+    type: rule
+    enabled: true
+
+  path-keys-kebab-case:
+    given: "$.paths"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^\\/([a-z0-9-]+\\/)*[a-z0-9-]*$"
+    message: "Path keys must be kebab-case (lowercase with hyphens)"
+    severity: warn
+    type: rule
+    enabled: true
+
+  path-trailing-slash:
+    given: "$.paths"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^\\/[^/]+$"
+    message: "Paths should not end with a trailing slash"
+    severity: info
+    type: rule
+    enabled: false
+
+  # ─── Operations ──────────────────────────────────────────────
+  operation-description:
+    given: "$.paths[*][*]"
+    then:
+      field: "description"
+      function: truthy
+    message: "Operation must have a description"
+    severity: warn
+    type: rule
+    enabled: true
+
+  operation-tags:
+    given: "$.paths[*][*]"
+    then:
+      field: "tags"
+      function: truthy
+    message: "Operation should have tags for grouping"
+    severity: info
+    type: rule
+    enabled: true
+
+  operation-summary:
+    given: "$.paths[*][*]"
+    then:
+      field: "summary"
+      function: truthy
+    message: "Operation should have a summary"
+    severity: info
+    type: rule
+    enabled: true
+
+  operation-id-unique:
+    given: "$.paths[*][*]"
+    then:
+      field: "operationId"
+      function: truthy
+    message: "Operation must have a unique operationId"
+    severity: error
+    type: rule
+    enabled: true
+
+  # ─── Parameters ──────────────────────────────────────────────
+  parameter-description:
+    given: "$.paths[*][*].parameters[*]"
+    then:
+      field: "description"
+      function: truthy
+    message: "Parameter must have a description"
+    severity: warn
+    type: rule
+    enabled: true
+
+  parameter-name-case:
+    given: "$.paths[*][*].parameters[*]"
+    then:
+      field: "name"
+      function: pattern
+      functionOptions:
+        match: "^[a-z][a-z0-9_]*$"
+    message: "Parameter names should be lowercase snake_case"
+    severity: warn
+    type: rule
+    enabled: false
+
+  # ─── Request/Response ───────────────────────────────────────
+  response-description:
+    given: "$.paths[*][*].responses[*]"
+    then:
+      field: "description"
+      function: truthy
+    message: "Response must have a description"
+    severity: warn
+    type: rule
+    enabled: true
+
+  # ─── Schemas ────────────────────────────────────────────────
+  schema-description:
+    given: "$.components.schemas[*]"
+    then:
+      field: "description"
+      function: truthy
+    message: "Schema must have a description"
+    severity: info
+    type: rule
+    enabled: true
+
+  schema-properties:
+    given: "$.components.schemas[*]"
+    then:
+      field: "properties"
+      function: truthy
+    message: "Schema must have properties or be a reference"
+    severity: warn
+    type: rule
+    enabled: false
+
+  schema-example:
+    given: "$.components.schemas[*]"
+    then:
+      field: "example"
+      function: truthy
+    message: "Schema should have an example"
+    severity: info
+    type: rule
+    enabled: false
+
+  # ─── Security ────────────────────────────────────────────────
+  global-security:
+    given: "$"
+    then:
+      field: "security"
+      function: truthy
+    message: "Document should have global security defined"
+    severity: warn
+    type: rule
+    enabled: false
+
+  operation-security:
+    given: "$.paths[*][*]"
+    then:
+      field: "security"
+      function: truthy
+    message: "Operation should have security defined"
+    severity: warn
+    type: rule
+    enabled: false
+
+  # ─── Servers ────────────────────────────────────────────────
+  server-variables:
+    given: "$.servers[*]"
+    then:
+      field: "variables"
+      function: truthy
+    message: "Server should define variables for templated URLs"
+    severity: info
+    type: rule
+    enabled: false
+
+  server-https:
+    given: "$.servers[*]"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^https://"
+    message: "Server URL should use HTTPS"
+    severity: warn
+    type: rule
+    enabled: true
+
+  server-http:
+    given: "$.servers[*]"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^http://"
+    message: "Server URL uses HTTP (not recommended for production)"
+    severity: warn
+    type: rule
+    enabled: true
+
+  # ─── Tags ───────────────────────────────────────────────────
+  tags-definition:
+    given: "$"
+    then:
+      field: "tags"
+      function: truthy
+    message: "Document should have tags defined for operation grouping"
+    severity: info
+    type: rule
+    enabled: false
+
+  # ─── OpenAPI 3.x Specific ───────────────────────────────────
+  openapi-version:
+    given: "$.openapi"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^3\\.(0|[1-9])\\.[0-9]+$"
+    message: "OpenAPI version must be 3.x"
+    severity: error
+    type: rule
+    enabled: true
+
+  components-exist:
+    given: "$"
+    then:
+      field: "components"
+      function: truthy
+    message: "Document should have a components object"
+    severity: info
+    type: rule
+    enabled: false
+
+extended:
+  # Inherits all standard rules plus additional strict rules
+
+  info-contact:
+    enabled: true
+    severity: error
+
+  operation-id-unique:
+    enabled: true
+    severity: error
+
+  schema-description:
+    enabled: true
+    severity: warn
+
+  parameter-description:
+    enabled: true
+    severity: error
+
+  operation-description:
+    enabled: true
+    severity: error

@@ -36,6 +36,8 @@ class CodebaseStorage:
         db_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = db_dir / "index.db"
         self.engine = create_engine(f"sqlite:///{self.db_path}", echo=False)
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA journal_mode=WAL")
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 
@@ -54,6 +56,26 @@ class CodebaseStorage:
                     language=c.language,
                     file_mtime=mtime,
                 ))
+            s.commit()
+
+    def save_chunks_batch(self, files_chunks: list[tuple[list[CodeChunk], float]]) -> None:
+        if not files_chunks:
+            return
+        with self.Session() as s:
+            for chunks, mtime in files_chunks:
+                if not chunks:
+                    continue
+                file_path = chunks[0].file_path
+                s.query(ChunkRecord).filter_by(file_path=file_path).delete()
+                for c in chunks:
+                    s.add(ChunkRecord(
+                        file_path=c.file_path,
+                        start_line=c.start_line,
+                        end_line=c.end_line,
+                        content=c.content,
+                        language=c.language,
+                        file_mtime=mtime,
+                    ))
             s.commit()
 
     def remove_file(self, file_path: str) -> None:

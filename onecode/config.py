@@ -128,6 +128,20 @@ class EventLoopConfig:
 
 
 @dataclass
+class MCPConfig:
+    timeout: float = 60.0
+    heartbeat_interval: float = 15.0
+    reconnect_enabled: bool = True
+
+
+@dataclass
+class RetryConfig:
+    max_attempts: int = 5
+    backoff_max: float = 60.0
+    backoff_jitter: float = 0.5
+
+
+@dataclass
 class HillclimbConfig:
     enabled: bool = False
     min_sessions: int = 10
@@ -158,6 +172,8 @@ class GlobalConfig:
     codebase: CodebaseConfig = field(default_factory=CodebaseConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     loops: LoopConfig = field(default_factory=LoopConfig)
+    mcp: MCPConfig = field(default_factory=MCPConfig)
+    retry: RetryConfig = field(default_factory=RetryConfig)
 
 
 def _dict_to_dataclass(cls, data: dict):
@@ -320,6 +336,16 @@ def _write_default_config():
                 ".sh", ".bash", ".zsh", ".fish",
                 ".tf", ".tfvars",
             ],
+        },
+        "mcp": {
+            "timeout": 60.0,
+            "heartbeat_interval": 15.0,
+            "reconnect_enabled": True,
+        },
+        "retry": {
+            "max_attempts": 5,
+            "backoff_max": 60.0,
+            "backoff_jitter": 0.5,
         },
     }
     GLOBAL_CONFIG_PATH.write_text(yaml.dump(default, default_flow_style=False))

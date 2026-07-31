@@ -1,0 +1,27 @@
+# Auto-generated from {{.SourceFile}}
+defmodule {{.PackageName | capitalize}} do
+  @derive Jason.Encoder
+  defstruct [
+{{range .Types}}
+{{range .Properties}}    :{{.Name}},
+{{end}}
+{{end}}  ]
+
+  @type t :: %__MODULE__{
+{{range .Types}}
+{{range .Properties}}    {{.Name}}: String.t(),
+{{end}}
+{{end}}  }
+
+  def from_json(json) when is_map(json) do
+    struct(__MODULE__, %{
+{{range .Types}}
+{{range .Properties}}      {{.Name}}: Map.get(json, "{{.JsonName}}"),
+{{end}}
+{{end}}    })
+  end
+
+  def to_json(%__MODULE__{} = struct) do
+    Jason.encode!(struct)
+  end
+end

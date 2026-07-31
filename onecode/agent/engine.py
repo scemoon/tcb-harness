@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
@@ -534,7 +535,16 @@ class AgentEngine:
 
         # Clawd-Code subsystems
         self._skill_loader = SkillLoader()
-        self._mcp = MCPManager()
+
+        # Loop system (L2 Verification + L3 Event)
+        from onecode.config import load_config
+        _cfg = load_config()
+        self._cfg = _cfg
+
+        self._mcp = MCPManager(
+            timeout=_cfg.mcp.timeout,
+            heartbeat_interval=_cfg.mcp.heartbeat_interval,
+        )
         self._cron_scheduler = CronScheduler()
         self._lsp_tool = LSPTool()
 
@@ -542,10 +552,6 @@ class AgentEngine:
         # without credentials — actual connect happens when skill loads).
         from onecode.mcp.cloudbase import ensure_configured as _ensure_cb
         _ensure_cb(self._mcp)
-
-        # Loop system (L2 Verification + L3 Event)
-        from onecode.config import load_config
-        _cfg = load_config()
         self._verification_loop: Optional["VerificationLoop"] = None  # noqa: F821
         self._event_bridge: Optional["EventBridge"] = None  # noqa: F821
         if _cfg.loops.verification.enabled:
@@ -579,6 +585,11 @@ class AgentEngine:
 
         # Per-turn usage tracking (Clawd-Code style)
         self._turn_usages: list[dict[str, int]] = []
+
+        # Turn-level issue tracking — collects provider errors, context overflows,
+        # verification failures across all turns so the final session summary
+        # can report every problem encountered, not just the first one.
+        self._turn_events: list[dict] = []
 
         # Event callbacks
         self.on_event: ToolEventHandler | None = None
@@ -637,6 +648,10 @@ class AgentEngine:
         # "soft" (build/solo mode) suggests planning but doesn't block
         # "off" (agents with permission_task=DENY) no enforcement
         self._plan_gate_mode: str = "off"
+
+        # Flag set when exiting Plan mode — suppresses auto-advancement of todos
+        # until user explicitly starts executing real work in the new mode.
+        self._just_exited_plan_mode: bool = False
 
         # ReAct state tracking
         self._react_phase: str = "thought"  # "thought" | "action" | "observation"
@@ -835,45 +850,6 @@ class AgentEngine:
         ]
         return [StreamEvent.plan(wire_entries)]
 
-    def _build_completion_summary(self) -> str:
-        """Build a deterministic completion summary from todo state.
-
-        Called after the agent loop exits when the last round had no
-        visible text — ensures the user always sees a completion report
-        without an extra LLM round-trip.
-        """
-        todos = self._todo_manager.list_todos()
-        completed = [t for t in todos if t.get("status") == "completed"]
-        failed = [t for t in todos if t.get("status") == "failed"]
-        pending = [t for t in todos if t.get("status") in ("pending", "in_progress")]
-
-        lines = ["\n---", "## Session Complete", ""]
-
-        if not todos:
-            lines.append("No todos were tracked in this session.")
-        else:
-            if completed:
-                lines.append(f"**Completed** ({len(completed)}):")
-                for t in completed:
-                    lines.append(f"- {t.get('subject') or t.get('description', '')}")
-                lines.append("")
-            if pending:
-                lines.append(f"**Unfinished** ({len(pending)}):")
-                for t in pending:
-                    lines.append(f"- {t.get('subject') or t.get('description', '')}")
-                lines.append("")
-            if failed:
-                lines.append(f"**Failed** ({len(failed)}):")
-                for t in failed:
-                    lines.append(f"- {t.get('subject') or t.get('description', '')}")
-                lines.append("")
-
-        lines.append(
-            f"**Stats**: {self.iterations} round(s), "
-            f"{self.total_tokens} tokens"
-        )
-        return "\n".join(lines)
-
     def _auto_advance_after_spawn(self, subagent_prompt: str) -> None:
         """After a Spawn subagent completes, auto-advance todo status.
 
@@ -989,8 +965,15 @@ class AgentEngine:
             PLAN_GATE_SOFT,
             filter_tool_descriptions,
         )
+        was_plan_mode = self._is_plan_mode()
         self.current_agent = create_agent(agent_type)
         system_parts = [self.current_agent.description]
+
+        if was_plan_mode and not self._is_plan_mode():
+            self._todo_manager.clear_todos()
+            self._just_exited_plan_mode = True
+            self._plan_denial_count = 0
+            self.context.remove_system_by_marker("<!-- PENDING_TODOS -->")
 
         edit_ask = self.current_agent.should_ask_for_edit()
         bash_ask = self.current_agent.should_ask_for_bash()
@@ -1031,7 +1014,8 @@ class AgentEngine:
                 "updates only.  Do NOT announce "
                 '"done" or "complete" unless ALL work is actually finished.\n'
                 "- **FINAL round** (all work done): output a visible summary "
-                "describing what was accomplished, changed, or decided.\n"
+                "describing what was accomplished, changed, or decided — "
+                "do NOT wrap in `<thinking>`.\n"
                 "- **Asking the user**: when you need user feedback, input, or "
                 "approval, ALWAYS use the AskUser tool to pause and wait for a "
                 "response. Never output a question in visible text and continue "
@@ -1057,7 +1041,8 @@ class AgentEngine:
                 '"done" or "complete" unless ALL work is actually completed.\n'
                 "- **FINAL round** (all work done): "
                 "output a visible summary describing what was accomplished, "
-                "what was changed, and any important outcomes or limitations.\n"
+                "what was changed, and any important outcomes or limitations — "
+                "do NOT wrap in `<thinking>`.\n"
                 "- **Asking the user**: when you need user feedback, input, or "
                 "approval, ALWAYS use the AskUser tool to pause and wait for a "
                 "response. Never output a question in visible text and continue "
@@ -1077,7 +1062,8 @@ class AgentEngine:
                 "updates only.  Do NOT announce "
                 '"done" or "complete" unless ALL work is actually finished.\n'
                 "- **FINAL round** (all work done): output a visible summary "
-                "describing what was accomplished, changed, or decided.\n"
+                "describing what was accomplished, changed, or decided — "
+                "do NOT wrap in `<thinking>`.\n"
                 "- **Asking the user**: when you need user feedback, input, or "
                 "approval, ALWAYS use the AskUser tool to pause and wait for a "
                 "response. Never output a question in visible text and continue "
@@ -1394,6 +1380,7 @@ class AgentEngine:
     async def chat_stream(self, user_input: str | list[dict]) -> AsyncIterator[StreamEvent | str]:
         self._load_skills()
         self._ctx_err_retries = 0
+        self._verification_fail_count = 0
         preview = user_input[:100] if isinstance(user_input, str) else f"[{len(user_input)} content blocks]"
         logger.info(f"chat_stream() called with user_input='{preview}'")
 
@@ -1542,6 +1529,8 @@ class AgentEngine:
         is_anthropic = provider.is_anthropic_style()
         max_turns = self.current_agent.max_turns or 10
         hard_limit = max_turns
+        hard_limit_extensions = 0
+        max_hard_limit_extensions = 3
 
         def _infinite_turns():
             t = 0
@@ -1559,15 +1548,20 @@ class AgentEngine:
                     absolute_ceiling, turn,
                 )
                 break
-            # Dynamic extension: if hard_limit reached but todos remain, keep going
+            # Dynamic extension: if hard_limit reached but agent is still
+            # actively working (pending todos, or just called tools), keep going.
             if turn >= hard_limit:
-                if self._has_pending_todos():
+                if hard_limit_extensions < max_hard_limit_extensions and (
+                    self._has_pending_todos() or self._empty_tool_turns == 0
+                ):
                     pending = sum(1 for t in self._todo_manager.list_todos()
                                   if t.get("status") in ("pending", "in_progress"))
+                    hard_limit_extensions += 1
                     logger.info(
                         "hard_limit (%d) reached at turn %d with %d pending todos — "
-                        "extending dynamically",
+                        "extending dynamically (extension %d/%d)",
                         hard_limit, turn, pending,
+                        hard_limit_extensions, max_hard_limit_extensions,
                     )
                     hard_limit += 5
                     lines = [
@@ -1577,6 +1571,13 @@ class AgentEngine:
                     ]
                     self._inject_nudge(lines)
                 else:
+                    if self._has_pending_todos():
+                        pending = sum(1 for t in self._todo_manager.list_todos()
+                                      if t.get("status") in ("pending", "in_progress"))
+                        logger.warning(
+                            "hard_limit extensions exhausted at turn %d with %d pending todos — stopping",
+                            turn, pending,
+                        )
                     break
             if self._cancelled:
                 self._cleanup_injected_messages()
@@ -1719,11 +1720,23 @@ class AgentEngine:
                     turn + 1, ctx_retries, e,
                     ctx_msgs_before, ctx_tokens_before,
                 )
+                self._turn_events.append({
+                    "turn": turn + 1,
+                    "kind": "context_overflow_retry",
+                    "ctx_retries": ctx_retries,
+                    "message": str(e),
+                })
                 if ctx_retries >= 3:
                     logger.error(
                         "ContextLengthError exhausted %d compaction retries "
                         "on turn %d — giving up", ctx_retries, turn + 1,
                     )
+                    self._turn_events.append({
+                        "turn": turn + 1,
+                        "kind": "context_overflow_exhausted",
+                        "ctx_retries": ctx_retries,
+                        "message": str(e),
+                    })
                     yield StreamEvent.error(
                         f"Context length exceeded (turn {turn+1}), "
                         f"compaction exhausted after {ctx_retries} attempts"
@@ -1775,19 +1788,34 @@ class AgentEngine:
                 break
             except TransientProviderError as e:
                 turn_retries += 1
-                if turn_retries <= 3:
+                max_retries = self._cfg.retry.max_attempts
+                backoff_max = self._cfg.retry.backoff_max
+                backoff_jitter = self._cfg.retry.backoff_jitter
+                if turn_retries <= max_retries:
                     if self._cancelled:
                         self._cleanup_injected_messages()
                         yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
                         return
-                    delay = min(2 ** (turn_retries - 1), 30)
+                    if e.retry_after is not None:
+                        delay = max(0.0, e.retry_after)
+                    else:
+                        delay = min(2 ** (turn_retries - 1), backoff_max)
+                    jitter = random.uniform(-backoff_jitter, backoff_jitter) if backoff_jitter > 0 else 0.0
+                    delay = max(0.1, delay + jitter)
                     logger.warning(
                         "Transient provider error on turn %d, "
-                        "retry %d/3 after %ds: %s",
-                        turn + 1, turn_retries, delay, e,
+                        "retry %d/%d after %.1fs: %s",
+                        turn + 1, turn_retries, max_retries, delay, e,
                     )
+                    self._turn_events.append({
+                        "turn": turn + 1,
+                        "kind": "provider_error_retry",
+                        "retry": turn_retries,
+                        "delay": round(delay, 2),
+                        "message": str(e),
+                    })
                     yield StreamEvent.text_delta(
-                        f"\n\n*Transient error, retrying in {delay}s…*\n\n"
+                        f"\n\n*Transient error, retrying in {delay:.1f}s…*\n\n"
                     )
                     await asyncio.sleep(delay)
                     continue
@@ -1799,6 +1827,11 @@ class AgentEngine:
                     f"  provider={provider_name} model={model_name} "
                     f"context_msgs={ctx_msgs} ctx_tokens={ctx_tokens}"
                 )
+                self._turn_events.append({
+                    "turn": turn + 1,
+                    "kind": "provider_error_exhausted",
+                    "message": str(e),
+                })
                 yield StreamEvent.error(f"Provider error (turn {turn+1}): {safe_error_msg(e)}")
                 break
             except Exception as e:
@@ -1857,6 +1890,123 @@ class AgentEngine:
                 self._streaming_used,
             )
 
+            # ── Auto-ask detection: if the LLM output a question as plain text
+            # AND also generated tool calls, the Do phase should become AskUser.
+            # Instead of executing the original tools (which may depend on the
+            # answer), we REPLACE tool_uses with a single AskUser tool call.
+            # The normal tool execution loop then handles AskUser naturally,
+            # pausing until the user responds.
+            #
+            # Detection uses two layers:
+            # Layer 1 — Semantic (Thought intent): detect explicit "need user input" signals
+            # Layer 2 — Syntax (punctuation): detect question marks as fallback
+            #
+            # Self-talk patterns are excluded (LLM is reasoning to itself, no input needed).
+            _stripped = clean_text.rstrip() if clean_text else ""
+
+            # Layer 1: Semantic detection via Thought intent patterns
+            # Patterns indicating the LLM explicitly needs human input
+            _SEMANTIC_NEEDS_INPUT = [
+                r"需要用户", r"需要您", r"需要您提供",
+                r"请确认", r"请选择", r"询问您", r"问您",
+                r"需要确认", r"需要知道", r"请告诉我",
+                r"等待您的", r"需要.*信息", r"需要哪些参数",
+                r"请提供", r"请问要", r"请问您", r"需要.*id",
+                r"哪个用户", r"哪个文件", r"什么参数", r"如何处理",
+                r"could you (tell me|confirm|provide|let me know)",
+                r"i need to know",
+                r"please (confirm|tell me|specify|provide|select|choose)",
+                r"which .*(user|file|parameter|option|setting)",
+                r"what .*(parameter|user|file|option|setting)",
+                r"what should i",
+                r"which (file|user|option|one)",
+                r"should i (proceed|continue|upgrade|execute)",
+                r"do you want (me to|to)",
+                r"can you (tell me|confirm|specify)",
+                r"let me know (which|what|if|whether)",
+                r"i'?m not sure (which|what|who|how)",
+                r"you('d| would) like (me to|to)",
+                r"would you like (me to|to)",
+                r"(could i|may i) get (the|your)",
+                r"pick (a|an|the)",
+                r"choose (a|an|the|which)",
+                r"what'?s the (user|file|path|parameter)",
+                r"which one",
+                r"confirm the (user|file|path|parameter)",
+                r"specify (the|which|what)",
+                r"what .*(file|user|path|parameter)",
+                r"which .*should i",
+                r"(do you|would you|should i)",
+            ]
+            # Patterns indicating the LLM is just reasoning (self-talk, no input needed)
+            _SEMANTIC_SELF_TALK = [
+                r"^让我想想", r"^我需要先", r"^我可以先",
+                r"^首先", r"^然后", r"^接下来", r"^好的",
+                r"自言自语", r"我在想", r"我在考虑",
+                r"让我先", r"我先来", r"先执行",
+                r"^let me (think|check|read|look|find|see)",
+                r"^i('ll| will| can| should)?( be)? (checking|reading|looking|finding|seeing|thinking)",
+                r"^first(ly)?(,| )?(i('ll| will| can| should)?)?",
+                r"^then(,| )?(i('ll| will| can| should)?)?",
+                r"^next(,| )?(i('ll| will| can| should)?)?",
+                r"^okay(|,| ) (so|let me|i('ll| will| can| should)?)",
+                r"^alright(|,| ) (so|let me|i('ll| will| can| should)?)",
+                r"^sure(|,| ) (so|let me|i('ll| will| can| should)?)",
+                r"^sounds good(|,| )",
+                r"^i('ll| will| can| should)?( go ahead| start| begin| proceed| execute)",
+                r"^i('ll| will| can| should)?( need to| have to| want to) (check|read|look|find|see|think|consider|proceed|execute|verify|confirm|fix|update|change|add|remove)",
+                r"^i('m| am)( going to| about to)?",
+                r"^looks like",
+                r"^it seems (like|that)",
+                r"^based on",
+                r"^let me just",
+                r"^i('ll| will)? just (check|read|look|find|see|try)",
+                r"^i think (that )?",
+                r"^i believe (that )?",
+                r"i('m| am) thinking (about|that)",
+                r"i('m| am) considering",
+                r"^here('s| is)",
+                r"^so(,| )? i('ll| will| can| should)?",
+                r"^okay so",
+                r"i need to consider",
+            ]
+
+            _thought_needs_input = False
+            for p in _SEMANTIC_SELF_TALK:
+                if re.search(p, _stripped, re.IGNORECASE):
+                    _thought_needs_input = False
+                    break
+            else:
+                for p in _SEMANTIC_NEEDS_INPUT:
+                    if re.search(p, _stripped, re.IGNORECASE):
+                        _thought_needs_input = True
+                        break
+
+            # Layer 2: Syntax detection (punctuation-based, fallback)
+            _prev_cjk_or_fullwidth = (
+                len(_stripped) >= 2 and
+                ('\u4e00' <= _stripped[-2] <= '\u9fff' or '\u3000' <= _stripped[-2] <= '\u303f')
+            )
+            _syntax_has_question = bool(
+                _stripped and (
+                    _stripped.endswith('\uff1f') or
+                    (_stripped.endswith('?') and _prev_cjk_or_fullwidth) or
+                    _stripped.endswith('：') or
+                    '?' in _stripped
+                )
+            )
+
+            _is_auto_ask = bool(_stripped and tool_uses and (_thought_needs_input or _syntax_has_question))
+
+            if _is_auto_ask:
+                _ask_id = f"auto-ask-{self._tool_id_counter}"
+                self._tool_id_counter += 1
+                tool_uses = [{
+                    "id": _ask_id,
+                    "name": "AskUser",
+                    "input": {"question": clean_text},
+                }]
+
             # Add assistant response to context with proper content blocks.
             # Persist thinking blocks so they survive session reload — the
             # TUI replays them as collapsible Thought widgets.
@@ -1909,7 +2059,7 @@ class AgentEngine:
                 # forceful continuation nudge and loop again instead of
                 # exiting the turn loop.
                 self._empty_tool_turns += 1
-                if self._empty_tool_turns >= 2:
+                if self._empty_tool_turns >= 3:
                     pending_count = sum(
                         1 for t in self._todo_manager.list_todos()
                         if t.get("status") in ("pending", "in_progress")
@@ -2216,8 +2366,17 @@ class AgentEngine:
                             "`Spawn(agent_type, prompt)` delegates to a focused subagent.\n"
                         )
                         result = await self._execute_tool(tu)
+                        if self._just_exited_plan_mode:
+                            spec = self._tool_registry.get(tu["name"])
+                            if spec and not spec.spec().is_read_only:
+                                self._just_exited_plan_mode = False
                 else:
                     result = await self._execute_tool(tu)
+                    # Reset _just_exited_plan_mode once real work begins
+                    if self._just_exited_plan_mode:
+                        spec = self._tool_registry.get(tu["name"])
+                        if spec and not spec.spec().is_read_only:
+                            self._just_exited_plan_mode = False
                     # Routing: track direct execution tool use → nudge routing decision
                     if tu["name"] in _EXECUTION_TOOLS:
                         self._direct_execution_count += 1
@@ -2429,6 +2588,12 @@ class AgentEngine:
                                 "Verification failed (attempt %d/3): %s",
                                 self._verification_fail_count, agg_result.failed_gates,
                             )
+                            self._turn_events.append({
+                                "turn": turn + 1,
+                                "kind": "verify_fail",
+                                "gates": list(agg_result.failed_gates),
+                                "attempt": self._verification_fail_count,
+                            })
                             if self._verification_fail_count <= 3:
                                 lines = [
                                     "<!-- VERIFY_FAIL -->",
@@ -2443,14 +2608,21 @@ class AgentEngine:
                                 break
                             else:
                                 logger.warning(
-                                    "Verification failed after %d retries, continuing",
+                                    "Verification failed after %d retries, stopping execution",
                                     self._verification_fail_count,
                                 )
+                                self._turn_events.append({
+                                    "turn": turn + 1,
+                                    "kind": "verify_fail_exhausted",
+                                    "gates": list(agg_result.failed_gates),
+                                })
                                 yield StreamEvent.text_delta(
                                     f"\n⚠️ Verification failed after 3 retries: {', '.join(agg_result.failed_gates)}\n"
                                 )
                                 if self._event_bridge is not None:
                                     self._event_bridge.on_verification_failed(agg_result)
+                                self._cleanup_injected_messages()
+                                return
                         else:
                             self._verification_fail_count = 0
                             if self._event_bridge is not None:
@@ -2470,25 +2642,19 @@ class AgentEngine:
         )
         logger.info(f"Chat stream complete after {self.iterations} round(s). Usage: [{usage_summary}]")
 
-        # ── Final summary fallback ──
-        # If the last round had no visible text (all reasoning was inside
-        # <thinking>), emit a deterministic summary so the user always sees
-        # a completion report — no extra LLM round-trip needed.
-        if not self._cancelled:
-            try:
-                last_msg = self.context.messages[-1] if self.context.messages else None
-                has_visible = False
-                if last_msg and last_msg.role == "assistant":
-                    has_visible = any(
-                        _get_block_text(block) and _get_block_text(block).strip()
-                        for block in (last_msg.content if isinstance(last_msg.content, list) else [])
-                        if _get_block_type(block) in ("text", ContentBlockType.TEXT)
-                    )
-                if not has_visible:
-                    summary = self._build_completion_summary()
-                    yield StreamEvent.text_delta(summary)
-            except Exception as e:
-                logger.warning("Final summary fallback failed: %s", e, exc_info=True)
+        # ── Session end: clear todos if all completed ──
+        # When every todo has reached "completed" status, wipe the todo list
+        # so the next session starts clean instead of inheriting a stale plan.
+        try:
+            final_todos = self._todo_manager.list_todos()
+            if final_todos and all(t.get("status") == "completed" for t in final_todos):
+                logger.info(
+                    "Session end: all %d todo(s) completed, clearing todo list",
+                    len(final_todos),
+                )
+                self._todo_manager.clear_todos()
+        except Exception as e:
+            logger.warning("Session-end todo cleanup failed: %s", e, exc_info=True)
 
     def has_pending_approval(self) -> bool:
         """Check if there's a pending approval request from ASK permission."""
@@ -2579,6 +2745,7 @@ class AgentEngine:
         self.iterations = 0
         self.total_tokens = 0
         self._turn_usages = []
+        self._turn_events = []
         self._skills_loaded = False
         self._project_context_loaded = False
         self._ctx_crisis = False

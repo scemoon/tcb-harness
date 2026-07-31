@@ -1,0 +1,14 @@
+      * Auto-generated from {{.SourceFile}}
+{{range .Types}}       IDENTIFICATION DIVISION.
+       PROGRAM-ID. {{.Name}}.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+{{range .Properties}}       01 {{.Name}} PIC X(100).
+{{end}}
+       LINKAGE SECTION.
+{{range .Properties}}       01 {{.Name}}-IN PIC X(100).
+{{end}}
+       PROCEDURE DIVISION USING {{range .Properties}}{{.Name}}-IN {{end}}.
+       GOBACK.
+{{end}}

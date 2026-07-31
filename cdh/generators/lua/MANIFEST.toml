@@ -1,0 +1,14 @@
+# Plugin manifest for lua
+[plugin]
+name = "lua"
+display_name = "Lua"
+file_extension = ".lua"
+mime_type = "text/x-lua"
+default_outdir = "lua"
+output_filename_template = "{name}}.lua"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

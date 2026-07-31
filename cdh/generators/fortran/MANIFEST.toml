@@ -1,0 +1,14 @@
+# Plugin manifest for fortran
+[plugin]
+name = "fortran"
+display_name = "Fortran"
+file_extension = ".f90"
+mime_type = "text/x-fortran"
+default_outdir = "fortran"
+output_filename_template = "{name}}.f90"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = false
+format_hints = ["date-time", "uuid"]

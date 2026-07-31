@@ -1,0 +1,132 @@
+# Default aidlc pattern detection rules for brownfield migration and code quality.
+#
+# These rules are inspired by Semgrep's rule format and help detect common
+# patterns during OpenAPI contract migration and API label retrofitting.
+#
+# Usage:
+#   cdh aidlc check patterns src/
+#   cdh aidlc check patterns --rules cdh/rules/patterns.yaml --format json src/
+
+rules:
+  # ─── API / Contract Patterns ───────────────────────────────────
+
+  api_version_header:
+    message: "Hardcoded API version header detected. Use environment-based versioning."
+    severity: WARNING
+    languages: [python, typescript, javascript]
+    pattern: "X-API-Version = '$1'"
+    path: ".*\\.(py|ts|js)$"
+    fix: "X_API_VERSION = os.getenv('API_VERSION')"
+
+  hardcoded_endpoint:
+    message: "Hardcoded endpoint URL. Use configuration or environment variable."
+    severity: WARNING
+    languages: [typescript, javascript, python]
+    regex: "https?://[^/\\s]+"
+    path: ".*\\.(py|ts|js)$"
+    metadata:
+      owasp: ["A01:2021 - Broken Access Control"]
+
+  secrets_in_code:
+    message: "Potential secret detected in source code."
+    severity: ERROR
+    languages: ["*"]
+    regex: "(api[_-]?key|secret|token|password|credential)\\s*[=:]\\s*['\"][^'\"]{8,}['\"]"
+    path: ".*\\.(py|ts|js|java|cs|go|rs)$"
+    metadata:
+      cwe: ["CWE-798"]
+
+  # ─── EARS / Requirements Patterns ───────────────────────────────
+
+  ears_shall_without_id:
+    message: "'shall' keyword used without a traceable FR-ID."
+    severity: WARNING
+    languages: ["*"]
+    regex: "shall\\s+[A-Z][a-z]"
+    path: ".*\\.(md|yaml|yml|txt)$"
+    metadata:
+      ears_category: "Untraceable requirement"
+
+  ears_ambiguous_modal:
+    message: "Ambiguous modal verb. Prefer 'shall' (obligation), 'will' (prediction), or 'may' (permission)."
+    severity: INFO
+    languages: ["*"]
+    regex: "(must|should|ought to)\\s+"
+    path: ".*\\.(md|yaml|yml)$"
+
+  # ─── Python / TypeScript Patterns ───────────────────────────────
+
+  python_any_type:
+    message: "Use of 'Any' type reduces type safety. Prefer specific types."
+    severity: INFO
+    languages: [python]
+    regex: ": Any|Any\\["
+    path: ".*\\.py$"
+
+  typescript_any_type:
+    message: "Use of 'any' type reduces type safety. Prefer 'unknown' or specific types."
+    severity: WARNING
+    languages: [typescript]
+    regex: ": any\\b"
+    path: ".*\\.ts$"
+
+  sync_over_async:
+    message: "Synchronous method detected. Consider async/await for I/O operations."
+    severity: INFO
+    languages: [python, typescript]
+    regex: "def \\w+\\([^)]*\\)\\s*(?!.*\\basync\\b):"
+    path: ".*\\.py$"
+
+  # ─── FR Label Patterns ─────────────────────────────────────────
+
+  missing_fr_id:
+    message: "Code section without FR-ID label. Add a '$FR-ID: ...' comment."
+    severity: INFO
+    languages: ["*"]
+    regex: "class \\w+|def \\w+|interface \\w+"
+    path: ".*\\.(py|ts|js|java|cs|go|rs|swift|kt)$"
+    metadata:
+      migration_hint: "Add $FR-ID: WEB-FR-NNN comment above this element"
+
+  # ─── OpenAPI / JSON Schema Patterns ──────────────────────────
+
+  missing_description:
+    message: "Schema property without description."
+    severity: INFO
+    languages: [yaml]
+    regex: "^\\s+[a-zA-Z_]\\w*:\\s*$"
+    path: ".*\\.(yaml|yml)$"
+
+  # ─── IaC / Cloud Patterns ───────────────────────────────────
+
+  terraform_hardcoded_region:
+    message: "Hardcoded AWS region. Use variable or default."
+    severity: WARNING
+    languages: [hcl]
+    regex: "region\\s*=\\s*\"(us-east-1|eu-west-1|ap-southeast-1)\""
+    path: ".*\\.(tf|tfvars)$"
+
+  # ─── Rust Patterns ─────────────────────────────────────────────
+
+  rust_expect_without_message:
+    message: ".expect() without a message. Add a descriptive error message."
+    severity: WARNING
+    languages: [rust]
+    regex: "\\.expect\\s*\\(\\s*\\)"
+    path: ".*\\.rs$"
+
+  # ─── Java / C# Patterns ───────────────────────────────────────
+
+  java_system_exit:
+    message: "System.exit() detected. Prefer proper exception handling."
+    severity: WARNING
+    languages: [java]
+    regex: "System\\.exit\\s*\\("
+    path: ".*\\.java$"
+
+  csharp_sync_over_async:
+    message: "Synchronous method in async context."
+    severity: INFO
+    languages: [csharp]
+    regex: "public\\s+\\w+\\s+\\w+\\([^)]*\\)\\s*(?!.*async\\b)\\s*\\{"
+    path: ".*\\.cs$"

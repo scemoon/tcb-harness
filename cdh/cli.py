@@ -395,14 +395,60 @@ def aidlc(ctx):
       phase <phase>                       Set the AI-DLC phase
       gate <name> --status <passed|failed> Record a quality gate result
       validate                            Validate spec quality (EARS/FR/BDD/DAG)
+      generators list|search|info|install|init|validate  Manage code-generator plugins
       tools install|status|update         Manage AIDLC tools (generate_shared/contract_diff/deploy_stack)
       status                              Show project health overview
+      dashboard [--watch] [--export PATH] Render the AIDLC dashboard TUI
       config show|component|provider      Manage project configuration
       sync                                Regenerate AGENTS.md and CLAUDE.md
       update                              Alias for sync (deprecated)
     """
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
+
+
+@aidlc.command("dashboard")
+@click.argument("path", required=False, default=".")
+@click.option("--watch", "-w", is_flag=True, default=False, help="Refresh every --interval seconds (Ctrl-C to stop).")
+@click.option("--interval", "-n", default=2.0, type=float, show_default=True, help="Refresh interval in seconds (--watch).")
+@click.option("--export", "export_path", default=None, type=click.Path(), help="Write a one-shot snapshot to PATH (.md or .html) instead of TUI.")
+def dashboard_cmd(path, watch, interval, export_path):
+    """Render the AIDLC dashboard TUI.
+
+    Auto-detects the .cdh/ directory by walking up from PATH (default: cwd)
+    and shows six widgets in a 2x3 grid:
+
+      * Phase Progress    - current AI-DLC phase + progress bar
+      * Quality Gates     - pass/fail/warn icons for recorded gates
+      * Spec Quality      - EARS/FR/BDD/DAG check pass rates
+      * AIDLC Tools       - installed vs stub tools
+      * FR Coverage       - spec FR -> BDD coverage percentage
+      * Deployment        - preview/staging/production env status
+
+    Use --watch for live refresh, or --export PATH to save a snapshot
+    (Markdown by default; .html for HTML).
+
+    \b
+    Examples:
+      cdh aidlc dashboard                       One-shot render
+      cdh aidlc dashboard --watch               Live refresh every 2s
+      cdh aidlc dashboard --watch --interval 5  Live refresh every 5s
+      cdh aidlc dashboard --export report.md    Save Markdown snapshot
+      cdh aidlc dashboard --export report.html Save HTML snapshot
+    """
+    from cdh.tui import run_dashboard
+
+    target = Path(path).expanduser().resolve()
+    export = Path(export_path).expanduser().resolve() if export_path else None
+    setup_logging("WARNING")
+    rc = run_dashboard(
+        target,
+        watch=watch,
+        interval=interval,
+        export_path=export,
+    )
+    if rc:
+        raise click.Abort()
 
 
 @aidlc.group("project", short_help="Project management (list/new/init/check/load)", invoke_without_command=True)
@@ -651,7 +697,25 @@ def update_cmd(ctx, path):
 # ── validate ─────────────────────────────────────────────────
 
 
-@aidlc.command("validate")
+@aidlc.group("validate", short_help="Validate AIDLC spec quality", invoke_without_command=True)
+@click.pass_context
+def validate_group(ctx):
+    """Validate AIDLC spec quality: EARS, FR, BDD, DAG.
+
+    \b
+    Sub-commands:
+      run                 Run all quality checks (default)
+      history             Show recent validate runs
+      metrics             Show aggregated validate metrics
+    """
+    if ctx.invoked_subcommand is None:
+        # Default: run all checks with default options
+        ctx.invoke(validate_cmd, path=".", ears_only=False, fr_only=False,
+                   bdd_only=False, dag_only=False, all_checks=True,
+                   output_format="text", record=True, validate_state=True)
+
+
+@validate_group.command("run")
 @click.argument("path", required=False, default=".")
 @click.option("--ears", "ears_only", is_flag=True, help="EARS format check only")
 @click.option("--fr", "fr_only", is_flag=True, help="FR namespace consistency check only")
@@ -659,12 +723,100 @@ def update_cmd(ctx, path):
 @click.option("--dag", "dag_only", is_flag=True, help="Task DAG cycle check only")
 @click.option("--all", "all_checks", is_flag=True, default=False, help="Run all checks (default)")
 @click.option("--format", "output_format", type=click.Choice(["text", "json"]), default="text", help="Output format (default: text)")
-def validate_cmd(path, ears_only, fr_only, bdd_only, dag_only, all_checks, output_format):
-    """Validate AIDLC spec quality: EARS format, FR namespaces, BDD coverage, DAG cycles.
+@click.option("--record/--no-record", "record", default=True, help="Persist run history & metrics (default: record)")
+@click.option("--validate-state", is_flag=True, help="Validate .cdh/state.json schema")
+@click.pass_context
+def validate_cmd(ctx, path, ears_only, fr_only, bdd_only, dag_only, all_checks, output_format, record, validate_state):
+    """Run all AIDLC spec quality checks."""
+    _validate_impl(ctx, path, ears_only, fr_only, bdd_only, dag_only, all_checks, output_format, record, validate_state)
 
-    Runs all checks by default. Use --ears/--fr/--bdd/--dag to run specific checks.
+
+@validate_group.command("history")
+@click.argument("path", required=False, default=".")
+@click.option("--last", "n", default=10, show_default=True, help="Show last N runs")
+def validate_history_cmd(path, n):
+    """Show recent validate runs recorded in .cdh/validate_history.json."""
+    from cdh.project_loader import CdhProjectLoader
+
+    target = Path(path).expanduser().resolve()
+    cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+    if cdh_dir is None:
+        click.echo("No .cdh/ directory found.")
+        return
+
+    history = CdhProjectLoader.get_validate_history(cdh_dir)
+    if not history:
+        click.echo("No validate history recorded yet. Run 'cdh aidlc validate' to populate.")
+        return
+
+    recent = history[-n:]
+    click.echo(f"Last {len(recent)} of {len(history)} runs:\n")
+    click.echo(f"  {'TIMESTAMP':<22}  {'PASS':<6}  {'DUR(ms)':<8}  CHECKS")
+    click.echo(f"  {'─' * 22}  {'─' * 6}  {'─' * 8}  {'─' * 30}")
+    for entry in recent:
+        ts = entry.get("timestamp", "?")
+        passed = "✓" if entry.get("passed") else "✗"
+        dur = entry.get("duration_ms", 0)
+        checks = ", ".join(entry.get("checks_run", [])) or "-"
+        failed = entry.get("failed_checks", [])
+        if failed:
+            checks = f"{checks}  (failed: {', '.join(failed)})"
+        click.echo(f"  {ts:<22}  {passed:<6}  {dur:<8}  {checks}")
+
+
+@validate_group.command("metrics")
+@click.argument("path", required=False, default=".")
+def validate_metrics_cmd(path):
+    """Show aggregated metrics across all recorded validate runs."""
+    from cdh.project_loader import CdhProjectLoader
+
+    target = Path(path).expanduser().resolve()
+    cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+    if cdh_dir is None:
+        click.echo("No .cdh/ directory found.")
+        return
+
+    metrics = CdhProjectLoader.get_metrics(cdh_dir)
+    if not metrics:
+        click.echo("No metrics recorded yet. Run 'cdh aidlc validate' to populate.")
+        return
+
+    click.echo("Validate Metrics:\n")
+    click.echo(f"  Total runs:           {metrics.get('total_runs', 0)}")
+    click.echo(f"  Avg duration (ms):    {metrics.get('average_duration_ms', 0)}")
+    ts = metrics.get("last_run_timestamp", "?")
+    click.echo(f"  Last run:             {ts}")
+
+    per_check = metrics.get("per_check", {})
+    if per_check:
+        click.echo("\n  Per-check pass/fail:")
+        click.echo(f"    {'CHECK':<30}  {'RUNS':<6}  {'PASS':<6}  {'FAIL':<6}")
+        for name, slot in per_check.items():
+            click.echo(
+                f"    {name:<30}  {slot.get('runs', 0):<6}  "
+                f"{slot.get('passes', 0):<6}  {slot.get('fails', 0):<6}"
+            )
+
+    mttd = metrics.get("mttd_per_check", {})
+    if mttd:
+        click.echo("\n  MTTD per check (ms-to-first-failure):")
+        for name, slot in mttd.items():
+            click.echo(
+                f"    {name:<30}  mttd={slot.get('mttd_ms', '?')}ms "
+                f"(samples={slot.get('samples', 0)})"
+            )
+
+
+def _validate_impl(ctx, path, ears_only, fr_only, bdd_only, dag_only, all_checks, output_format, record, validate_state=False):
+    """Run all AIDLC spec quality checks.
+
+    Helper used by both `cdh aidlc validate` and `cdh aidlc validate run`.
     """
     import json as json_module
+    import time
+    from datetime import datetime, timezone
+    from cdh.project_loader import CdhProjectLoader
+
     target = Path(path).expanduser().resolve()
 
     selected = []
@@ -686,33 +838,137 @@ def validate_cmd(path, ears_only, fr_only, bdd_only, dag_only, all_checks, outpu
         "dag": ("Task DAG", run_dag_check),
     }
 
+    started_at = time.monotonic()
+    started_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # OTLP span instrumentation — wraps the whole validate run in a parent span
+    # and each individual check in its own child span. Works with or without the
+    # opentelemetry-api package; see cdh.trace.otel_tracer.
+    from cdh.trace.otel_tracer import init_tracer, span as otel_span
+
+    init_tracer(service_name="cdh-validate")
+
     all_passed = True
     results = {}
+    run_span_attrs = {
+        "cdh.path": str(target),
+        "cdh.checks_requested": ",".join(selected),
+        "cdh.output_format": output_format,
+    }
+    with otel_span("aidlc.validate", attributes=run_span_attrs) as run_span:
+        for key in selected:
+            label, runner = runners[key]
+            check_started = time.monotonic()
+            with otel_span(
+                f"aidlc.validate.{key}",
+                attributes={"cdh.check.name": label, "cdh.check.kind": key},
+                parent=run_span,
+            ) as check_span:
+                try:
+                    result = runner(target)
+                except Exception as exc:
+                    check_span.record_exception(exc)
+                    check_span.set_status("ERROR", str(exc))
+                    raise
+                results[key] = result
+                check_ms = int((time.monotonic() - check_started) * 1000)
+                check_span.set_attribute("cdh.check.passed", bool(result["passed"]))
+                check_span.set_attribute("cdh.check.duration_ms", check_ms)
+                sub_checks = result.get("checks", [])
+                check_span.set_attribute("cdh.check.sub_count", len(sub_checks))
+                failed_sub = [
+                    c.get("name", "?") for c in sub_checks if c.get("status") == "fail"
+                ]
+                if failed_sub:
+                    check_span.set_attribute(
+                        "cdh.check.failed_subs", ",".join(failed_sub)
+                    )
+                fr_count = sum(
+                    int(c.get("fr_count", 0))
+                    for c in sub_checks
+                    if isinstance(c.get("fr_count"), int)
+                )
+                if fr_count:
+                    check_span.set_attribute("cdh.check.fr_count", fr_count)
+                bdd_count = sum(
+                    int(c.get("scenario_count", 0))
+                    for c in sub_checks
+                    if isinstance(c.get("scenario_count"), int)
+                )
+                if bdd_count:
+                    check_span.set_attribute(
+                        "cdh.check.bdd_scenario_count", bdd_count
+                    )
+                check_span.set_status("OK" if result["passed"] else "ERROR")
+
+            if not result["passed"]:
+                all_passed = False
+
+            if output_format == "json":
+                continue
+
+            click.echo(f"\n── {label} ─{'─' * max(0, 48 - len(label))}")
+            click.echo(f"  Result: {'✓ PASS' if result['passed'] else '✗ FAIL'}")
+
+            for check in result.get("checks", []):
+                icon = {"pass": "✓", "fail": "✗", "warn": "!"}.get(
+                    check["status"], "?"
+                )
+                click.echo(f"  {icon} {check['name']}: {check['message']}")
+
+            if not result["passed"]:
+                all_passed = False
+
+        run_span.set_attribute("cdh.validate.duration_ms", int((time.monotonic() - started_at) * 1000))
+        run_span.set_attribute("cdh.validate.passed", all_passed)
+        run_span.set_attribute(
+            "cdh.validate.checks_run",
+            sum(len(results[k].get("checks", [])) for k in selected),
+        )
+        run_span.set_status("OK" if all_passed else "ERROR")
+
+    if validate_state:
+        cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+        state_valid, state_errors = (False, ["No .cdh/ directory found."]) if cdh_dir is None else CdhProjectLoader.validate_state_schema(cdh_dir)
+        if output_format != "json":
+            click.echo(f"\n── State Schema ─────────────────────────────────")
+            click.echo(f"  Result: {'✓ PASS' if state_valid else '✗ FAIL'}")
+            for error in state_errors:
+                click.echo(f"  ✗ {error}")
+        if not state_valid:
+            all_passed = False
+
+
+    failed_checks: list[str] = []
+    checks_run: list[str] = []
+    duration_ms = int((time.monotonic() - started_at) * 1000)
     for key in selected:
-        label, runner = runners[key]
-        result = runner(target)
-        results[key] = result
-        if not result["passed"]:
-            all_passed = False
+        for check in results[key].get("checks", []):
+            name = check.get("name", key)
+            checks_run.append(name)
+            if check.get("status") == "fail":
+                failed_checks.append(name)
 
-        if output_format == "json":
-            continue
-
-        click.echo(f"\n── {label} ─{'─' * max(0, 48 - len(label))}")
-        click.echo(f"  Result: {'✓ PASS' if result['passed'] else '✗ FAIL'}")
-
-        for check in result.get("checks", []):
-            icon = {"pass": "✓", "fail": "✗", "warn": "!"}.get(
-                check["status"], "?"
-            )
-            click.echo(f"  {icon} {check['name']}: {check['message']}")
-
-        if not result["passed"]:
-            all_passed = False
+    if record:
+        cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+        if cdh_dir is not None:
+            history_entry = {
+                "timestamp": started_iso,
+                "checks_run": checks_run,
+                "passed": all_passed,
+                "duration_ms": duration_ms,
+                "failed_checks": failed_checks,
+            }
+            try:
+                CdhProjectLoader.append_validate_history(cdh_dir, history_entry)
+                CdhProjectLoader.record_metrics(cdh_dir, history_entry)
+            except Exception as exc:
+                click.echo(f"  (warn) failed to persist history/metrics: {exc}", err=True)
 
     if output_format == "json":
         summary = {
             "passed": all_passed,
+            "duration_ms": duration_ms,
             "checks": {
                 key: {
                     "passed": results[key]["passed"],
@@ -733,6 +989,607 @@ def validate_cmd(path, ears_only, fr_only, bdd_only, dag_only, all_checks, outpu
         raise click.Abort()
 
 
+# ── check (pattern detection) ─────────────────────────────────
+
+
+@aidlc.group("check", short_help="Pattern detection (Semgrep-style)")
+@click.pass_context
+def check_group(ctx):
+    """Run Semgrep-style pattern detection for brownfield migration and code quality.
+
+    \b
+    Sub-commands:
+      patterns           Scan for code patterns matching built-in or custom rules
+      rules              List available pattern rule categories
+    """
+    pass
+
+
+@check_group.command("patterns", short_help="Scan for code patterns")
+@click.argument("path", required=False, default=".")
+@click.option(
+    "--rules",
+    "-r",
+    "rules_file",
+    type=click.Path(),
+    default=None,
+    help="Path to rules file (YAML/JSON). Default: built-in rules.",
+)
+@click.option(
+    "--format",
+    "-f",
+    "output_format",
+    type=click.Choice(["text", "json", "sarif"]),
+    default="text",
+    help="Output format (default: text). sarif for GitHub/code scanning.",
+)
+@click.option(
+    "--severity",
+    "-s",
+    "min_severity",
+    type=click.Choice(["INFO", "WARNING", "ERROR"]),
+    default="INFO",
+    help="Minimum severity to report",
+)
+@click.option(
+    "--exclude",
+    "-e",
+    "exclude_paths",
+    multiple=True,
+    help="Paths/patterns to exclude (repeatable)",
+)
+@click.option("--fail-on-error", is_flag=True, help="Exit non-zero if any ERROR finding")
+def check_patterns_cmd(path, rules_file, output_format, min_severity, exclude_paths, fail_on_error):
+    """Scan source files for pattern matches using Semgrep-style rules.
+
+    \b
+    Examples:
+      cdh aidlc check patterns src/
+      cdh aidlc check patterns --rules my-rules.yaml --format json src/
+      cdh aidlc check patterns --severity WARNING --exclude "**/test/**" src/
+
+    Rules are loaded from (in order):
+      1. --rules FILE (if specified)
+      2. ~/.cdh/rules/patterns.yaml (if exists)
+      3. Built-in cdh/rules/patterns.yaml
+    """
+    import os
+    import json as json_module
+    from pathlib import Path
+
+    from cdh.tools.pattern_detect import PatternEngine, load_rules, Finding
+
+    target = Path(path).expanduser().resolve()
+    if not target.exists():
+        click.echo(f"Error: Path not found: {target}", err=True)
+        raise click.Abort()
+
+    rules_path = rules_file
+    if rules_path is None:
+        user_rules = Path.home() / ".cdh" / "rules" / "patterns.yaml"
+        if user_rules.is_file():
+            rules_path = str(user_rules)
+        else:
+            rules_path = str(Path(__file__).parent.parent / "rules" / "patterns.yaml")
+
+    rules = load_rules(rules_path) if rules_path else []
+    if not rules:
+        click.echo("Warning: No rules loaded. Pattern detection skipped.", err=True)
+        return
+
+    engine = PatternEngine(rules)
+    findings = engine.scan(
+        [str(target)],
+        exclude_paths=list(exclude_paths),
+        gitignore=True,
+    )
+
+    severity_order = {"INFO": 0, "WARNING": 1, "ERROR": 2}
+    min_level = severity_order.get(min_severity, 0)
+    filtered = [f for f in findings if severity_order.get(f.severity, 0) >= min_level]
+
+    if output_format == "json":
+        result = {
+            "results": [f.to_dict() for f in filtered],
+            "total": len(filtered),
+            "rules_loaded": len(rules),
+        }
+        click.echo(json_module.dumps(result, indent=2))
+        if fail_on_error and any(f.severity == "ERROR" for f in filtered):
+            raise click.Abort()
+        return
+
+    if output_format == "sarif":
+        sarif = _to_sarif(filtered, rules_path or "built-in")
+        click.echo(json_module.dumps(sarif, indent=2))
+        if fail_on_error and any(f.severity == "ERROR" for f in filtered):
+            raise click.Abort()
+        return
+
+    # Text format
+    if not filtered:
+        click.echo("No findings. Pattern detection passed.")
+        return
+
+    error_count = sum(1 for f in filtered if f.severity == "ERROR")
+    warn_count = sum(1 for f in filtered if f.severity == "WARNING")
+    info_count = sum(1 for f in filtered if f.severity == "INFO")
+
+    click.echo(f"\nPattern Detection Summary:")
+    click.echo(f"  Rules loaded: {len(rules)}")
+    click.echo(f"  Files scanned: {len(set(f.file for f in filtered))}")
+    click.echo(f"  Findings: {error_count} errors, {warn_count} warnings, {info_count} info")
+    click.echo(f"\n{'=' * 70}")
+
+    for f in sorted(filtered, key=lambda x: (severity_order.get(x.severity, 0), x.file, x.line)):
+        sev_indicator = {"INFO": "I", "WARNING": "W", "ERROR": "E"}.get(f.severity, "?")
+        click.echo(f"  [{sev_indicator}] {f.severity:<8} {f.file}:{f.line} {f.message}")
+        if f.matched_text and len(f.matched_text) < 80:
+            click.echo(f"           matched: {f.matched_text!r}")
+
+    if fail_on_error and error_count > 0:
+        raise click.Abort()
+
+
+def _to_sarif(findings: list[Finding], rules_path: str) -> dict:
+    """Convert findings to SARIF format."""
+    rules_map = {}
+    for f in findings:
+        if f.rule_id not in rules_map:
+            rules_map[f.rule_id] = {
+                "id": f.rule_id,
+                "name": f.rule_id,
+                "shortDescription": {"text": f.message},
+                "properties": {"severity": f.severity.lower()},
+            }
+
+    results = []
+    for f in findings:
+        results.append({
+            "ruleId": f.rule_id,
+            "level": {"INFO": "note", "WARNING": "warning", "ERROR": "error"}.get(f.severity.lower(), "warning"),
+            "message": {"text": f.message},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": f.file},
+                    "region": {"startLine": f.line, "startColumn": f.column or 1, "endLine": f.end_line or f.line},
+                }
+            }],
+        })
+
+    return {
+        "version": "2.1.0",
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "aidlc",
+                    "version": "1.0.0",
+                    "rules": list(rules_map.values()),
+                }
+            },
+            "results": results,
+        }]
+    }
+
+
+@check_group.command("rules", short_help="List available pattern rules")
+@click.option("--category", "-c", help="Filter by rule category prefix")
+def check_rules_cmd(category):
+    """List all available pattern detection rules.
+
+    \b
+    Examples:
+      cdh aidlc check rules
+      cdh aidlc check rules --category api
+    """
+    import os
+    import yaml
+    from pathlib import Path
+
+    rules_path = None
+    user_rules = Path.home() / ".cdh" / "rules" / "patterns.yaml"
+    if user_rules.is_file():
+        rules_path = str(user_rules)
+    else:
+        default_rules = Path(__file__).parent.parent / "rules" / "patterns.yaml"
+        if default_rules.is_file():
+            rules_path = str(default_rules)
+
+    if not rules_path or not os.path.isfile(rules_path):
+        click.echo("No rules file found.")
+        return
+
+    with open(rules_path) as f:
+        doc = yaml.safe_load(f)
+
+    click.echo(f"Available rules from: {rules_path}\n")
+    click.echo(f"{'RULE ID':<30} {'SEVERITY':<10} DESCRIPTION")
+    click.echo("-" * 80)
+
+    count = 0
+    for cat_name, cat_rules in (doc or {}).items():
+        if not isinstance(cat_rules, dict):
+            continue
+        for rule_id, rule_def in cat_rules.items():
+            if not isinstance(rule_def, dict):
+                continue
+            full_id = f"{cat_name}.{rule_id}"
+            if category and not full_id.startswith(category):
+                continue
+            sev = rule_def.get("severity", "?").upper()
+            msg = rule_def.get("message", "")
+            if len(msg) > 50:
+                msg = msg[:47] + "..."
+            click.echo(f"{full_id:<30} {sev:<10} {msg}")
+            count += 1
+
+    click.echo(f"\n{count} rules shown.")
+
+
+@aidlc.group("generators", short_help="Manage code generators (type generators)")
+def generators_group():
+    """Manage code generators for OpenAPI/AsyncAPI → typed code.
+
+    \b
+    Sub-commands:
+      list              List installed plugins (built-in + user + project)
+      search [query]    Search the built-in plugin index
+      info <name>       Show details about an installed plugin
+      install <name>    Install a built-in plugin into current project
+      init <name>       Scaffold a new plugin directory
+      validate <dir>    Validate a plugin's MANIFEST.toml + template
+    """
+
+
+@generators_group.command("list")
+@click.option(
+    "--source",
+    type=click.Choice(["all", "built-in", "user", "project"]),
+    default="all",
+    help="Which source to list (default: all, de-duped by name).",
+)
+@click.option(
+    "--path",
+    "path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Project root for the 'project' source (default: cwd).",
+)
+def generators_list(source, path):
+    """List all discovered generator plugins."""
+    from cdh.generators.cli import (
+        discover_all_plugins,
+        discover_all_plugins_merged,
+        filter_by_source,
+    )
+
+    project_root = Path(path).expanduser().resolve() if path else Path.cwd()
+    discovered = discover_all_plugins(project_root=project_root)
+
+    if source == "all":
+        merged = discover_all_plugins_merged(project_root=project_root)
+        if not merged:
+            click.echo("No plugins found.")
+            return
+        click.echo(f"{'NAME':<16} {'SOURCE':<10} {'DISPLAY':<20} {'EXT':<8} FEATURES")
+        click.echo("-" * 76)
+        for name, (src, plugin) in sorted(merged.items()):
+            features = ",".join(plugin.supports) or "-"
+            click.echo(
+                f"{name:<16} {src:<10} {plugin.display_name:<20} "
+                f"{plugin.file_extension:<8} {features}"
+            )
+        return
+
+    filtered = filter_by_source(discovered, source)
+    if not filtered:
+        click.echo(f"No plugins found in source '{source}'.")
+        return
+    click.echo(f"{'NAME':<16} {'DISPLAY':<20} {'EXT':<8} FEATURES")
+    click.echo("-" * 60)
+    for _src, plugin in filtered:
+        features = ",".join(plugin.supports) or "-"
+        click.echo(
+            f"{plugin.name:<16} {plugin.display_name:<20} "
+            f"{plugin.file_extension:<8} {features}"
+        )
+
+
+@generators_group.command("search")
+@click.argument("query", required=False)
+@click.option("--tag", help="Filter by tag")
+@click.option("--language-family", help="Filter by language family")
+def generators_search(query, tag, language_family):
+    """Search the built-in plugin index for community-available generators."""
+    from cdh.generators.cli import search_index
+
+    entries = search_index(query)
+
+    if tag:
+        entries = [
+            e for e in entries
+            if tag.lower() in [str(t).lower() for t in e.get("tags", []) or []]
+        ]
+    if language_family:
+        entries = [
+            e for e in entries
+            if str(e.get("language_family", "")).lower() == language_family.lower()
+        ]
+
+    if not entries:
+        if query:
+            click.echo(f"No plugins matched '{query}'.")
+        else:
+            click.echo("No plugins found in the built-in index.")
+        return
+
+    click.echo(f"{'NAME':<16} {'LANG':<12} {'VERSION':<8} DESCRIPTION")
+    click.echo("-" * 80)
+    for entry in entries:
+        name = entry.get("name", "?")
+        lang = entry.get("language_family", "?")
+        version = entry.get("version", "?")
+        description = entry.get("description", "")
+        if len(description) > 50:
+            description = description[:47] + "..."
+        click.echo(f"{name:<16} {lang:<12} {version:<8} {description}")
+
+
+@generators_group.command("info")
+@click.argument("name")
+@click.option(
+    "--path",
+    "path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Project root for the 'project' source (default: cwd).",
+)
+def generators_info(name, path):
+    """Show details about an installed or indexed plugin."""
+    from cdh.generators.cli import (
+        discover_all_plugins_merged,
+        search_index,
+    )
+
+    project_root = Path(path).expanduser().resolve() if path else Path.cwd()
+    merged = discover_all_plugins_merged(project_root=project_root)
+    if name in merged:
+        source, plugin = merged[name]
+        click.echo(f"Plugin: {plugin.name}")
+        click.echo(f"  Source:        {source}")
+        click.echo(f"  Display name:  {plugin.display_name}")
+        click.echo(f"  File ext:      {plugin.file_extension}")
+        click.echo(f"  MIME type:     {plugin.mime_type}")
+        click.echo(f"  Outdir:        {plugin.default_outdir}")
+        click.echo(f"  Filename tmpl: {plugin.output_filename_template}")
+        click.echo(f"  Package:       {plugin.package_name_default}")
+        click.echo(f"  Features:      {', '.join(plugin.supports) or '-'}")
+        if plugin.format_hints:
+            click.echo(f"  Format hints:  {', '.join(plugin.format_hints)}")
+        if plugin.imports:
+            click.echo(f"  Imports:       {plugin.imports}")
+        click.echo(f"  Directory:     {plugin.directory}")
+        click.echo(f"  Template:      {plugin.template_path}")
+        if plugin.imports_template_path:
+            click.echo(f"  Imports tmpl:  {plugin.imports_template_path}")
+        return
+
+    index_entries = search_index(name)
+    matches = [e for e in index_entries if e.get("name") == name]
+    if matches:
+        _print_index_entry(matches[0])
+        return
+
+    click.echo(f"Plugin '{name}' not found locally or in the built-in index.")
+    click.echo("Try `cdh aidlc generators search` to look it up.")
+    raise click.Abort()
+
+
+def _print_index_entry(entry: dict) -> None:
+    click.echo(f"Plugin: {entry.get('name', '?')}")
+    click.echo(f"  Display name:  {entry.get('display_name', '?')}")
+    click.echo(f"  Version:       {entry.get('version', '?')}")
+    click.echo(f"  Author:        {entry.get('author', '?')}")
+    click.echo(f"  Language:      {entry.get('language_family', '?')}")
+    description = entry.get("description", "")
+    if description:
+        click.echo(f"  Description:   {description}")
+    tags = entry.get("tags") or []
+    if tags:
+        click.echo(f"  Tags:          {', '.join(str(tag) for tag in tags)}")
+    tested_with = entry.get("tested_with") or []
+    if tested_with:
+        click.echo(f"  Tested with:   {', '.join(str(name) for name in tested_with)}")
+    download_url = entry.get("download_url", "")
+    if download_url:
+        click.echo(f"  Download URL:  {download_url}")
+
+
+@generators_group.command("install")
+@click.argument("name")
+@click.option(
+    "--target-dir",
+    default="./aidlc/generators",
+    help="Where to install (default: ./aidlc/generators)",
+)
+def generators_install(name, target_dir):
+    """Install a built-in plugin into current project (aidlc/generators/)."""
+    from cdh.generators.cli import install_plugin
+
+    target = Path(target_dir).expanduser().resolve()
+    try:
+        installed = install_plugin(name, target)
+    except ValueError as exc:
+        click.echo(f"Error: {exc}")
+        raise click.Abort()
+    except (FileNotFoundError, FileExistsError) as exc:
+        click.echo(f"Error: {exc}")
+        raise click.Abort()
+    click.echo(f"Installed '{name}' to {installed}")
+
+
+@generators_group.command("init")
+@click.argument("name")
+@click.option(
+    "--target-dir",
+    default="./aidlc/generators",
+    help="Where to scaffold (default: ./aidlc/generators)",
+)
+def generators_init(name, target_dir):
+    """Scaffold a new plugin directory with MANIFEST.toml + template stub."""
+    from cdh.generators.cli import create_plugin_scaffold
+
+    target = Path(target_dir).expanduser().resolve()
+    try:
+        created = create_plugin_scaffold(name, target)
+    except (ValueError, FileExistsError) as exc:
+        click.echo(f"Error: {exc}")
+        raise click.Abort()
+    click.echo(f"Scaffolded plugin '{name}' at {created}")
+    click.echo(f"  - {created / 'MANIFEST.toml'}")
+    click.echo(f"  - {created / f'template.{name}.tmpl'}")
+    click.echo("Next: edit the template, then run")
+    click.echo(f"  cdh aidlc generators validate {created}")
+
+
+@generators_group.command("validate")
+@click.argument("path")
+def generators_validate(path):
+    """Validate a plugin's MANIFEST.toml + template (run smoke test)."""
+    from cdh.generators.cli import validate_plugin
+
+    target = Path(path).expanduser().resolve()
+    ok, errors = validate_plugin(target)
+    if ok:
+        click.echo(f"✓ Plugin at {target} is valid.")
+        return
+    click.echo(f"✗ Plugin at {target} is invalid:")
+    for error in errors:
+        click.echo(f"  - {error}")
+    raise click.Abort()
+
+
+@generators_group.command("version")
+@click.argument("name", required=False)
+@click.option("--path", "project_path", type=click.Path(path_type=Path), default=None, help="Project root")
+def generators_version(name, project_path):
+    """Show plugin version info (SemVer 2.0.0).
+
+    Without args: show all installed plugins and their versions.
+    With <name>: show detailed version info for a specific plugin.
+
+    \b
+    Examples:
+      cdh aidlc generators version
+      cdh aidlc generators version typescript
+    """
+    from cdh.generators.cli import discover_all_plugins_merged
+    from cdh.generators.version import SemVer
+
+    project_root = Path(project_path).expanduser().resolve() if project_path else Path.cwd()
+    merged = discover_all_plugins_merged(project_root=project_root)
+
+    if not merged:
+        click.echo("No plugins found.")
+        return
+
+    if not name:
+        click.echo(f"{'NAME':<16} {'SOURCE':<10} {'VERSION':<12} STATUS")
+        click.echo("-" * 50)
+        for n, (source, plugin) in sorted(merged.items()):
+            version = plugin.directory.name if hasattr(plugin, 'directory') else "?"
+            click.echo(f"{n:<16} {source:<10} {version:<12} OK")
+        return
+
+    if name in merged:
+        source, plugin = merged[name]
+        click.echo(f"Plugin: {name}")
+        click.echo(f"  Source:     {source}")
+        click.echo(f"  Directory:  {plugin.directory}")
+        click.echo(f"  Template:   {plugin.template_path.name}")
+        click.echo(f"  Features:  {', '.join(plugin.supports) or '-'}")
+        try:
+            index_entry = None
+            from cdh.generators.cli import search_index
+            for e in search_index(name):
+                if e.get("name") == name:
+                    index_entry = e
+                    break
+            if index_entry:
+                click.echo(f"  Index ver: {index_entry.get('version', '?')}")
+                click.echo(f"  Author:    {index_entry.get('author', '?')}")
+        except Exception:
+            pass
+        return
+
+    click.echo(f"Plugin '{name}' not found.")
+    raise click.Abort()
+
+
+@generators_group.command("deps")
+@click.argument("name")
+@click.option("--path", "project_path", type=click.Path(path_type=Path), default=None)
+def generators_deps(name, project_path):
+    """Show dependencies and reverse-dependencies for a plugin.
+
+    \b
+    Examples:
+      cdh aidlc generators deps typescript
+    """
+    from cdh.generators.cli import discover_all_plugins_merged
+
+    project_root = Path(project_path).expanduser().resolve() if project_path else Path.cwd()
+    merged = discover_all_plugins_merged(project_root=project_root)
+
+    if name not in merged:
+        click.echo(f"Plugin '{name}' not found.")
+        raise click.Abort()
+
+    source, plugin = merged[name]
+    click.echo(f"Plugin: {name} (from {source})")
+
+    manifest_file = plugin.directory / "MANIFEST.toml"
+    if manifest_file.is_file():
+        import tomllib
+        try:
+            doc = tomllib.loads(manifest_file.read_text(encoding="utf-8"))
+            deps = doc.get("dependencies", [])
+            if deps:
+                click.echo(f"  Dependencies ({len(deps)}):")
+                for dep in deps:
+                    dep_name = dep.get("name", "?")
+                    dep_ver = dep.get("version", "*")
+                    click.echo(f"    {dep_name} {dep_ver}")
+            else:
+                click.echo("  No dependencies declared.")
+        except Exception as e:
+            click.echo(f"  (Could not parse dependencies: {e})")
+
+    click.echo("  Reverse dependencies (plugins that depend on this):")
+    reverse_deps = []
+    for other_name, (other_src, other_plugin) in merged.items():
+        if other_name == name:
+            continue
+        other_manifest = other_plugin.directory / "MANIFEST.toml"
+        if other_manifest.is_file():
+            import tomllib
+            try:
+                doc = tomllib.loads(other_manifest.read_text(encoding="utf-8"))
+                for dep in doc.get("dependencies", []):
+                    if dep.get("name") == name:
+                        reverse_deps.append(other_name)
+                        break
+            except Exception:
+                pass
+
+    if reverse_deps:
+        for rd in reverse_deps:
+            click.echo(f"    {rd}")
+    else:
+        click.echo("    (none)")
+
+
 # ── tools ────────────────────────────────────────────────────
 
 
@@ -745,6 +1602,279 @@ def tools_group():
       status               Show installation status of each tool
       update               Update installed tools to latest version
     """
+
+
+@aidlc.group("trace", short_help="Manage and export AIDLC traces (OTLP)")
+def trace_group():
+    """Manage AIDLC trace data — list, view, export via OTLP/HTTP.
+
+    The ``export`` subcommand converts agenttrace SQLite rows to OTLP/HTTP
+    JSON and ships them to a collector (Jaeger, Tempo, Honeycomb, etc.).
+
+    \b
+    Sub-commands:
+      export [--endpoint URL] [--since DATE] [--service-name NAME]
+    """
+
+
+@trace_group.command("export", short_help="Export traces to OTLP/HTTP collector")
+@click.option(
+    "--endpoint",
+    default=None,
+    help="OTLP/HTTP base endpoint (default: $OTEL_EXPORTER_OTLP_ENDPOINT or http://localhost:4318)",
+)
+@click.option(
+    "--db-path",
+    type=click.Path(),
+    default=None,
+    help="Path to the agenttrace sqlite DB (default: ~/.cdh/traces/traces.db)",
+)
+@click.option(
+    "--service-name",
+    default=None,
+    help="Value of service.name resource attribute (default: $OTEL_SERVICE_NAME or 'cdh')",
+)
+@click.option(
+    "--since",
+    default=None,
+    help="Only export rows with timestamp >= this ISO date/datetime",
+)
+@click.option(
+    "--session",
+    default=None,
+    help="Restrict export to a single session_id",
+)
+@click.option("--batch-size", type=int, default=256, show_default=True, help="Spans per HTTP POST")
+@click.option("--timeout", type=float, default=10.0, show_default=True, help="Per-request HTTP timeout (s)")
+@click.option("--dry-run", is_flag=True, help="Build payloads but don't POST")
+@click.option(
+    "--header",
+    "headers",
+    multiple=True,
+    metavar="K=V",
+    help="Extra HTTP header (repeatable), e.g. --header 'Authorization=Bearer xxx'",
+)
+def trace_export_cmd(
+    endpoint, db_path, service_name, since, session, batch_size, timeout, dry_run, headers
+):
+    """Export agenttrace spans from the local SQLite DB to an OTLP/HTTP collector.
+
+    \b
+    Examples:
+      cdh aidlc trace export
+      cdh aidlc trace export --endpoint http://tempo:4318 --since 2026-07-01
+      cdh aidlc trace export --service-name cdh-prod --dry-run
+      cdh aidlc trace export --header "Authorization=Bearer xxx"
+
+    Honors the OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_EXPORTER_OTLP_HEADERS
+    environment variables when --endpoint / --header are not supplied.
+    """
+    import os as _os
+    from cdh.trace.otel_exporter import DEFAULT_DB_PATH, OtlpExporter
+
+    eff_endpoint = endpoint or _os.environ.get(
+        "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318"
+    )
+    eff_service = service_name or _os.environ.get("OTEL_SERVICE_NAME", "cdh")
+    eff_db_path = Path(db_path).expanduser() if db_path else DEFAULT_DB_PATH
+
+    hdrs: dict[str, str] = {}
+    for h in headers:
+        if "=" in h:
+            k, v = h.split("=", 1)
+            hdrs[k.strip()] = v.strip()
+    env_hdrs = _os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
+    for part in env_hdrs.split(","):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k = k.strip()
+        if k:
+            hdrs[k] = v.strip()
+
+    exporter = OtlpExporter(
+        db_path=eff_db_path,
+        endpoint=eff_endpoint,
+        service_name=eff_service,
+        headers=hdrs,
+        batch_size=batch_size,
+        timeout_s=timeout,
+        dry_run=dry_run,
+    )
+
+    counters = exporter.export_since(since=since, session_id=session)
+    mode = "(dry-run) " if dry_run else ""
+    click.echo(
+        f"{mode}OTLP export summary: "
+        f"read={counters['read']} sent={counters['sent']} "
+        f"failed={counters['failed']} batches={counters['batches']}"
+    )
+    if not dry_run and counters["failed"] > 0:
+        raise click.Abort()
+
+
+@trace_group.command("logs", short_help="Export logs to OTLP/HTTP collector")
+@click.option(
+    "--endpoint",
+    default=None,
+    help="OTLP/HTTP endpoint (default: $OTEL_EXPORTER_OTLP_ENDPOINT or http://localhost:4318)",
+)
+@click.option(
+    "--log-file",
+    type=click.Path(),
+    default=None,
+    help="Path to the NDJSON log file (default: ~/.cdh/logs/app.jsonl)",
+)
+@click.option(
+    "--since",
+    default=None,
+    help="ISO date/datetime; only export logs after this timestamp",
+)
+@click.option(
+    "--min-level",
+    type=click.Choice(["DEBUG", "INFO", "WARN", "ERROR", "FATAL"]),
+    default="DEBUG",
+    help="Minimum log level to export",
+)
+@click.option("--dry-run", is_flag=True, help="Show what would be exported without sending")
+def trace_logs_cmd(endpoint, log_file, since, min_level, dry_run):
+    """Export structured CDH logs to an OTLP/HTTP collector.
+
+    Logs are written as NDJSON to ~/.cdh/logs/app.jsonl. This command
+    converts them to OTLP logs format and ships them to a collector.
+
+    \b
+    Examples:
+      cdh aidlc trace logs
+      cdh aidlc trace logs --endpoint http://tempo:4318 --min-level WARN
+      cdh aidlc trace logs --dry-run
+    """
+    import os as _os
+    from datetime import datetime, timezone as _tz
+    from pathlib import Path as _Path
+
+    from cdh.logging import LogLevel, export_logs
+
+    eff_endpoint = endpoint or _os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    log_path = _Path(log_file).expanduser() if log_file else None
+
+    since_dt = None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError:
+            since_dt = None
+
+    level = LogLevel[min_level.upper()]
+
+    counters = export_logs(
+        log_file=log_path,
+        since=since_dt,
+        min_level=level,
+        endpoint=eff_endpoint,
+        dry_run=dry_run,
+    )
+
+    mode = "(dry-run) " if dry_run else ""
+    click.echo(
+        f"{mode}Log export summary: "
+        f"read={counters['read']} exported={counters['exported']} "
+        f"failed={counters['failed']}"
+    )
+    if not dry_run and counters["failed"] > 0:
+        raise click.Abort()
+
+
+@trace_group.command("tail", short_help="Tail live CDH log stream")
+@click.option("--lines", "-n", type=int, default=50, help="Number of recent lines to show")
+@click.option("--follow", "-f", is_flag=True, help="Follow log file (like tail -f)")
+@click.option("--level", type=click.Choice(["DEBUG", "INFO", "WARN", "ERROR"]), default="INFO", help="Minimum level")
+def trace_tail_cmd(lines, follow, level):
+    """Tail recent CDH log entries or follow live.
+
+    \b
+    Examples:
+      cdh aidlc trace tail
+      cdh aidlc trace tail -n 100 -f
+      cdh aidlc trace tail --level ERROR
+    """
+    import os as _os
+    from pathlib import Path as _Path
+
+    from cdh.logging import DEFAULT_LOG_DIR, DEFAULT_LOG_FILE, LogLevel
+
+    log_path = _Path(os.environ.get("CDH_LOG_DIR", str(DEFAULT_LOG_DIR))) / DEFAULT_LOG_FILE
+
+    if not log_path.exists():
+        click.echo(f"No log file found at {log_path}", err=True)
+        return
+
+    import threading
+    import time
+
+    min_level = LogLevel[level.upper()].python_level
+
+    def _tail():
+        with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+            if not follow:
+                # Show last N lines
+                all_lines = fh.readlines()
+                for line in all_lines[-lines:]:
+                    _print_line(line, min_level)
+                return
+
+            # Follow mode
+            fh.seek(0, 2)
+            while True:
+                line = fh.readline()
+                if not line:
+                    time.sleep(0.1)
+                    continue
+                _print_line(line, min_level)
+
+    def _print_line(line, min_level):
+        import logging
+        try:
+            import json
+            rec = json.loads(line.strip())
+            level_str = rec.get("severityText", "INFO")
+            level_map = {"DEBUG": logging.DEBUG, "INFO": logging.INFO, "WARN": logging.WARNING, "ERROR": logging.ERROR, "FATAL": logging.CRITICAL}
+            if level_map.get(level_str, logging.INFO) < min_level:
+                return
+            ts = rec.get("timeUnixNano", "")
+            if ts:
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromtimestamp(int(ts[:10]) / 1e9, tz=_tz.utc)
+                    ts = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                except Exception:
+                    ts = ts[:10]
+            body = rec.get("body", "")
+            attrs = {a["key"]: _attr_value(a["value"]) for a in rec.get("attributes", []) if a["key"].startswith("cdh.")}
+            fr_id = attrs.get("cdh.fr_id", "")
+            session = attrs.get("cdh.session_id", "")
+            extra = []
+            if fr_id:
+                extra.append(fr_id)
+            if session:
+                extra.append(session[:8])
+            extra_str = f" [{', '.join(extra)}]" if extra else ""
+            click.echo(f"{ts} {level_str:5} {body}{extra_str}")
+        except Exception:
+            pass
+
+    def _attr_value(v):
+        for k in ("stringValue", "intValue", "doubleValue", "boolValue"):
+            if k in v:
+                return v[k]
+        return str(v)
+
+    if follow:
+        t = threading.Thread(target=_tail, daemon=True)
+        t.start()
+        t.join()
+    else:
+        _tail()
 
 
 @tools_group.command("install")
@@ -794,15 +1924,69 @@ def tools_update(path):
         click.echo("All tools are up to date")
 
 
+@tools_group.command("test")
+@click.argument("path", required=False, default=".")
+@click.option("--tool", default=None, help="Test specific tool: generate_shared, contract_diff, deploy_stack")
+def tools_test(path, tool):
+    """Run self-tests for installed AIDLC tools."""
+    import subprocess
+    import sys
+    target = Path(path).expanduser().resolve()
+    tools_dir = target / "aidlc" / "tools"
+    if not tools_dir.exists():
+        click.echo("No tools directory found. Run 'cdh aidlc tools install' first.")
+        raise click.Abort()
+
+    tools_to_test = ["generate_shared", "contract_diff", "deploy_stack"]
+    if tool:
+        if tool not in tools_to_test:
+            click.echo(f"Unknown tool: {tool}")
+            raise click.Abort()
+        tools_to_test = [tool]
+
+    all_passed = True
+    for t in tools_to_test:
+        tool_file = tools_dir / f"{t}.py"
+        if not tool_file.exists():
+            click.echo(f"  ✗ {t}: not installed")
+            all_passed = False
+            continue
+        # Run tool with --self-test or -h to verify it runs
+        try:
+            result = subprocess.run(
+                [sys.executable, str(tool_file), "--help"],
+                capture_output=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                click.echo(f"  ✓ {t}: runs successfully")
+            else:
+                click.echo(f"  ✗ {t}: failed (exit code {result.returncode})")
+                if result.stderr:
+                    click.echo(f"    stderr: {result.stderr.decode()[:200]}")
+                all_passed = False
+        except subprocess.TimeoutExpired:
+            click.echo(f"  ✗ {t}: timeout")
+            all_passed = False
+        except Exception as e:
+            click.echo(f"  ✗ {t}: error - {e}")
+            all_passed = False
+
+    if not all_passed:
+        raise click.Abort()
+
+
 # ── status ───────────────────────────────────────────────────
 
 
 @aidlc.command("status")
 @click.argument("path", required=False, default=".")
-def status_cmd(path):
+@click.option("--with-history", is_flag=True, help="Include last 5 validate runs")
+def status_cmd(path, with_history):
     """Show AIDLC project health overview.
 
     Aggregates phase, gates, tools status, and basic project info.
+    Use --with-history to include the last 5 validate runs.
     """
     from cdh.project_loader import CdhProjectLoader
 
@@ -859,6 +2043,20 @@ def status_cmd(path):
     else:
         click.echo("  Tools:  aidlc/tools/ not found")
 
+    if with_history:
+        history = CdhProjectLoader.get_validate_history(cdh_dir)
+        if history:
+            recent = history[-5:]
+            click.echo("\n  Validate history (last 5):")
+            click.echo(f"    {'TIMESTAMP':<22}  {'PASS':<6}  {'DUR(ms)':<8}")
+            for entry in recent:
+                ts = entry.get("timestamp", "?")
+                passed = "✓" if entry.get("passed") else "✗"
+                dur = entry.get("duration_ms", 0)
+                click.echo(f"    {ts:<22}  {passed:<6}  {dur:<8}")
+        else:
+            click.echo("\n  Validate history: (none recorded)")
+
 
 # ── config ───────────────────────────────────────────────────
 
@@ -867,14 +2065,41 @@ def status_cmd(path):
 def config_group():
     """Manage AIDLC project configuration (project.yaml).
 
+    \b
     Sub-commands:
-      show              Display current configuration
-      component <id>    Add a component to the project
-      provider <name>   Set the cloud provider (tcb|aliyun)
+      show                Display current configuration
+      component <id>      Add a component to the project
+      provider <name>     Set the cloud provider (tcb|aliyun)
+      list                List all components (kind/tech/owns/fr_prefix)
+      rm <component-id>   Remove a component and delete apps/<owns>/
+      diff <other-path>   Show diff of components/configs vs another project
+      validate            Validate project.yaml schema & FR prefix consistency
+      export <file>       Export effective config as JSON
+      import <file>       Import config from JSON
+      provider aliyun     Generate aidlc/providers/aliyun/ templates if missing
     """
 
 
-@config_group.command("show")
+@config_group.command("validate-state")
+@click.argument("path", required=False, default=".")
+def config_validate_state(path):
+    """Validate .cdh/state.json against its JSON Schema."""
+    from cdh.project_loader import CdhProjectLoader
+    target = Path(path).expanduser().resolve()
+    cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+    if cdh_dir is None:
+        click.echo("No .cdh/ directory found.")
+        raise click.Abort()
+    valid, errors = CdhProjectLoader.validate_state_schema(cdh_dir)
+    if valid:
+        click.echo("state.json: valid")
+        return
+    click.echo("state.json: invalid")
+    for error in errors:
+        click.echo(f"- {error}")
+    raise click.Abort()
+
+
 @click.argument("path", required=False, default=".")
 def config_show(path):
     """Display the current AIDLC project configuration."""
@@ -930,6 +2155,362 @@ def config_provider(provider, path):
     else:
         click.echo(f"Provider set to: {provider}")
         click.echo("  (aidlc/providers/ directory not scaffolded — run init with --with-ci)")
+
+
+@config_group.command("list")
+@click.argument("path", required=False, default=".")
+def config_list(path):
+    """List all components with kind/tech/owns/fr_prefix."""
+    target = Path(path).expanduser().resolve()
+    yaml_path = target / "aidlc" / "project.yaml"
+    if not yaml_path.exists():
+        click.echo("aidlc/project.yaml not found")
+        return
+    import yaml
+    data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+    comps = data.get("stack", {}).get("components", []) or []
+    if not comps:
+        click.echo("(no components defined)")
+        return
+    click.echo(f"{'ID':<10} {'KIND':<14} {'TECH':<10} {'OWNS':<22} {'FR_PREFIX'}")
+    click.echo("-" * 70)
+    for c in comps:
+        click.echo(
+            f"{c.get('id', '?'):<10} "
+            f"{c.get('kind', '?'):<14} "
+            f"{c.get('tech', '?'):<10} "
+            f"{c.get('owns', '?'):<22} "
+            f"{c.get('fr_prefix', '?')}"
+        )
+
+
+@config_group.command("rm")
+@click.argument("component_id")
+@click.argument("path", required=False, default=".")
+@click.option("--keep-files", is_flag=True, help="Don't delete apps/<owns>/ on disk")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+def config_rm(component_id, path, keep_files, yes):
+    """Remove a component from project.yaml and delete apps/<owns>/."""
+    target = Path(path).expanduser().resolve()
+    yaml_path = target / "aidlc" / "project.yaml"
+    if not yaml_path.exists():
+        click.echo("aidlc/project.yaml not found")
+        raise click.Abort()
+    import yaml
+    data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+    comps = data.get("stack", {}).get("components", []) or []
+
+    match = next((c for c in comps if c.get("id") == component_id), None)
+    if match is None:
+        click.echo(f"Component '{component_id}' not found in project.yaml")
+        raise click.Abort()
+
+    owns = match.get("owns", "")
+    if owns and (target / owns).exists() and not keep_files:
+        if not yes:
+            click.confirm(
+                f"Delete directory '{owns}/' and all its contents?",
+                abort=True,
+            )
+
+    comps = [c for c in comps if c.get("id") != component_id]
+    data["stack"]["components"] = comps
+    yaml_path.write_text(yaml.dump(data, default_flow_style=False), encoding="utf-8")
+
+    deleted = False
+    if owns and not keep_files:
+        import shutil
+        target_dir = target / owns
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+            deleted = True
+
+    click.echo(f"Component '{component_id}' removed from project.yaml")
+    if deleted:
+        click.echo(f"  Deleted directory: {owns}/")
+    elif keep_files and owns:
+        click.echo(f"  Kept directory: {owns}/ (--keep-files)")
+
+
+@config_group.command("diff")
+@click.argument("other_path")
+@click.argument("path", required=False, default=".")
+def config_diff(other_path, path):
+    """Show difference of components/configs between two AIDLC projects."""
+    left = Path(path).expanduser().resolve()
+    right = Path(other_path).expanduser().resolve()
+
+    left_yaml = left / "aidlc" / "project.yaml"
+    right_yaml = right / "aidlc" / "project.yaml"
+
+    if not left_yaml.exists():
+        click.echo(f"Left project missing: {left_yaml}")
+        raise click.Abort()
+    if not right_yaml.exists():
+        click.echo(f"Right project missing: {right_yaml}")
+        raise click.Abort()
+
+    import yaml
+    left_data = yaml.safe_load(left_yaml.read_text(encoding="utf-8")) or {}
+    right_data = yaml.safe_load(right_yaml.read_text(encoding="utf-8")) or {}
+
+    left_comps = {c.get("id"): c for c in left_data.get("stack", {}).get("components", []) or []}
+    right_comps = {c.get("id"): c for c in right_data.get("stack", {}).get("components", []) or []}
+
+    click.echo(f"Diff: {left} vs {right}")
+    click.echo("=" * 70)
+
+    only_left = sorted(set(left_comps) - set(right_comps))
+    only_right = sorted(set(right_comps) - set(left_comps))
+    common = sorted(set(left_comps) & set(right_comps))
+
+    if only_left:
+        click.echo(f"Only in {left.name}:")
+        for cid in only_left:
+            click.echo(f"  - {cid}")
+    if only_right:
+        click.echo(f"Only in {right.name}:")
+        for cid in only_right:
+            click.echo(f"  + {cid}")
+
+    changed_comps = [cid for cid in common if left_comps[cid] != right_comps[cid]]
+    if changed_comps:
+        click.echo("Changed components:")
+        for cid in changed_comps:
+            click.echo(f"  ~ {cid}")
+            l, r = left_comps[cid], right_comps[cid]
+            for key in sorted(set(l) | set(r)):
+                if l.get(key) != r.get(key):
+                    click.echo(f"      {key}: {l.get(key)!r} -> {r.get(key)!r}")
+
+    left_cross = left_data.get("stack", {}).get("cross_cutting", {}) or {}
+    right_cross = right_data.get("stack", {}).get("cross_cutting", {}) or {}
+    cross_changed = [
+        k for k in (set(left_cross) | set(right_cross))
+        if left_cross.get(k) != right_cross.get(k)
+    ]
+    if cross_changed:
+        click.echo("Cross-cutting changed:")
+        for key in cross_changed:
+            click.echo(f"  ~ {key}: {left_cross.get(key)!r} -> {right_cross.get(key)!r}")
+
+    if not (only_left or only_right or changed_comps or cross_changed):
+        click.echo("(no differences — projects are equivalent)")
+
+
+@config_group.command("validate")
+@click.argument("path", required=False, default=".")
+def config_validate(path):
+    """Validate project.yaml schema and FR prefix consistency."""
+    target = Path(path).expanduser().resolve()
+    yaml_path = target / "aidlc" / "project.yaml"
+    if not yaml_path.exists():
+        click.echo("aidlc/project.yaml not found")
+        raise click.Abort()
+
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    import yaml
+    try:
+        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as e:
+        click.echo(f"YAML parse error: {e}")
+        raise click.Abort()
+
+    if not isinstance(data, dict):
+        errors.append("top-level must be a mapping")
+        data = {}
+
+    if "name" not in data:
+        warnings.append("missing top-level 'name'")
+    if "stack" not in data:
+        errors.append("missing top-level 'stack'")
+    else:
+        stack = data["stack"]
+        if not isinstance(stack, dict):
+            errors.append("'stack' must be a mapping")
+        else:
+            comps = stack.get("components", []) or []
+            if not isinstance(comps, list):
+                errors.append("'stack.components' must be a list")
+            else:
+                seen_ids: set[str] = set()
+                seen_prefixes: dict[str, str] = {}
+                for i, c in enumerate(comps):
+                    if not isinstance(c, dict):
+                        errors.append(f"components[{i}] must be a mapping")
+                        continue
+                    cid = c.get("id")
+                    fp = c.get("fr_prefix")
+                    if not cid:
+                        errors.append(f"components[{i}] missing 'id'")
+                    elif cid in seen_ids:
+                        errors.append(f"duplicate component id: {cid}")
+                    else:
+                        seen_ids.add(cid)
+                    if not fp:
+                        errors.append(f"components[{i}] ({cid}) missing 'fr_prefix'")
+                    else:
+                        if fp in seen_prefixes and seen_prefixes[fp] != cid:
+                            warnings.append(
+                                f"fr_prefix '{fp}' shared by '{seen_prefixes[fp]}' and '{cid}'"
+                            )
+                        seen_prefixes[fp] = cid or f"#{i}"
+                    for key in ("kind", "owns", "tech"):
+                        if not c.get(key):
+                            warnings.append(f"components[{i}] ({cid}) missing '{key}'")
+            cc = stack.get("cross_cutting", {}) or {}
+            if cc and "fr_prefix" in cc:
+                cc_fp = cc["fr_prefix"]
+                for cid, comp in zip(
+                    [c.get("id") for c in comps if isinstance(c, dict)],
+                    [c.get("fr_prefix") for c in comps if isinstance(c, dict)],
+                ):
+                    if comp and comp == cc_fp:
+                        errors.append(
+                            f"component '{cid}' uses cross-cutting fr_prefix '{cc_fp}'"
+                        )
+
+    if errors:
+        click.echo("✗ Validation FAILED")
+        for e in errors:
+            click.echo(f"  ERROR: {e}")
+        for w in warnings:
+            click.echo(f"  WARN:  {w}")
+        raise click.Abort()
+
+    click.echo("✓ Validation passed")
+    if warnings:
+        click.echo(f"  ({len(warnings)} warning(s))")
+        for w in warnings:
+            click.echo(f"  WARN:  {w}")
+
+
+@config_group.command("export")
+@click.argument("output_file")
+@click.argument("path", required=False, default=".")
+def config_export(output_file, path):
+    """Export effective config as JSON."""
+    import json
+    from cdh.project_loader import CdhProjectLoader
+
+    target = Path(path).expanduser().resolve()
+    yaml_path = target / "aidlc" / "project.yaml"
+    if not yaml_path.exists():
+        click.echo("aidlc/project.yaml not found")
+        raise click.Abort()
+
+    out = Path(output_file).expanduser().resolve()
+    import yaml
+    data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+
+    cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+    if cdh_dir is not None:
+        cdh_config = CdhProjectLoader.load_project_config(cdh_dir)
+        if cdh_config:
+            data["_cdh"] = cdh_config
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    click.echo(f"Exported config to {out}")
+
+
+@config_group.command("import")
+@click.argument("input_file")
+@click.argument("path", required=False, default=".")
+@click.option("--merge", is_flag=True, help="Merge into existing project.yaml instead of replacing")
+def config_import(input_file, path, merge):
+    """Import config from a JSON file produced by `config export`."""
+    import json
+    target = Path(path).expanduser().resolve()
+    src = Path(input_file).expanduser().resolve()
+    if not src.exists():
+        click.echo(f"Input file not found: {src}")
+        raise click.Abort()
+
+    payload = json.loads(src.read_text(encoding="utf-8"))
+    payload.pop("_cdh", None)
+
+    yaml_path = target / "aidlc" / "project.yaml"
+    if not yaml_path.exists():
+        click.echo(f"aidlc/project.yaml not found at {target}")
+        raise click.Abort()
+
+    import yaml
+    if merge:
+        existing = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+
+        def deep_merge(dst: dict, src_dict: dict) -> dict:
+            for k, v in src_dict.items():
+                if isinstance(v, dict) and isinstance(dst.get(k), dict):
+                    deep_merge(dst[k], v)
+                else:
+                    dst[k] = v
+            return dst
+
+        existing = deep_merge(existing, payload)
+        out_data = existing
+    else:
+        out_data = payload
+
+    yaml_path.write_text(yaml.dump(out_data, default_flow_style=False), encoding="utf-8")
+    click.echo(
+        f"Imported config from {src} ({'merged' if merge else 'replaced'}) into {yaml_path}"
+    )
+
+
+@config_group.command("provider-templates")
+@click.argument("provider", type=click.Choice(["aliyun", "tcb"]))
+@click.argument("path", required=False, default=".")
+def config_provider_templates(provider, path):
+    """Generate aidlc/providers/<name>/ templates if missing (e.g. aliyun)."""
+    target = Path(path).expanduser().resolve()
+    yaml_path = target / "aidlc" / "project.yaml"
+    if not yaml_path.exists():
+        click.echo("aidlc/project.yaml not found. Run 'cdh aidlc project init' first.")
+        raise click.Abort()
+
+    from cdh.scaffold import (
+        ALIYUN_PROVIDER_YAML,
+        ALIYUN_DEPLOYMENT_YAML,
+        ALIYUN_PREVIEW_YAML,
+        TCB_PROVIDER_YAML,
+        TCB_DEPLOYMENT_YAML,
+        TCB_PREVIEW_YAML,
+    )
+
+    templates = {
+        "aliyun": ("provider.yaml", ALIYUN_PROVIDER_YAML,
+                   "deployment.yaml", ALIYUN_DEPLOYMENT_YAML,
+                   "preview.yaml", ALIYUN_PREVIEW_YAML),
+        "tcb": ("provider.yaml", TCB_PROVIDER_YAML,
+                "deployment.yaml", TCB_DEPLOYMENT_YAML,
+                "preview.yaml", TCB_PREVIEW_YAML),
+    }[provider]
+
+    out_dir = target / "aidlc" / "providers" / provider
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    written: list[str] = []
+    skipped: list[str] = []
+    for fname, content in (
+        (templates[0], templates[1]),
+        (templates[2], templates[3]),
+        (templates[4], templates[5]),
+    ):
+        target_file = out_dir / fname
+        if target_file.exists():
+            skipped.append(fname)
+            continue
+        target_file.write_text(content, encoding="utf-8")
+        written.append(fname)
+
+    click.echo(f"aidlc/providers/{provider}/:")
+    for f in written:
+        click.echo(f"  + {f}  (created)")
+    for f in skipped:
+        click.echo(f"  = {f}  (already exists, kept)")
 
 
 # --- session command ---

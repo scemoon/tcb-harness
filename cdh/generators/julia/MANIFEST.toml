@@ -1,0 +1,14 @@
+# Plugin manifest for julia
+[plugin]
+name = "julia"
+display_name = "Julia"
+file_extension = ".jl"
+mime_type = "text/x-julia"
+default_outdir = "julia"
+output_filename_template = "{name}}.jl"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

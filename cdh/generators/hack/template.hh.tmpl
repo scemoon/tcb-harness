@@ -1,0 +1,24 @@
+// Auto-generated from {{.SourceFile}}
+<?hh // strict
+
+namespace Types;
+
+{{range .Types}}
+class {{.Name}} {
+{{range .Properties}}  public function get{{.Name}}(): {{if .IsNullable}}?string{{else}}string{{end}} { return $this->{{.Name}}; }
+  private {{if .IsNullable}}?string{{else}}string{{end}} ${{.Name}};
+{{end}}
+
+  public static function fromJSON(array<string, mixed> $json): {{.Name}} {
+    return new {{.Name}}(
+{{range .Properties}}      $json['{{.JsonName}}'] ?? null,
+{{end}}    );
+  }
+
+  public function toJSON(): array<string, mixed> {
+    return [
+{{range .Properties}}      '{{.JsonName}}' => $this->{{.Name}},
+{{end}}    ];
+  }
+}
+{{end}}

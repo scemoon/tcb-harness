@@ -6,897 +6,1316 @@
 <title>CDH Trace Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
+:root {
+  --bg-base: #090d13;
+  --bg-sidebar: #0d1117;
+  --bg-card: #161b22;
+  --bg-hover: #1c2128;
+  --bg-active: #21262d;
+  --border: #30363d;
+  --border-light: #3d444d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+  --accent: #58a6ff;
+  --accent-hover: #79c0ff;
+  --green: #3fb950;
+  --yellow: #d29922;
+  --red: #f85149;
+  --purple: #a78bfa;
+  --orange: #f78166;
+  --cyan: #39d353;
+}
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #e6edf3; font-size: 14px; }
-a { color: #58a6ff; text-decoration: none; }
-a:hover { color: #79c0ff; }
-
-/* Nav */
-nav { display: flex; gap: 0; background: #161b22; border-bottom: 1px solid #30363d; padding: 0 16px; position: sticky; top: 0; z-index: 100; overflow-x: auto; }
-nav a { padding: 12px 16px; color: #8b949e; font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; white-space: nowrap; }
-nav a:hover { color: #e6edf3; }
-nav a.active { color: #f78166; border-bottom-color: #f78166; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg-base); color: var(--text-primary); font-size: 14px; height: 100vh; overflow: hidden; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); }
 
 /* Layout */
-.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-.page { display: none; }
-.page.active { display: block; }
+.app { display: flex; height: 100vh; }
+
+/* Sidebar */
+.sidebar { width: 220px; background: var(--bg-sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+.sidebar-header { padding: 16px; border-bottom: 1px solid var(--border); }
+.sidebar-logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1rem; color: var(--text-primary); }
+.sidebar-logo svg { width: 24px; height: 24px; color: var(--accent); }
+.sidebar-nav { flex: 1; padding: 12px 8px; overflow-y: auto; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 6px; color: var(--text-secondary); font-size: 0.875rem; cursor: pointer; transition: all 0.15s; margin-bottom: 2px; }
+.nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.nav-item.active { background: var(--bg-active); color: var(--accent); }
+.nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+.nav-item .count { margin-left: auto; font-size: 0.72rem; background: var(--bg-active); padding: 2px 8px; border-radius: 10px; color: var(--text-muted); }
+.nav-section { font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 16px 12px 8px; }
+
+/* Main Content */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* Top Bar */
+.topbar { height: 56px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 20px; gap: 16px; flex-shrink: 0; }
+.topbar-title { font-size: 0.875rem; color: var(--text-secondary); }
+.topbar-title strong { color: var(--text-primary); font-weight: 600; }
+.time-selector { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.time-selector button { background: var(--bg-card); border: 1px solid var(--border); color: var(--text-secondary); padding: 6px 12px; border-radius: 6px; font-size: 0.78rem; cursor: pointer; transition: all 0.15s; }
+.time-selector button:hover { border-color: var(--accent); color: var(--text-primary); }
+.time-selector button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.refresh-btn { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-secondary); padding: 6px 12px; border-radius: 6px; font-size: 0.78rem; cursor: pointer; box-sizing: border-box; height: 32px; outline: none; }
+.refresh-btn:hover { border-color: var(--accent); }
+.refresh-btn:focus { border-color: var(--accent); }
+.refresh-btn:active { border-color: var(--accent); transform: scale(0.98); }
+.refresh-btn.loading { opacity: 0.7; pointer-events: none; }
+.refresh-btn.loading svg { animation: spin 1s linear infinite; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* Content Area */
+.content { flex: 1; overflow-y: auto; padding: 20px; }
+
+/* Dashboard Grid */
+.dashboard { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
 
 /* Cards */
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
-.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px 16px; }
-.card-num { font-size: 1.6rem; font-weight: 700; color: #58a6ff; line-height: 1.2; }
-.card-label { font-size: 0.75rem; color: #8b949e; margin-top: 2px; }
-.card-sub { font-size: 0.75rem; color: #8b949e; margin-top: 4px; }
-.card.warn .card-num { color: #d29922; }
-.card.danger .card-num { color: #f85149; }
-.card.success .card-num { color: #3fb950; }
+.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.card-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.card-title { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; font-weight: 600; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.3px; }
+.card-title .dot { width: 8px; height: 8px; border-radius: 50%; }
+.card-body { padding: 16px; }
+.card-body.no-padding { padding: 0; }
+.card-footer { padding: 12px 16px; border-top: 1px solid var(--border); background: var(--bg-hover); }
 
-/* Charts */
-.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
-.chart-box { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
-.chart-box h3 { font-size: 0.85rem; color: #8b949e; margin-bottom: 12px; font-weight: 500; }
-.chart-box.full { grid-column: 1 / -1; }
-.chart-box { position: relative; }
-.chart-box canvas { max-height: 250px; height: 250px !important; width: 100% !important; }
-#chart-tools { max-height: 200px !important; height: 200px !important; }
-#chart-cost { max-height: 200px !important; height: 200px !important; }
+/* Grid spans */
+.col-3 { grid-column: span 3; }
+.col-4 { grid-column: span 4; }
+.col-6 { grid-column: span 6; }
+.col-8 { grid-column: span 8; }
+.col-12 { grid-column: span 12; }
 
-/* Table */
-.table-wrap { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #21262d; color: #8b949e; font-weight: 600; white-space: nowrap; cursor: pointer; }
-td { padding: 6px 10px; border-bottom: 1px solid #21262d; white-space: nowrap; }
-tr:hover td { background: #161b22; }
-tr.clickable { cursor: pointer; }
+/* Stat Cards */
+.stat-card { padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.stat-card .stat-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px; }
+.stat-card .stat-value { font-size: 1.75rem; font-weight: 700; color: var(--text-primary); line-height: 1; }
+.stat-card .stat-value.accent { color: var(--accent); }
+.stat-card .stat-value.green { color: var(--green); }
+.stat-card .stat-value.yellow { color: var(--yellow); }
+.stat-card .stat-value.red { color: var(--red); }
+.stat-card .stat-value.purple { color: var(--purple); }
+.stat-card .stat-value.orange { color: var(--orange); }
+.stat-card .stat-sub { font-size: 0.75rem; color: var(--text-muted); }
+.stat-card .stat-trend { display: inline-flex; align-items: center; gap: 4px; font-size: 0.72rem; padding: 2px 8px; border-radius: 12px; margin-top: 4px; }
+.stat-card .stat-trend.up { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+.stat-card .stat-trend.down { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+
+/* Tables */
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.data-table th { text-align: left; padding: 10px 14px; background: var(--bg-hover); color: var(--text-muted); font-weight: 600; font-size: 0.7rem; text-transform: uppercase; white-space: nowrap; border-bottom: 1px solid var(--border); }
+.data-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.data-table tr:hover td { background: var(--bg-hover); }
+.data-table tr:last-child td { border-bottom: none; }
+.data-table td.truncate { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 
 /* Badges */
-.badge { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 0.72rem; font-weight: 600; }
-.badge-acp { background: #1f6feb33; color: #58a6ff; }
-.badge-acp_event { background: #23863633; color: #3fb950; }
-.badge-lifecycle { background: #9e6a0333; color: #d29922; }
-.badge-complete { background: #8b5cf633; color: #a78bfa; }
-.badge-start { background: #1f6feb22; color: #58a6ff; }
-.badge-end { background: #f8514922; color: #f85149; }
-.badge-success { background: #23863633; color: #3fb950; }
-.badge-error { background: #f8514933; color: #f85149; }
-.badge-failed { background: #f8514933; color: #f85149; }
-.badge-default { background: #21262d; color: #8b949e; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+.badge-blue { background: rgba(88, 166, 255, 0.15); color: var(--accent); }
+.badge-green { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+.badge-yellow { background: rgba(210, 153, 34, 0.15); color: var(--yellow); }
+.badge-red { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+.badge-purple { background: rgba(167, 139, 250, 0.15); color: var(--purple); }
+.badge-orange { background: rgba(247, 129, 102, 0.15); color: var(--orange); }
+.badge-gray { background: var(--bg-active); color: var(--text-secondary); }
+.badge-tag { background: rgba(167, 139, 250, 0.12); color: var(--purple); margin: 2px; }
+
+/* Status indicators */
+.status-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.status-dot.green { background: var(--green); }
+.status-dot.red { background: var(--red); }
+.status-dot.yellow { background: var(--yellow); }
+
+/* Progress bars */
+.progress-bar { height: 4px; background: var(--bg-active); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+.progress-bar .fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+.progress-bar .fill.blue { background: var(--accent); }
+.progress-bar .fill.green { background: var(--green); }
+.progress-bar .fill.purple { background: var(--purple); }
+
+/* Percentile cards */
+.percentile-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.percentile-item { text-align: center; padding: 12px; background: var(--bg-hover); border-radius: 6px; }
+.percentile-item .val { font-size: 1.4rem; font-weight: 700; }
+.percentile-item .val.p50 { color: var(--accent); }
+.percentile-item .val.p95 { color: var(--purple); }
+.percentile-item .val.p99 { color: var(--orange); }
+.percentile-item .label { font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; margin-top: 4px; }
+
+/* Chart containers */
+.chart-container { position: relative; height: 200px; }
+.chart-container.tall { height: 280px; }
+.chart-container.short { height: 160px; }
+
+/* List items */
+.list-item { display: flex; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); gap: 12px; }
+.list-item:last-child { border-bottom: none; }
+.list-item:hover { background: var(--bg-hover); }
+.list-item .icon { width: 32px; height: 32px; border-radius: 6px; background: var(--bg-active); display: flex; align-items: center; justify-content: center; color: var(--text-muted); }
+.list-item .content { flex: 1; min-width: 0; }
+.list-item .title { font-size: 0.82rem; color: var(--text-primary); font-weight: 500; }
+.list-item .sub { font-size: 0.72rem; color: var(--text-muted); }
+.list-item .value { font-size: 0.82rem; color: var(--text-primary); font-weight: 600; text-align: right; }
+
+/* Tags cloud */
+.tags-cloud { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 14px; }
 
 /* Filters */
-.filters { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
-.filters select, .filters input { background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 5px 10px; font-size: 0.82rem; }
-.filters input { flex: 1; min-width: 150px; }
-.filters label { color: #8b949e; font-size: 0.78rem; }
-.btn { background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 5px 12px; font-size: 0.82rem; cursor: pointer; }
-.btn:hover { background: #30363d; }
-.btn-primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
-.btn-primary:hover { background: #388bfd; }
-.btn-danger { background: #da3633; border-color: #da3633; color: #fff; }
-.pagination { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 0.82rem; color: #8b949e; }
+.filter-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 12px 16px; background: var(--bg-hover); border-radius: 6px; margin-bottom: 16px; }
+.filter-bar select, .filter-bar input { background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); padding: 6px 10px; border-radius: 4px; font-size: 0.8rem; }
+.filter-bar select:focus, .filter-bar input:focus { outline: none; border-color: var(--accent); }
+.filter-bar label { font-size: 0.78rem; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
 
-/* Session Detail */
-.sesh-header { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-.sesh-header h2 { font-size: 1rem; color: #e6edf3; margin-bottom: 8px; }
-.sesh-meta { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; font-size: 0.82rem; }
-.sesh-meta dt { color: #8b949e; font-size: 0.72rem; text-transform: uppercase; }
-.sesh-meta dd { color: #e6edf3; }
-
-/* Call tree */
-.tree { font-size: 0.82rem; font-family: 'SF Mono', 'Fira Code', monospace; }
-.tree-node { border-left: 2px solid #30363d; margin: 2px 0; padding: 4px 0 4px 12px; cursor: pointer; }
-.tree-node:hover { border-left-color: #58a6ff; background: #161b22; border-radius: 0 4px 4px 0; }
-.tree-node.error { border-left-color: #f85149; }
-.tree-bar { display: inline-block; height: 16px; border-radius: 2px; margin-right: 8px; vertical-align: middle; min-width: 4px; background: #1f6feb; }
-.tree-bar.acp_event { background: #3fb950; }
-.tree-bar.error { background: #f85149; }
-
-/* Timeline */
-.timeline { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.78rem; margin-top: 4px; }
-.tl-row { display: flex; align-items: center; height: 22px; border-bottom: 1px solid #161b22; }
-.tl-label { flex: 0 0 220px; color: #8b949e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; cursor: pointer; }
-.tl-label:hover { color: #58a6ff; }
-.tl-track { position: relative; flex: 1 1 auto; height: 14px; background: #0d1117; border-radius: 3px; overflow: hidden; }
-.tl-bar { position: absolute; top: 1px; height: 12px; border-radius: 2px; min-width: 2px; background: #1f6feb; cursor: pointer; }
-.tl-bar.acp_event { background: #3fb950; }
-.tl-bar.error { background: #f85149; }
-.tl-axis { display: flex; flex: 1 1 auto; color: #6e7681; font-size: 0.7rem; margin-top: 2px; }
-.tl-axis span { flex: 1; text-align: left; }
-.tl-axis span:last-child { text-align: right; }
-
-/* Span detail */
-.span-detail { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; margin-top: 8px; }
-.span-detail h4 { font-size: 0.85rem; color: #58a6ff; margin-bottom: 8px; }
-.span-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; font-size: 0.8rem; }
-.span-detail-grid dt { color: #8b949e; }
-.span-detail-grid dd { color: #e6edf3; }
-.raw-json { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-family: 'SF Mono', monospace; font-size: 0.78rem; white-space: pre-wrap; max-height: 300px; overflow: auto; margin-top: 8px; display: none; }
-
-/* Error list */
-.error-list { margin-top: 12px; }
-.error-item { padding: 6px 10px; background: #f8514911; border-left: 3px solid #f85149; border-radius: 0 4px 4px 0; margin-bottom: 4px; font-size: 0.82rem; }
-.error-item .func { color: #f78166; }
-
-/* Notes */
-.note-item { padding: 6px 10px; background: #1f6feb11; border-left: 3px solid #58a6ff; border-radius: 0 4px 4px 0; margin-bottom: 4px; font-size: 0.82rem; }
-.note-item .time { color: #8b949e; margin-right: 8px; }
-
-/* Compare */
-.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.compare-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
-.compare-card h3 { font-size: 0.85rem; color: #58a6ff; margin-bottom: 8px; }
-.compare-table { width: 100%; font-size: 0.82rem; }
-.compare-table td { padding: 4px 8px; }
-.compare-table .highlight { color: #f78166; font-weight: 600; }
-
-/* Analytics */
-.analytics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.analytics-box { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
-.analytics-box h3 { font-size: 0.85rem; color: #8b949e; margin-bottom: 10px; }
-.analytics-box.full { grid-column: 1 / -1; }
+/* Pagination */
+.pagination { display: flex; gap: 8px; align-items: center; font-size: 0.8rem; color: var(--text-secondary); }
+.pagination button { background: var(--bg-card); border: 1px solid var(--border); color: var(--text-secondary); padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+.pagination button:hover { border-color: var(--accent); }
+.pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Loading */
-.loading { text-align: center; padding: 40px; color: #8b949e; }
+.loading { text-align: center; padding: 40px; color: var(--text-secondary); }
 .loading::after { content: '...'; animation: dots 1.5s steps(4) infinite; }
 @keyframes dots { 0%,20% { content: '.'; } 40% { content: '..'; } 60%,100% { content: '...'; } }
-.error-msg { color: #f85149; padding: 16px; text-align: center; }
+.error-msg { color: var(--red); padding: 16px; text-align: center; background: rgba(248, 81, 73, 0.08); border-radius: 6px; margin: 16px; border: 1px solid rgba(248, 81, 73, 0.2); }
+.empty-state { text-align: center; padding: 40px; color: var(--text-muted); }
+.empty-state svg { width: 40px; height: 40px; margin-bottom: 8px; opacity: 0.5; }
 
-/* Compare select */
-.comp-select { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-.comp-select label { display: flex; align-items: center; gap: 4px; background: #21262d; padding: 4px 10px; border-radius: 6px; font-size: 0.82rem; cursor: pointer; }
-.comp-select label:hover { background: #30363d; }
+/* Buttons */
+.btn { background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); padding: 6px 12px; border-radius: 4px; font-size: 0.8rem; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 6px; }
+.btn:hover { border-color: var(--accent); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover { background: #388bfd; }
+.btn-sm { padding: 4px 8px; font-size: 0.72rem; }
+.btn-icon { padding: 6px; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+
+/* Page views - hidden by default */
+.page-view { display: none; }
+.page-view.active { display: block; }
+
+/* Trace Detail */
+.trace-detail { }
+.trace-detail-header { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.trace-meta { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.trace-meta dt { font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 2px; }
+.trace-meta dd { font-size: 0.88rem; color: var(--text-primary); }
+
+/* Tree view */
+.tree-view { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.8rem; }
+.tree-node { border-left: 2px solid var(--border); margin: 1px 0; padding: 4px 8px 4px 16px; cursor: pointer; transition: background 0.1s; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 28px; }
+.tree-node:hover { background: var(--bg-hover); border-left-color: var(--accent); }
+.tree-node.error { border-left-color: var(--red); }
+.tree-view { font-size: 0.8rem; }
+.tree-bar { display: inline-block; height: 14px; border-radius: 2px; margin-right: 8px; vertical-align: middle; min-width: 3px; background: var(--accent); }
+.tree-bar.green { background: var(--green); }
+.tree-bar.red { background: var(--red); }
+
+/* Timeline */
+.timeline-view { margin-top: 8px; }
+.timeline-row { display: flex; align-items: center; height: 24px; font-size: 0.75rem; }
+.timeline-label { width: 200px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; cursor: pointer; }
+.timeline-label:hover { color: var(--accent); }
+.timeline-track { flex: 1; height: 12px; background: var(--bg-active); border-radius: 3px; position: relative; }
+.timeline-bar { position: absolute; top: 1px; height: 10px; border-radius: 2px; min-width: 3px; background: var(--accent); cursor: pointer; }
+.timeline-bar.green { background: var(--green); }
+.timeline-bar.red { background: var(--red); }
+
+/* Span detail panel */
+.span-detail { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin: 8px 0; }
+.span-detail h4 { font-size: 0.85rem; color: var(--accent); margin-bottom: 12px; }
+.span-detail-grid { display: grid; grid-template-columns: 140px 1fr; gap: 6px 16px; font-size: 0.8rem; }
+.span-detail-grid dt { color: var(--text-muted); }
+.span-detail-grid dd { color: var(--text-primary); }
+.raw-json { background: var(--bg-base); border: 1px solid var(--border); border-radius: 4px; padding: 12px; font-family: 'SF Mono', monospace; font-size: 0.72rem; white-space: pre-wrap; max-height: 250px; overflow: auto; margin-top: 12px; display: none; }
+
+/* Compare view */
+.compare-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 16px; }
+.compare-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.compare-card h3 { font-size: 0.9rem; color: var(--accent); margin-bottom: 12px; }
+.compare-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.82rem; }
+.compare-row:last-child { border-bottom: none; }
+.compare-row .label { color: var(--text-secondary); }
+.compare-row .value { color: var(--text-primary); font-weight: 600; }
+.compare-row .value.highlight { color: var(--orange); }
+
+/* Session selector */
+.session-selector { margin-bottom: 16px; }
+.session-selector select { width: 100%; max-width: 400px; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); padding: 8px 12px; border-radius: 6px; font-size: 0.85rem; }
+
+/* Tabs */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.tabs button { background: none; border: none; color: var(--text-secondary); padding: 8px 16px; font-size: 0.82rem; cursor: pointer; border-bottom: 2px solid transparent; }
+.tabs button:hover { color: var(--text-primary); }
+.tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Env badge */
+.env-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.68rem; font-weight: 600; text-transform: uppercase; }
+.env-badge.production { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+.env-badge.staging { background: rgba(210, 153, 34, 0.15); color: var(--yellow); }
+.env-badge.development { background: rgba(88, 166, 255, 0.15); color: var(--accent); }
+.env-badge.test { background: rgba(167, 139, 250, 0.15); color: var(--purple); }
+
+/* Live indicator */
+.live-indicator { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--green); }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Sparkline */
+.sparkline { height: 32px; margin-top: 4px; }
 </style>
 </head>
 <body>
-<nav id="tabs">
-  <a href="#overview" class="active">Overview</a>
-  <a href="#traces">Traces</a>
-  <a href="#detail">Detail</a>
-  <a href="#compare">Compare</a>
-  <a href="#analytics">Analytics</a>
-</nav>
-<div class="container">
+<div class="app">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        CDH Traces
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">Dashboards</div>
+      <div class="nav-item active" data-page="overview" onclick="switchPage('overview')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        Overview
+      </div>
+      <div class="nav-item" data-page="traces" onclick="switchPage('traces')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        Traces
+      </div>
+      <div class="nav-item" data-page="detail" onclick="switchPage('detail')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+        Session Detail
+      </div>
+      <div class="nav-item" data-page="analytics" onclick="switchPage('analytics')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+        Analytics
+      </div>
+      <div class="nav-item" data-page="compare" onclick="switchPage('compare')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 3v6M15 3v6M9 15v6M15 15v6M3 9h6M15 9h6M3 15h6M15 15h6"/></svg>
+        Compare
+      </div>
+      <div class="nav-section">Filters</div>
+      <div class="nav-item" data-page="users" onclick="switchPage('users')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+        Users & Environments
+      </div>
+      <div class="nav-item" data-page="errors" onclick="switchPage('errors')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+        Errors
+      </div>
+    </nav>
+  </div>
 
-<div id="page-overview" class="page active"></div>
-<div id="page-traces" class="page"></div>
-<div id="page-detail" class="page"></div>
-<div id="page-compare" class="page"></div>
-<div id="page-analytics" class="page"></div>
+  <!-- Main Content -->
+  <div class="main">
+    <!-- Top Bar -->
+    <div class="topbar">
+      <div class="topbar-title">Trace <strong>Dashboard</strong></div>
+      <div class="time-selector">
+        <button class="active" onclick="setTimeRange('1h')">1H</button>
+        <button onclick="setTimeRange('6h')">6H</button>
+        <button onclick="setTimeRange('24h')">24H</button>
+        <button onclick="setTimeRange('7d')">7D</button>
+        <button onclick="setTimeRange('30d')">30D</button>
+        <button onclick="setTimeRange('all')">All</button>
+      </div>
+      <button class="refresh-btn" onclick="refreshData()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        Refresh
+      </button>
+      <div class="live-indicator">
+        <div class="live-dot"></div>
+        Live
+      </div>
+    </div>
 
+    <!-- Content -->
+    <div class="content">
+      <!-- Overview Page -->
+      <div id="page-overview" class="page-view active">
+        <!-- Stats Row -->
+        <div class="dashboard" style="margin-bottom: 16px;">
+          <div class="card col-3">
+            <div class="stat-card">
+              <div class="stat-label"><span class="status-dot green"></span>Total Traces</div>
+              <div class="stat-value accent" id="stat-total">-</div>
+              <div class="stat-sub" id="stat-today">- today</div>
+            </div>
+          </div>
+          <div class="card col-3">
+            <div class="stat-card">
+              <div class="stat-label"><span class="status-dot blue" style="background: var(--purple)"></span>Sessions</div>
+              <div class="stat-value purple" id="stat-sessions">-</div>
+              <div class="stat-sub" id="stat-agents">- agents</div>
+            </div>
+          </div>
+          <div class="card col-3">
+            <div class="stat-card">
+              <div class="stat-label"><span class="status-dot green"></span>Avg Latency</div>
+              <div class="stat-value green" id="stat-avg-dur">-</div>
+              <div class="stat-sub">P95: <span id="stat-p95">-</span></div>
+            </div>
+          </div>
+          <div class="card col-3">
+            <div class="stat-card">
+              <div class="stat-label"><span class="status-dot red"></span>Error Rate</div>
+              <div class="stat-value red" id="stat-error-rate">-</div>
+              <div class="stat-sub"><span id="stat-error-count">-</span> errors</div>
+            </div>
+          </div>
+          <div class="card col-3">
+            <div class="stat-card">
+              <div class="stat-label"><span class="status-dot" style="background: var(--cyan)"></span>Total Tokens</div>
+              <div class="stat-value" id="stat-tokens">-</div>
+              <div class="stat-sub" id="stat-token-dist">- in / - out</div>
+            </div>
+          </div>
+          <div class="card col-3">
+            <div class="stat-card">
+              <div class="stat-label"><span class="status-dot yellow"></span>Cache Hit Rate</div>
+              <div class="stat-value yellow" id="stat-cache">-</div>
+              <div class="stat-sub" id="stat-cached">- cached</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts Row 1 -->
+        <div class="dashboard" style="margin-bottom: 16px;">
+          <div class="card col-8">
+            <div class="card-header">
+              <div class="card-title"><span class="dot" style="background: var(--accent)"></span>Activity Trend</div>
+            </div>
+            <div class="card-body">
+              <div class="chart-container" id="chart-trend-container"><canvas id="chart-trend"></canvas></div>
+            </div>
+          </div>
+          <div class="card col-4">
+            <div class="card-header">
+              <div class="card-title"><span class="dot" style="background: var(--purple)"></span>Latency Percentiles</div>
+            </div>
+            <div class="card-body" style="display:flex;flex-direction:column;height:280px;">
+              <div class="percentile-grid" style="margin-bottom: 12px;flex-shrink:0;">
+                <div class="percentile-item"><div class="val p50" id="lat-p50">-</div><div class="label">P50</div></div>
+                <div class="percentile-item"><div class="val p95" id="lat-p95">-</div><div class="label">P95</div></div>
+                <div class="percentile-item"><div class="val p99" id="lat-p99">-</div><div class="label">P99</div></div>
+              </div>
+              <div style="flex:1;min-height:0;position:relative;">
+                <canvas id="chart-latency-bar"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts Row 2 -->
+        <div class="dashboard" style="margin-bottom: 16px;">
+          <div class="card col-4">
+            <div class="card-header">
+              <div class="card-title"><span class="dot" style="background: var(--green)"></span>Type Distribution</div>
+            </div>
+            <div class="card-body">
+              <div class="chart-container short"><canvas id="chart-type"></canvas></div>
+            </div>
+          </div>
+          <div class="card col-4">
+            <div class="card-header">
+              <div class="card-title"><span class="dot" style="background: var(--orange)"></span>Agent Activity</div>
+            </div>
+            <div class="card-body">
+              <div class="chart-container short"><canvas id="chart-agent"></canvas></div>
+            </div>
+          </div>
+          <div class="card col-4">
+            <div class="card-header">
+              <div class="card-title"><span class="dot" style="background: var(--cyan)"></span>Top Models</div>
+            </div>
+            <div class="card-body no-padding">
+              <table class="data-table">
+                <thead><tr><th>Model</th><th>Spans</th><th>Tokens</th></tr></thead>
+                <tbody id="top-models-body"><tr><td colspan="3" class="loading">-</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Traces -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="dot" style="background: var(--yellow)"></span>Recent Traces</div>
+          </div>
+          <div class="card-body no-padding">
+            <table class="data-table">
+              <thead><tr><th>Time</th><th>Type</th><th>Function</th><th>Duration</th><th>Agent</th><th>Model</th><th>Status</th></tr></thead>
+              <tbody id="recent-traces-body"><tr><td colspan="7" class="loading">Loading...</td></tr></tbody>
+            </table>
+          </div>
+          <div class="card-footer" style="text-align: center;">
+            <button class="btn btn-sm" onclick="switchPage('traces')">View All Traces</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Traces Page -->
+      <div id="page-traces" class="page-view">
+        <div class="filter-bar">
+          <label>Type:</label><select id="f-type" onchange="loadTraces()"><option value="">All</option><option>ACP</option><option>ACP_EVENT</option><option>LIFECYCLE</option><option>GENERATION</option><option>TOOL</option></select>
+          <label>Agent:</label><select id="f-agent" onchange="loadTraces()"><option value="">All</option></select>
+          <label>Model:</label><select id="f-model" onchange="loadTraces()"><option value="">All</option></select>
+          <label>Status:</label><select id="f-status" onchange="loadTraces()"><option value="">All</option><option>success</option><option>error</option><option>completed</option><option>failed</option></select>
+          <label>Env:</label><select id="f-env" onchange="loadTraces()"><option value="">All</option><option>production</option><option>staging</option><option>development</option></select>
+          <span style="flex:1"></span>
+          <button class="btn btn-sm" onclick="exportTraces('json')">Export JSON</button>
+          <button class="btn btn-sm" onclick="exportTraces('csv')">Export CSV</button>
+        </div>
+        <div class="card">
+          <div class="card-body no-padding">
+            <table class="data-table">
+              <thead><tr><th>Time</th><th>Type</th><th>Function</th><th>Duration</th><th>Agent</th><th>Model</th><th>Status</th><th>Session</th></tr></thead>
+              <tbody id="traces-body"><tr><td colspan="8" class="loading">Loading...</td></tr></tbody>
+            </table>
+          </div>
+          <div class="card-footer">
+            <div class="pagination" id="traces-pagination"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detail Page -->
+      <div id="page-detail" class="page-view">
+        <div class="session-selector">
+          <label>Session:</label>
+          <select id="detail-session" onchange="loadSessionDetail()"><option value="">— Select a session —</option></select>
+        </div>
+        <div id="detail-content"></div>
+      </div>
+
+      <!-- Analytics Page -->
+      <div id="page-analytics" class="page-view">
+        <div class="dashboard">
+          <div class="card col-6">
+            <div class="card-header"><div class="card-title"><span class="dot" style="background: var(--purple)"></span>Model Performance</div></div>
+            <div class="card-body no-padding">
+              <table class="data-table">
+                <thead><tr><th>Model</th><th>Spans</th><th>Tokens</th><th>Avg Duration</th><th>Success Rate</th></tr></thead>
+                <tbody id="analytics-models"><tr><td colspan="5" class="loading">Loading...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card col-6">
+            <div class="card-header"><div class="card-title"><span class="dot" style="background: var(--orange)"></span>Tool Usage</div></div>
+            <div class="card-body">
+              <div class="chart-container"><canvas id="chart-tools"></canvas></div>
+            </div>
+          </div>
+          <div class="card col-12">
+            <div class="card-header"><div class="card-title"><span class="dot" style="background: var(--accent)"></span>Latency vs Tokens Scatter</div></div>
+            <div class="card-body">
+              <div class="chart-container tall"><canvas id="chart-scatter"></canvas></div>
+            </div>
+          </div>
+          <div class="card col-6">
+            <div class="card-header"><div class="card-title"><span class="dot" style="background: var(--green)"></span>Latency Distribution</div></div>
+            <div class="card-body">
+              <div class="chart-container"><canvas id="chart-latency-hist"></canvas></div>
+            </div>
+          </div>
+          <div class="card col-6">
+            <div class="card-header"><div class="card-title"><span class="dot" style="background: var(--cyan)"></span>Coding Efficiency</div></div>
+            <div class="card-body" id="analytics-loc"><div class="loading">Loading...</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Compare Page -->
+      <div id="page-compare" class="page-view">
+        <div class="filter-bar" style="margin-bottom: 16px;">
+          <label>Select sessions to compare:</label>
+        </div>
+        <div class="comp-select" id="compare-sessions" style="margin-bottom: 16px;"></div>
+        <button class="btn btn-primary" onclick="doCompare()" style="margin-bottom: 16px;">Compare Selected</button>
+        <div id="compare-results"></div>
+      </div>
+
+      <!-- Users Page -->
+      <div id="page-users" class="page-view">
+        <div class="dashboard">
+          <div class="card col-4">
+            <div class="card-header"><div class="card-title"><span class="dot" style="background: var(--accent)"></span>Environments</div></div>
+            <div class="card-body no-padding">
+              <table class="data-table">
+                <thead><tr><th>Environment</th><th>Count</th><th>Error Rate</th></tr></thead>
+                <tbody id="env-body"><tr><td colspan="3" class="loading">Loading...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card col-8">
+            <div class="card-header"><div class="card-title"><span class="dot" style="background: var(--purple)"></span>Top Tags</div></div>
+            <div class="card-body no-padding">
+              <div class="tags-cloud" id="tags-cloud"><div class="loading">Loading...</div></div>
+            </div>
+          </div>
+          <div class="card col-12">
+            <div class="card-header"><div class="card-title"><span class="dot" style="background: var(--green)"></span>User Statistics</div></div>
+            <div class="card-body no-padding">
+              <table class="data-table">
+                <thead><tr><th>User ID</th><th>Traces</th><th>Sessions</th><th>Total Tokens</th></tr></thead>
+                <tbody id="users-body"><tr><td colspan="4" class="loading">Loading...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Errors Page -->
+      <div id="page-errors" class="page-view">
+        <div class="card">
+          <div class="card-header"><div class="card-title"><span class="dot" style="background: var(--red)"></span>Error Summary</div></div>
+          <div class="card-body no-padding">
+            <table class="data-table">
+              <thead><tr><th>Error</th><th>Count</th><th>Latest</th><th>Session</th></tr></thead>
+              <tbody id="errors-body"><tr><td colspan="4" class="loading">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
-/* ─── Globals ─── */
-let CHART_INSTANCES = {};
+let CHARTS = {};
+let STATE = {
+  currentPage: 'overview',
+  timeRange: '24h',
+  tracesPage: 0,
+  tracesTotal: 0,
+  sessions: [],
+};
 
-/* ─── Router ─── */
-function router() {
-  let hash = location.hash.slice(1) || 'overview';
-  let [page, qs] = hash.split('?');
-  let params = Object.fromEntries(new URLSearchParams(qs));
+function escape(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
-
-  let el = document.getElementById('page-' + page);
-  if (el) el.classList.add('active');
-  let navEl = document.querySelector(`nav a[href="#${page}"]`);
-  if (navEl) navEl.classList.add('active');
-
-  // Destroy charts when leaving overview/analytics
-  if (page !== 'overview') destroyCharts();
-  if (page !== 'analytics') destroyCharts('chart-');
-
-  switch (page) {
-    case 'overview': loadOverview(); break;
-    case 'traces': loadTraces(params); break;
-    case 'detail': loadDetail(params.session_id); break;
-    case 'compare': loadCompare(params.ids); break;
-    case 'analytics': loadAnalytics(); break;
-  }
-}
-window.addEventListener('hashchange', router);
-
-function escape(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-function fmtDur(seconds) {
-  // NOTE: the DB duration_ms column actually stores seconds (agenttrace stores the
-  // duration value verbatim), so the value passed here is already in seconds.
-  if (seconds == null || seconds === 0) return '-';
-  let s = seconds;
+function fmtDur(s) {
+  if (s == null || s === 0) return '-';
+  s = Number(s);
   if (s < 1) return (s * 1000).toFixed(0) + 'ms';
   if (s < 60) return s.toFixed(1) + 's';
-  let m = Math.floor(s / 60); s = s % 60;
-  return m + 'm ' + s.toFixed(0) + 's';
+  return Math.floor(s / 60) + 'm ' + (s % 60).toFixed(0) + 's';
 }
 
 function fmtNum(n) {
   if (n == null || n === 0) return '0';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
   if (n >= 1000) return Math.round(n).toLocaleString();
-  if (n >= 1) return n.toFixed(1);
-  return n.toFixed(2);
-}
-
-function parseTs(ts) {
-  if (!ts) return null;
-  // DB stores naive local ISO strings like "2024-07-15T14:23:01.123456".
-  // Truncate fractional seconds to 3 digits so all engines parse consistently,
-  // then treat as local time (no trailing Z means local per ECMAScript spec).
-  let m = String(ts).match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?\d*/);
-  let iso = m ? (m[1] + (m[2] ? '.' + m[2] : '')) : ts;
-  let d = new Date(iso);
-  return isNaN(d.getTime()) ? null : d;
-}
-
-function fmtTime(ts) {
-  let d = parseTs(ts);
-  if (!d) return '-';
-  return d.toLocaleTimeString() + '.' + String(d.getMilliseconds()).padStart(3,'0');
+  return String(n);
 }
 
 function fmtDate(ts) {
-  let d = parseTs(ts);
-  if (!d) return '-';
+  if (!ts) return '-';
+  let d = new Date(ts);
   return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
 }
 
-function badge(type) {
-  let cls = 'badge-' + (type || 'default').toLowerCase().replace(/[^a-z0-9]/g, '_');
-  return `<span class="badge ${cls}">${escape(type || '?')}</span>`;
+function fmtTime(ts) {
+  if (!ts) return '-';
+  let d = new Date(ts);
+  return d.toLocaleTimeString() + '.' + String(d.getMilliseconds()).padStart(3, '0');
 }
 
-function statusBadge(s) {
-  if (!s) return '';
-  let cls = s === 'success' || s === 'completed' ? 'badge-success' : s === 'error' || s === 'failed' ? 'badge-error' : 'badge-default';
-  return `<span class="badge ${cls}">${escape(s)}</span>`;
+function badge(type) {
+  if (!type) return '<span class="badge badge-gray">-</span>';
+  let cls = 'badge-' + type.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  return `<span class="badge ${cls}">${escape(type)}</span>`;
 }
 
 function api(path) { return fetch(path).then(r => r.json()).then(d => { if (d.status === 'error') throw new Error(d.error); return d.data; }); }
 
-function destroyCharts(prefix) {
-  prefix = prefix || '';
-  for (let key in CHART_INSTANCES) {
-    if (key.startsWith(prefix)) {
-      CHART_INSTANCES[key].destroy();
-      delete CHART_INSTANCES[key];
-    }
+function destroyCharts() { for (let k in CHARTS) { CHARTS[k].destroy(); delete CHARTS[k]; } }
+
+function switchPage(page) {
+  STATE.currentPage = page;
+  document.querySelectorAll('.page-view').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  document.querySelector(`.nav-item[data-page="${page}"]`).classList.add('active');
+  loadPage(page);
+}
+
+function setTimeRange(range) {
+  STATE.timeRange = range;
+  document.querySelectorAll('.time-selector button').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  loadPage(STATE.currentPage);
+}
+
+function getTimeRange() {
+  let now = new Date();
+  let start = new Date(0);
+  switch (STATE.timeRange) {
+    case '1h': start = new Date(now - 60 * 60 * 1000); break;
+    case '6h': start = new Date(now - 6 * 60 * 60 * 1000); break;
+    case '24h': start = new Date(now - 24 * 60 * 60 * 1000); break;
+    case '7d': start = new Date(now - 7 * 24 * 60 * 60 * 1000); break;
+    case '30d': start = new Date(now - 30 * 24 * 60 * 60 * 1000); break;
+    case 'all': start = new Date(0); break;
+    default: start = new Date(now - 24 * 60 * 60 * 1000);
+  }
+  return {
+    start: start.toISOString().slice(0, 19),
+    end: now.toISOString().slice(0, 19)
+  };
+}
+
+function refreshData() {
+  let btn = document.querySelector('.refresh-btn');
+  btn.classList.add('loading');
+  loadPage(STATE.currentPage);
+  setTimeout(() => btn.classList.remove('loading'), 500);
+}
+
+async function loadPage(page) {
+  switch(page) {
+    case 'overview': await loadOverview(); break;
+    case 'traces': await loadTraces(); break;
+    case 'detail': await loadDetailPage(); break;
+    case 'analytics': await loadAnalytics(); break;
+    case 'compare': await loadComparePage(); break;
+    case 'users': await loadUsers(); break;
+    case 'errors': await loadErrors(); break;
   }
 }
 
 /* ─── Overview ─── */
 async function loadOverview() {
-  let el = document.getElementById('page-overview');
-  el.innerHTML = '<div class="loading">Loading overview</div>';
   try {
-    let d = await api('/api/overview');
-    renderOverview(el, d);
-  } catch(e) { el.innerHTML = `<div class="error-msg">${escape(e.message)}</div>`; }
-}
+    let tr = getTimeRange();
+    let d = await api('/api/overview?start=' + encodeURIComponent(tr.start) + '&end=' + encodeURIComponent(tr.end));
+    document.getElementById('stat-total').textContent = fmtNum(d.total);
+    document.getElementById('stat-today').textContent = fmtNum(d.total_today) + ' today';
+    document.getElementById('stat-sessions').textContent = fmtNum(d.sessions);
+    document.getElementById('stat-agents').textContent = fmtNum(d.agents) + ' agents';
+    document.getElementById('stat-avg-dur').textContent = fmtDur(d.avg_duration);
+    document.getElementById('stat-p95').textContent = fmtDur(d.p95_duration);
+    document.getElementById('stat-error-rate').textContent = d.error_rate + '%';
+    document.getElementById('stat-error-count').textContent = d.error_count;
+    document.getElementById('stat-tokens').textContent = fmtNum(d.total_tokens);
+    document.getElementById('stat-token-dist').textContent = fmtNum(d.input_tokens) + ' in / ' + fmtNum(d.output_tokens) + ' out';
+    document.getElementById('stat-cache').textContent = d.cache_hit_rate + '%';
+    document.getElementById('stat-cached').textContent = fmtNum(d.cached_tokens) + ' cached';
 
-async function renderOverview(el, d) {
-  let cards = `
-    <div class="cards">
-      <div class="card"><div class="card-num">${d.total}</div><div class="card-label">Total Spans</div><div class="card-sub">${d.total_today} today</div></div>
-      <div class="card"><div class="card-num">${d.sessions}</div><div class="card-label">Sessions</div></div>
-      <div class="card"><div class="card-num">${d.agents}</div><div class="card-label">Agents</div></div>
-      <div class="card"><div class="card-num">${d.avg_duration.toFixed(1)}s</div><div class="card-label">Avg Duration</div><div class="card-sub">P95: ${d.p95_duration.toFixed(1)}s</div></div>
-      <div class="card ${d.error_rate > 10 ? 'danger' : d.error_rate > 0 ? 'warn' : 'success'}"><div class="card-num">${d.error_rate}%</div><div class="card-label">Error Rate</div><div class="card-sub">${d.error_count} errors</div></div>
-      <div class="card"><div class="card-num">${(d.total_tokens || 0).toLocaleString()}</div><div class="card-label">Total Tokens</div></div>
-      <div class="card"><div class="card-num">${fmtNum(d.tokens_per_kloc || 0)}</div><div class="card-label">Tokens / 1K LOC</div><div class="card-sub">${(d.lines_added || 0).toLocaleString()} lines added</div></div>
-     </div>`;
+    document.getElementById('lat-p50').textContent = fmtDur(d.p50_duration);
+    document.getElementById('lat-p95').textContent = fmtDur(d.p95_duration);
+    document.getElementById('lat-p99').textContent = fmtDur(d.p99_duration);
 
-  let charts = `<div class="chart-row">
-    <div class="chart-box"><h3>Type Distribution</h3><canvas id="chart-type"></canvas></div>
-    <div class="chart-box"><h3>Agent Activity</h3><canvas id="chart-agent"></canvas></div>
-    <div class="chart-box full"><h3>Activity Trend (Last 7 Days)</h3><canvas id="chart-trend"></canvas></div>
-  </div>`;
+    // Trend chart
+    let hourly = d.hourly || [];
+    let ctx = document.getElementById('chart-trend').getContext('2d');
+    CHARTS['trend'] = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: hourly.map(h => { let p = h.bucket.indexOf('T'); return h.bucket.slice(p+1, p+6); }),
+        datasets: [{ label: 'Spans', data: hourly.map(h => h.count), borderColor: '#58a6ff', backgroundColor: 'rgba(88,166,255,0.1)', fill: true, tension: 0.4, pointRadius: 2 }]
+      },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e', maxTicksLimit: 12 } }, y: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' }, beginAtZero: true } } }
+    });
 
-  let recentApi = '/api/traces?limit=20';
-  // Fetch recent
-  let recentHtml = '<h3 style="color:#8b949e;font-size:0.85rem;margin-bottom:8px;font-weight:500;">Recent Activity</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>Type</th><th>Function</th><th>Duration</th><th>Agent</th><th>Model</th><th>Status</th></tr></thead><tbody id="recent-body"><tr><td colspan="7" class="loading">loading</td></tr></tbody></table></div>';
+    // Latency bar
+    ctx = document.getElementById('chart-latency-bar').getContext('2d');
+    CHARTS['latbar'] = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: ['P50', 'P95', 'P99'], datasets: [{ data: [d.p50_duration || 0, d.p95_duration || 0, d.p99_duration || 0], backgroundColor: ['#58a6ff', '#a78bfa', '#f78166'], borderRadius: 4 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false } }, y: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' }, beginAtZero: true } } }
+    });
 
-  el.innerHTML = cards + charts + recentHtml;
+    // Type chart
+    let typeLabels = Object.keys(d.type_distribution || {});
+    let typeData = Object.values(d.type_distribution || {});
+    let typeColors = { ACP: '#58a6ff', ACP_EVENT: '#3fb950', LIFECYCLE: '#d29922', GENERATION: '#a78bfa', TOOL: '#f78166', EVENT: '#39d353' };
+    ctx = document.getElementById('chart-type').getContext('2d');
+    CHARTS['type'] = new Chart(ctx, {
+      type: 'doughnut',
+      data: { labels: typeLabels, datasets: [{ data: typeData, backgroundColor: typeLabels.map(l => typeColors[l] || '#8b949e'), borderWidth: 0 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#8b949e', padding: 8 } } } }
+    });
 
-  // Type chart
-  let typeLabels = Object.keys(d.type_distribution);
-  let typeData = Object.values(d.type_distribution);
-  let typeColors = { ACP: '#58a6ff', ACP_EVENT: '#3fb950', LIFECYCLE: '#d29922', COMPLETE: '#a78bfa', START: '#58a6ff', END: '#f85149' };
-  CHART_INSTANCES['chart-type'] = new Chart(document.getElementById('chart-type'), {
-    type: 'doughnut',
-    data: {
-      labels: typeLabels, datasets: [{ data: typeData, backgroundColor: typeLabels.map(l => typeColors[l] || '#8b949e'), borderWidth: 0 }]
-    },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#8b949e' } } } }
-  });
+    // Agent chart
+    let agents = d.agent_breakdown || [];
+    ctx = document.getElementById('chart-agent').getContext('2d');
+    CHARTS['agent'] = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: agents.slice(0, 8).map(a => a.agent), datasets: [{ label: 'Spans', data: agents.slice(0, 8).map(a => a.count), backgroundColor: '#f78166', borderRadius: 4 }] },
+      options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' }, beginAtZero: true }, y: { grid: { display: false }, ticks: { color: '#8b949e' } } } }
+    });
 
-  // Agent chart
-  let agents = d.agent_breakdown || [];
-  CHART_INSTANCES['chart-agent'] = new Chart(document.getElementById('chart-agent'), {
-    type: 'bar',
-    data: {
-      labels: agents.map(a => a.agent), datasets: [{ label: 'Spans', data: agents.map(a => a.count), backgroundColor: '#1f6feb', borderRadius: 3 }]
-    },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
-      scales: { x: { ticks: { color: '#8b949e' } }, y: { ticks: { color: '#8b949e' }, beginAtZero: true } } }
-  });
+    // Top models
+    let models = d.model_breakdown || [];
+    document.getElementById('top-models-body').innerHTML = models.slice(0, 5).map(m => `<tr><td>${escape(m.model)}</td><td>${fmtNum(m.count)}</td><td>${fmtNum(m.total_tokens)}</td></tr>`).join('') || '<tr><td colspan="3" class="empty-state">No data</td></tr>';
 
-  // Trend chart
-  let hourly = d.hourly || [];
-  CHART_INSTANCES['chart-trend'] = new Chart(document.getElementById('chart-trend'), {
-    type: 'line',
-    data: {
-      labels: hourly.map(h => { let p = h.bucket.indexOf('T'); return h.bucket.slice(p+1, p+6); }),
-      datasets: [{ label: 'Spans', data: hourly.map(h => h.count), borderColor: '#58a6ff', backgroundColor: '#1f6feb33', fill: true, tension: 0.3, pointRadius: 2 }]
-    },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
-      scales: { x: { ticks: { color: '#8b949e', maxTicksLimit: 24 } }, y: { ticks: { color: '#8b949e' }, beginAtZero: true } } }
-  });
-
-  // Fetch recent
-  try {
-    let recentData = await api('/api/traces?limit=20');
-    let tbody = document.getElementById('recent-body');
-    if (!tbody) return;
-    let traces = recentData.traces || [];
-    tbody.innerHTML = traces.map(t => {
-      let tags = t.tags || {};
-      let data = t.data || {};
-      return `<tr class="clickable" onclick="goDetail('${escape(t.session_id || '')}')">
-        <td>${fmtTime(t.timestamp)}</td>
-        <td>${badge(t.type)}</td>
-        <td>${escape(t.function || '')}</td>
+    // Recent traces
+    let traces = await api('/api/traces?limit=10');
+    document.getElementById('recent-traces-body').innerHTML = (traces.traces || []).map(t => {
+      let tags = t.tags || {}; let data = t.data || {};
+      let status = data.status;
+      let badge = status === 'success' || status === 'completed' ? 'badge-green' : status === 'error' || status === 'failed' ? 'badge-red' : 'badge-gray';
+      return `<tr onclick="goDetail('${escape(t.session_id || '')}')" style="cursor:pointer">
+        <td>${fmtDate(t.timestamp).split(' ')[1]}</td>
+        <td><span class="badge badge-blue">${escape(t.type || '')}</span></td>
+        <td class="truncate">${escape(t.function || '')}</td>
         <td>${fmtDur(data.duration_ms)}</td>
         <td>${escape(typeof tags.agent === 'string' ? tags.agent : '')}</td>
-        <td>${escape(data.model || '')}</td>
-        <td>${statusBadge(data.status)}</td>
+        <td class="truncate">${escape(data.kwargs?.model || data.model || tags.model || '')}</td>
+        <td><span class="badge ${badge}">${escape(status || '')}</span></td>
       </tr>`;
-    }).join('');
-  } catch(e) {}
+    }).join('') || '<tr><td colspan="7" class="empty-state">No traces</td></tr>';
+
+  } catch(e) { console.error(e); }
 }
 
-function goDetail(sessionId) {
-  if (sessionId) location.hash = '#detail?session_id=' + encodeURIComponent(sessionId);
-}
+function goDetail(sessionId) { if (sessionId) { switchPage('detail'); document.getElementById('detail-session').value = sessionId; loadSessionDetail(); } }
 
 /* ─── Traces ─── */
-let tracesState = { page: 0, limit: 50, total: 0 };
-
-async function loadTraces(params) {
-  let el = document.getElementById('page-traces');
-  el.innerHTML = `<div class="filters" id="trace-filters">
-    <label>Type:</label><select id="f-type" onchange="reloadTraces()"><option value="">All</option><option>ACP</option><option>ACP_EVENT</option><option>LIFECYCLE</option></select>
-    <label>Agent:</label><select id="f-agent" onchange="reloadTraces()"><option value="">All</option></select>
-    <label>Model:</label><select id="f-model" onchange="reloadTraces()"><option value="">All</option></select>
-    <label>Status:</label><select id="f-status" onchange="reloadTraces()"><option value="">All</option><option>success</option><option>error</option><option>completed</option><option>failed</option></select>
-    <label>Search:</label><input id="f-search" placeholder="Function name..." oninput="debounceReload()" style="max-width:200px;">
-    <label>Session:</label><input id="f-session" placeholder="Session ID..." oninput="debounceReload()" style="max-width:250px;">
-    <span style="flex:1"></span>
-    <button class="btn" onclick="exportTraces('json')">Export JSON</button>
-    <button class="btn" onclick="exportTraces('csv')">Export CSV</button>
-  </div>
-  <div class="table-wrap" id="trace-table"><div class="loading">Loading traces</div></div>
-  <div class="pagination" id="trace-pages"></div>`;
-
-  setTimeout(() => {
-    // Populate filter dropdowns from overview
-    api('/api/overview').then(d => {
-      let agents = (d.agent_breakdown || []).map(a => a.agent).filter(Boolean);
-      let sel = document.getElementById('f-agent');
-      agents.forEach(a => { let o = document.createElement('option'); o.value = a; o.textContent = a; sel.appendChild(o); });
-    }).catch(() => {});
-
-    tracesState.page = 0;
-    reloadTraces();
-  }, 50);
-}
-
-let _debounceTimer;
-
-function debounceReload() {
-  clearTimeout(_debounceTimer);
-  _debounceTimer = setTimeout(() => { tracesState.page = 0; reloadTraces(); }, 300);
-}
-
-async function reloadTraces() {
-  let el = document.getElementById('trace-table');
-  if (!el) return;
-  el.innerHTML = '<div class="loading">Loading</div>';
-
-  let type = document.getElementById('f-type')?.value;
-  let agent = document.getElementById('f-agent')?.value;
-  let model = document.getElementById('f-model')?.value;
-  let status = document.getElementById('f-status')?.value;
-  let search = document.getElementById('f-search')?.value;
-  let session = document.getElementById('f-session')?.value;
-
-  let qs = `limit=${tracesState.limit}&offset=${tracesState.page * tracesState.limit}`;
-  if (type) qs += `&type=${encodeURIComponent(type)}`;
-  if (agent) qs += `&agent=${encodeURIComponent(agent)}`;
-  if (model) qs += `&model=${encodeURIComponent(model)}`;
-  if (status) qs += `&status=${encodeURIComponent(status)}`;
-  if (search) qs += `&search=${encodeURIComponent(search)}`;
-  if (session) qs += `&session_id=${encodeURIComponent(session)}`;
-
+async function loadTraces() {
   try {
-    let d = await api('/api/traces?' + qs);
-    tracesState.total = d.total;
-    let traces = d.traces || [];
-    if (!traces.length) { el.innerHTML = '<div class="summary" style="color:#8b949e;text-align:center;padding:20px;">No traces match the filters.</div>'; renderPages(); return; }
+    let type = document.getElementById('f-type')?.value || '';
+    let agent = document.getElementById('f-agent')?.value || '';
+    let model = document.getElementById('f-model')?.value || '';
+    let status = document.getElementById('f-status')?.value || '';
+    let env = document.getElementById('f-env')?.value || '';
 
-    let html = '<table><thead><tr><th>Time</th><th>Type</th><th>Function</th><th>Duration</th><th>Agent</th><th>Model</th><th>Status</th><th>Session</th></tr></thead><tbody>';
-    traces.forEach(t => {
-      let tags = t.tags || {};
-      let data = t.data || {};
-      html += `<tr class="clickable" onclick="goDetail('${escape(t.session_id || '')}')">
-        <td>${fmtTime(t.timestamp)}</td>
-        <td>${badge(t.type)}</td>
-        <td>${escape(t.function || '')}</td>
+    let qs = `limit=50&offset=${STATE.tracesPage * 50}`;
+    if (type) qs += `&type=${encodeURIComponent(type)}`;
+    if (agent) qs += `&agent=${encodeURIComponent(agent)}`;
+    if (model) qs += `&model=${encodeURIComponent(model)}`;
+    if (status) qs += `&status=${encodeURIComponent(status)}`;
+    if (env) qs += `&env=${encodeURIComponent(env)}`;
+
+    let d = await api('/api/traces?' + qs);
+    STATE.tracesTotal = d.total;
+    let traces = d.traces || [];
+
+    document.getElementById('traces-body').innerHTML = traces.map(t => {
+      let tags = t.tags || {}; let data = t.data || {};
+      let status = data.status;
+      let badge = status === 'success' || status === 'completed' ? 'badge-green' : status === 'error' || status === 'failed' ? 'badge-red' : 'badge-gray';
+      return `<tr onclick="goDetail('${escape(t.session_id || '')}')" style="cursor:pointer">
+        <td>${fmtDate(t.timestamp)}</td>
+        <td><span class="badge badge-blue">${escape(t.type || '')}</span></td>
+        <td class="truncate">${escape(t.function || '')}</td>
         <td>${fmtDur(data.duration_ms)}</td>
         <td>${escape(typeof tags.agent === 'string' ? tags.agent : '')}</td>
-        <td>${escape(data.model || '')}</td>
-        <td>${statusBadge(data.status)}</td>
-        <td style="max-width:100px;overflow:hidden;text-overflow:ellipsis;">${escape((t.session_id || '').slice(0, 18))}</td>
+        <td class="truncate">${escape(data.kwargs?.model || data.model || tags.model || '')}</td>
+        <td><span class="badge ${badge}">${escape(status || '')}</span></td>
+        <td class="truncate">${escape((t.session_id || '').slice(0, 20))}</td>
       </tr>`;
-    });
-    html += '</tbody></table>';
-    el.innerHTML = html;
-    renderPages();
-  } catch(e) { el.innerHTML = `<div class="error-msg">${escape(e.message)}</div>`; }
+    }).join('') || '<tr><td colspan="8" class="empty-state">No traces match filters</td></tr>';
+
+    let totalPages = Math.ceil(STATE.tracesTotal / 50);
+    document.getElementById('traces-pagination').innerHTML = `
+      <button ${STATE.tracesPage <= 0 ? 'disabled' : ''} onclick="STATE.tracesPage--;loadTraces()">Previous</button>
+      <span>Page ${STATE.tracesPage + 1} of ${totalPages || 1} (${STATE.tracesTotal.toLocaleString()} total)</span>
+      <button ${STATE.tracesPage >= totalPages - 1 ? 'disabled' : ''} onclick="STATE.tracesPage++;loadTraces()">Next</button>
+    `;
+
+  } catch(e) { console.error(e); }
 }
 
-function renderPages() {
-  let el = document.getElementById('trace-pages');
-  if (!el) return;
-  let totalPages = Math.ceil(tracesState.total / tracesState.limit);
-  let page = tracesState.page;
-  el.innerHTML = `<button class="btn" onclick="tracesState.page=Math.max(0,tracesState.page-1);reloadTraces();" ${page <= 0 ? 'disabled' : ''}>Previous</button>
-    <span>Page ${page + 1} / ${totalPages || 1} (${tracesState.total} total)</span>
-    <button class="btn" onclick="tracesState.page=Math.min(${totalPages - 1},tracesState.page+1);reloadTraces();" ${page >= totalPages - 1 ? 'disabled' : ''}>Next</button>`;
-}
-
-async function exportTraces(fmt) {
-  let type = document.getElementById('f-type')?.value;
-  let agent = document.getElementById('f-agent')?.value;
+function exportTraces(fmt) {
+  let type = document.getElementById('f-type')?.value || '';
   let qs = `format=${fmt}&limit=500`;
   if (type) qs += `&type=${encodeURIComponent(type)}`;
-  if (agent) qs += `&agent=${encodeURIComponent(agent)}`;
   window.open('/api/export?' + qs, '_blank');
 }
 
-/* ─── Session Detail ─── */
-async function loadDetail(sessionId) {
-  let el = document.getElementById('page-detail');
-  // Session selector so the user can switch sessions directly within the Detail tab.
-  let selector = '<div class="filters" style="margin-bottom:16px"><label>Session:</label>'
-    + '<select id="detail-session-select" onchange="onDetailSessionChange()"><option value="">— select a session —</option></select>'
-    + (sessionId ? '<button class="btn" onclick="loadDetail(\'' + encodeURIComponent(sessionId) + '\')">Reload</button>' : '')
-    + '</div>';
-
-  if (!sessionId) {
-    el.innerHTML = selector + '<div style="color:#8b949e;text-align:center;padding:40px;">Select a session from the dropdown above to view details.</div>';
-    loadDetailSessionOptions(sessionId);
-    return;
-  }
-  el.innerHTML = selector + '<div class="loading">Loading session detail</div>';
-  try {
-    let d = await api('/api/sessions/' + encodeURIComponent(sessionId));
-    renderDetail(el, d, sessionId);
-    loadDetailSessionOptions(sessionId);
-  } catch(e) { el.innerHTML = selector + `<div class="error-msg">${escape(e.message)}</div>`; }
-}
-
-async function loadDetailSessionOptions(currentId) {
-  let sel = document.getElementById('detail-session-select');
-  if (!sel) return;
+/* ─── Detail ─── */
+async function loadDetailPage() {
   try {
     let sessions = await api('/api/sessions?limit=500');
-    let list = sessions.sessions || [];
-    sel.innerHTML = '<option value="">— select a session —</option>' + list.map(s => {
-      let label = (s.session_id || '').slice(0, 24) + '… (' + (s.agents || []).join(',') + ', ' + (s.span_count || 0) + ' spans)';
-      let checked = (s.session_id === currentId) ? 'selected' : '';
-      return `<option value="${escape(s.session_id)}" ${checked}>${escape(label)}</option>`;
-    }).join('');
-  } catch(e) {}
+    STATE.sessions = sessions.sessions || [];
+    let sel = document.getElementById('detail-session');
+    sel.innerHTML = '<option value="">— Select a session —</option>' +
+      STATE.sessions.map(s => `<option value="${escape(s.session_id)}">${escape((s.session_id || '').slice(0, 30))}… (${(s.agents || []).join(',')}, ${s.span_count} spans)</option>`).join('');
+  } catch(e) { console.error(e); }
 }
 
-function onDetailSessionChange() {
-  let sel = document.getElementById('detail-session-select');
-  if (sel && sel.value) {
-    location.hash = '#detail?session_id=' + encodeURIComponent(sel.value);
-  }
-}
+async function loadSessionDetail() {
+  let sessionId = document.getElementById('detail-session').value;
+  let el = document.getElementById('detail-content');
+  if (!sessionId) { el.innerHTML = ''; return; }
 
-function renderDetail(el, d, sessionId) {
-  let s = d.stats || {};
-  let spans = d.spans || [];
-  let tree = d.tree || [];
-  window._lastSpans = spans;
+  el.innerHTML = '<div class="loading">Loading session...</div>';
+  try {
+    let d = await api('/api/sessions/' + encodeURIComponent(sessionId));
+    let s = d.stats || {};
+    let spans = d.spans || [];
+    let tree = d.tree || [];
+    window._spans = spans;
+    window._sessionTree = tree;
+    window._sessionStats = s;
 
-  let header = `<div class="sesh-header">
-    <h2>Session <code>${escape(sessionId.slice(0, 24))}…</code></h2>
-    <dl class="sesh-meta">
-      <div><dt>Agents</dt><dd>${escape((s.agents || []).join(', ') || 'N/A')}</dd></div>
-      <div><dt>Duration</dt><dd>${fmtDur(s.duration_ms)}</dd></div>
-      <div><dt>Spans</dt><dd>${spans.length}</dd></div>
-      <div><dt>Total Tokens</dt><dd>${(s.total_tokens || 0).toLocaleString()}</dd></div>
-      <div><dt>Lines Added</dt><dd>${(s.lines_added || 0).toLocaleString()}</dd></div>
-      <div><dt>Tokens / 1K LOC</dt><dd>${fmtNum(s.tokens_per_kloc || 0)}</dd></div>
-      <div><dt>Tool Calls</dt><dd>${s.tool_calls || 0}</dd></div>
-      <div><dt>Models</dt><dd>${escape((s.models || []).join(', ') || 'N/A')}</dd></div>
-      <div><dt>Errors</dt><dd style="color:${s.error_count > 0 ? '#f85149' : '#3fb950'}">${s.error_count}</dd></div>
-      <div><dt>Start</dt><dd>${escape(fmtDate(s.first_ts) || '-')}</dd></div>
-      <div><dt>End</dt><dd>${escape(fmtDate(s.last_ts) || '-')}</dd></div>
-    </dl>
-  </div>`;
-
-  el.innerHTML = header + '<div id="tree-container"></div><div id="span-detail-container"></div>';
-
-  // Error summary
-  let errors = s.errors || [];
-  if (errors.length) {
-    let errHtml = '<h3 style="color:#f85149;font-size:0.85rem;margin:12px 0 8px;font-weight:600;">Errors (' + errors.length + ')</h3><div class="error-list">';
-    errors.forEach(e => {
-      errHtml += `<div class="error-item"><span class="func">${escape(e.function || '')}</span>: ${escape(String(e.error || '').slice(0, 200))}</div>`;
+    // Collect all tags from all spans
+    let allTags = {};
+    spans.forEach(sp => {
+      let tags = sp.tags || {};
+      Object.keys(tags).forEach(k => { if (tags[k]) allTags[k] = allTags[k] || []; if (!allTags[k].includes(tags[k])) allTags[k].push(tags[k]); });
     });
-    errHtml += '</div>';
-    document.getElementById('tree-container').insertAdjacentHTML('afterend', errHtml);
-  }
 
-  // Notes
-  let notes = spans.filter(s => { let d = s.data || {}; return d.note; });
-  if (notes.length) {
-    let noteHtml = '<h3 style="color:#58a6ff;font-size:0.85rem;margin:12px 0 8px;font-weight:600;">Notes (' + notes.length + ')</h3>';
-    notes.forEach(n => {
-      let d = n.data || {};
-      noteHtml += `<div class="note-item"><span class="time">${fmtTime(n.timestamp)}</span>${escape(d.note || '')}</div>`;
-    });
-    document.getElementById('span-detail-container').insertAdjacentHTML('afterbegin', noteHtml);
-  }
+    // Token breakdown
+    let totalTokens = s.total_tokens || 0;
+    let inputTokens = spans.reduce((sum, sp) => sum + (sp.data?.input_tokens || 0), 0);
+    let outputTokens = spans.reduce((sum, sp) => sum + (sp.data?.output_tokens || 0), 0);
+    let cachedTokens = spans.reduce((sum, sp) => sum + (sp.data?.cached_input_tokens || 0), 0);
 
-  // Call tree
-  let treeContainer = document.getElementById('tree-container');
-  let totalMs = s.duration_ms || 1;
-  treeContainer.innerHTML = '<h3 style="color:#8b949e;font-size:0.85rem;margin-bottom:8px;font-weight:500;">Call Tree</h3><div class="tree">' +
-    renderTreeNodes(tree, totalMs, 0) + '</div>' +
-    renderTimeline(tree, s);
+    // Model usage
+    let modelsUsed = [...new Set(spans.filter(sp => sp.data?.kwargs?.model || sp.data?.model || sp.tags?.model).map(sp => sp.data?.kwargs?.model || sp.data?.model || sp.tags?.model))];
+
+    // Agent usage
+    let agentsUsed = [...new Set(spans.map(sp => sp.tags?.agent).filter(Boolean))];
+
+    let html = `
+      <!-- Session Header Stats -->
+      <div class="dashboard" style="margin-bottom:16px;">
+        <div class="card col-3">
+          <div class="stat-card">
+            <div class="stat-label">Duration</div>
+            <div class="stat-value accent">${fmtDur(s.duration_ms)}</div>
+            <div class="stat-sub">${spans.length} spans</div>
+          </div>
+        </div>
+        <div class="card col-3">
+          <div class="stat-card">
+            <div class="stat-label">Total Tokens</div>
+            <div class="stat-value">${totalTokens.toLocaleString()}</div>
+            <div class="stat-sub">${inputTokens.toLocaleString()} in / ${outputTokens.toLocaleString()} out</div>
+          </div>
+        </div>
+        <div class="card col-3">
+          <div class="stat-card">
+            <div class="stat-label">Cache Hit Rate</div>
+            <div class="stat-value yellow">${inputTokens > 0 ? Math.round(cachedTokens/inputTokens*100) : 0}%</div>
+            <div class="stat-sub">${cachedTokens.toLocaleString()} cached</div>
+          </div>
+        </div>
+        <div class="card col-3">
+          <div class="stat-card">
+            <div class="stat-label">Errors</div>
+            <div class="stat-value ${s.error_count > 0 ? 'red' : 'green'}">${s.error_count || 0}</div>
+            <div class="stat-sub">${s.error_count > 0 ? 'Issues detected' : 'No errors'}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Session Meta Info -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header"><div class="card-title">Session Info</div></div>
+        <div class="card-body">
+          <div class="trace-meta" style="grid-template-columns:repeat(4, 1fr);">
+            <div><dt>Session ID</dt><dd><code style="font-size:0.75rem">${escape(sessionId)}</code></dd></div>
+            <div><dt>Start Time</dt><dd>${fmtDate(s.first_ts)}</dd></div>
+            <div><dt>End Time</dt><dd>${fmtDate(s.last_ts)}</dd></div>
+            <div><dt>Lines Added</dt><dd>${(s.lines_added || 0).toLocaleString()}</dd></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Models & Agents -->
+      <div class="dashboard" style="margin-bottom:16px;">
+        <div class="card col-6">
+          <div class="card-header"><div class="card-title">Models Used <span class="badge badge-blue">${modelsUsed.length}</span></div></div>
+          <div class="card-body no-padding">
+            <table class="data-table">
+              <thead><tr><th>Model</th><th>Spans</th><th>Total Tokens</th></tr></thead>
+              <tbody>
+                ${modelsUsed.map(m => {
+                  let modelSpans = spans.filter(sp => (sp.data?.kwargs?.model || sp.data?.model || sp.tags?.model) === m);
+                  let modelTokens = modelSpans.reduce((sum, sp) => sum + (sp.data?.kwargs?.token_count || sp.data?.token_count || 0), 0);
+                  return `<tr><td><strong>${escape(m)}</strong></td><td>${modelSpans.length}</td><td>${modelTokens.toLocaleString()}</td></tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card col-6">
+          <div class="card-header"><div class="card-title">Agents <span class="badge badge-purple">${agentsUsed.length}</span></div></div>
+          <div class="card-body no-padding">
+            <table class="data-table">
+              <thead><tr><th>Agent</th><th>Spans</th></tr></thead>
+              <tbody>
+                ${agentsUsed.map(a => {
+                  let agentSpans = spans.filter(sp => sp.tags?.agent === a);
+                  return `<tr><td><strong>${escape(a)}</strong></td><td>${agentSpans.length}</td></tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tags -->
+      ${Object.keys(allTags).length > 0 ? `
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header"><div class="card-title">Tags & Attributes</div></div>
+        <div class="card-body">
+          <div style="display:flex;flex-wrap:wrap;gap:8px;">
+            ${Object.entries(allTags).map(([k, vals]) => vals.map(v => `<span class="badge badge-tag">${escape(k)}=${escape(String(v).slice(0,50))}</span>`).join('')).join('')}
+          </div>
+        </div>
+      </div>
+      ` : ''}
+
+      <!-- Tabs -->
+      <div class="tabs">
+        <button class="active" onclick="showDetailTab('tree', this)">Call Tree</button>
+        <button onclick="showDetailTab('timeline', this)">Timeline</button>
+        <button onclick="showDetailTab('spans', this)">Spans List</button>
+        <button onclick="showDetailTab('errors', this)">Errors (${s.error_count || 0})</button>
+      </div>
+
+      <!-- Tab Content -->
+      <div id="detail-tab-tree" class="detail-tab">
+        <div class="card">
+          <div class="card-header"><div class="card-title">Call Tree</div></div>
+          <div class="card-body" style="max-height:500px;overflow-y:auto;">
+            <div class="tree-view" id="call-tree">${renderTree(tree, s.duration_ms || 1, 0)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div id="detail-tab-timeline" class="detail-tab" style="display:none;">
+        <div class="card">
+          <div class="card-header"><div class="card-title">Timeline</div></div>
+          <div class="card-body" style="max-height:500px;overflow-y:auto;">${renderTimeline(tree, s)}</div>
+        </div>
+      </div>
+
+      <div id="detail-tab-spans" class="detail-tab" style="display:none;">
+        <div class="card">
+          <div class="card-header"><div class="card-title">All Spans <span style="font-weight:normal;color:var(--text-muted)">(${spans.length})</span></div></div>
+          <div class="card-body no-padding" style="max-height:600px;overflow-y:auto;">
+            <table class="data-table">
+              <thead><tr><th>Time</th><th>Type</th><th>Function</th><th>Duration</th><th>Tokens</th><th>Status</th></tr></thead>
+              <tbody>
+                ${spans.map(sp => {
+                  let data = sp.data || {};
+                  let isError = data.status === 'error' || data.status === 'failed' || data.error;
+                  return `<tr class="clickable" onclick="toggleSpanDetail('${escape(sp.id || '')}')">
+                    <td>${fmtTime(sp.timestamp)}</td>
+                    <td>${badge(sp.type)}</td>
+                    <td class="truncate">${escape(sp.function || '')}</td>
+                    <td>${fmtDur(data.duration_ms)}</td>
+                    <td>${(data.token_count || 0).toLocaleString()}</td>
+                    <td>${isError ? '<span class="badge badge-red">Error</span>' : '<span class="badge badge-green">OK</span>'}</td>
+                  </tr>
+                  <tr id="span-row-${escape(sp.id || '')}" style="display:none;"><td colspan="6" style="padding:12px 16px;background:var(--bg-hover);">
+                    <div class="span-detail" style="margin:0;">
+                      <h4>${escape(sp.function || '')}</h4>
+                      <dl class="span-detail-grid">
+                        <dt>ID</dt><dd><code>${escape(sp.id || '')}</code></dd>
+                        <dt>Type</dt><dd>${badge(sp.type)}</dd>
+                        <dt>Timestamp</dt><dd>${escape(sp.timestamp || '')}</dd>
+                        <dt>Duration</dt><dd>${fmtDur(data.duration_ms)}</dd>
+                        ${data.model ? `<dt>Model</dt><dd>${escape(data.model)}</dd>` : ''}
+                        ${data.token_count ? `<dt>Tokens</dt><dd>${data.token_count.toLocaleString()}</dd>` : ''}
+                        ${data.input_tokens ? `<dt>Input Tokens</dt><dd>${data.input_tokens.toLocaleString()}</dd>` : ''}
+                        ${data.output_tokens ? `<dt>Output Tokens</dt><dd>${data.output_tokens.toLocaleString()}</dd>` : ''}
+                        ${data.cached_input_tokens ? `<dt>Cached Input</dt><dd>${data.cached_input_tokens.toLocaleString()}</dd>` : ''}
+                        ${data.tool_name ? `<dt>Tool</dt><dd>${escape(data.tool_name)}</dd>` : ''}
+                        ${data.tool_kind ? `<dt>Tool Kind</dt><dd>${escape(data.tool_kind)}</dd>` : ''}
+                        ${data.status ? `<dt>Status</dt><dd>${data.status}</dd>` : ''}
+                        ${data.cost_amount ? `<dt>Cost</dt><dd>${data.cost_amount} ${escape(data.cost_currency || '')}</dd>` : ''}
+                        ${sp.tags?.agent ? `<dt>Agent</dt><dd>${escape(sp.tags.agent)}</dd>` : ''}
+                        ${sp.tags?.user_id ? `<dt>User</dt><dd>${escape(sp.tags.user_id)}</dd>` : ''}
+                        ${sp.tags?.environment ? `<dt>Environment</dt><dd>${escape(sp.tags.environment)}</dd>` : ''}
+                        ${data.error ? `<dt>Error</dt><dd style="color:var(--red)">${escape(data.error)}</dd>` : ''}
+                      </dl>
+                    </div>
+                  </td></tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div id="detail-tab-errors" class="detail-tab" style="display:none;">
+        <div class="card">
+          <div class="card-header"><div class="card-title">Errors <span class="badge badge-red">${s.error_count || 0}</span></div></div>
+          <div class="card-body no-padding">
+            ${(s.errors || []).length > 0 ? `<table class="data-table">
+              <thead><tr><th>Function</th><th>Error</th></tr></thead>
+              <tbody>
+                ${s.errors.map(e => `<tr><td><strong>${escape(e.function || '')}</strong></td><td style="color:var(--red)">${escape(String(e.error || '').slice(0, 200))}</td></tr>`).join('')}
+              </tbody>
+            </table>` : '<div class="empty-state"><p>No errors in this session</p></div>'}
+          </div>
+        </div>
+      </div>
+    `;
+
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = `<div class="error-msg">${escape(e.message)}</div>`; }
 }
 
-function renderTreeNodes(nodes, totalMs, depth) {
+function showDetailTab(tab, btn) {
+  document.querySelectorAll('.detail-tab').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('#page-detail .tabs button').forEach(b => b.classList.remove('active'));
+  document.getElementById('detail-tab-' + tab).style.display = 'block';
+  btn.classList.add('active');
+}
+
+function toggleSpanDetail(spanId) {
+  let el = document.getElementById('span-row-' + spanId);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'table-row' : 'none';
+}
+
+function renderTree(nodes, totalMs, depth) {
   if (!nodes || !nodes.length) return '';
-  let html = '';
-  nodes.forEach(n => {
+  return nodes.map(n => {
     let data = n.data || {};
     let tags = n.tags || {};
     let dur = data.duration_ms || 0;
     let pct = totalMs > 0 ? (dur / totalMs * 100) : 0;
     let hasChildren = n.children && n.children.length;
     let isError = data.status === 'error' || data.status === 'failed' || data.error;
-    let cls = 'tree-node' + (isError ? ' error' : '');
-    let barCls = 'tree-bar' + (n.type === 'ACP_EVENT' ? ' acp_event' : '') + (isError ? ' error' : '');
-
-    html += `<div class="${cls}" style="margin-left:${depth * 16}px" onclick="toggleSpanDetail(this, '${escape(n.id || '')}')">
-      <span class="${barCls}" style="width:${Math.max(pct, 2)}%"></span>
-      <span style="color:#8b949e">${escape(n.function || '?')}</span>
-      <span style="color:#8b949e;font-size:0.72rem">${dur ? fmtDur(dur) : ''}</span>
-      ${isError ? ' <span style="color:#f85149">⚠</span>' : ''}
-      ${data.model ? ' <span style="color:#8b949e;font-size:0.72rem">[' + escape(data.model) + ']</span>' : ''}
+    let barColor = n.type === 'ACP_EVENT' ? 'green' : isError ? 'red' : '';
+    let typeColor = n.type === 'ACP' ? 'badge-blue' : n.type === 'ACP_EVENT' ? 'badge-green' : n.type === 'LIFECYCLE' ? 'badge-yellow' : 'badge-gray';
+    let typeBadge = n.type ? `<span class="badge ${typeColor}" style="font-size:0.6rem;padding:1px 4px;flex-shrink:0;">${escape(n.type || '')}</span>` : '';
+    let toolBadge = data.tool_name ? `<span class="badge badge-orange" style="font-size:0.58rem;padding:1px 4px;flex-shrink:0;" title="${escape(data.tool_name)}">${escape(data.tool_name.slice(0,12))}</span>` : '';
+    let modelBadge = data.model ? `<span style="background:rgba(167,139,250,0.15);color:var(--purple);padding:1px 6px;border-radius:3px;font-size:0.65rem;flex-shrink:0;">${escape(data.model)}</span>` : '';
+    let agentBadge = tags.agent ? `<span style="background:rgba(57,211,238,0.15);color:var(--cyan);padding:1px 6px;border-radius:3px;font-size:0.65rem;flex-shrink:0;">@${escape(tags.agent)}</span>` : '';
+    let tokenBadge = data.token_count ? `<span style="color:var(--text-muted);font-size:0.65rem;flex-shrink:0;">${data.token_count.toLocaleString()} tok</span>` : '';
+    let durBadge = dur ? `<span style="color:var(--accent);font-size:0.7rem;font-weight:600;flex-shrink:0;">${fmtDur(dur)}</span>` : '';
+    let expandIcon = hasChildren ? '<span style="color:var(--text-muted);font-size:0.7rem;width:12px;flex-shrink:0;">▸</span>' : '<span style="width:12px;flex-shrink:0;"></span>';
+    return `<div class="tree-node ${isError ? 'error' : ''}" style="margin-left:${depth * 16}px" onclick="toggleSpanDetail('${escape(n.id || '')}')">
+      ${expandIcon}
+      <span class="tree-bar ${barColor}" style="width:${Math.max(pct, 2)}%;flex-shrink:0;"></span>
+      ${typeBadge}${toolBadge ? toolBadge : ''}
+      <span style="color:var(--text-primary);font-weight:500;flex:1;min-width:100px;">${escape(n.function || '?')}</span>
+      ${modelBadge}${agentBadge}${tokenBadge}
+      ${durBadge}
+      ${isError ? '<span style="color:var(--red);flex-shrink:0;">⚠</span>' : ''}
     </div>
-    <div id="span-${escape(n.id || '')}" style="display:none" class="span-detail"></div>`;
-
-    if (hasChildren) {
-      html += renderTreeNodes(n.children, totalMs, depth + 1);
-    }
-  });
-  return html;
+    <div id="span-${escape(n.id || '')}" style="display:none;margin-left:${(depth + 1) * 16}px"></div>
+    ${hasChildren ? renderTree(n.children, totalMs, depth + 1) : ''}`;
+  }).join('');
 }
 
-function toggleSpanDetail(clickedEl, spanId) {
-  let detailEl = document.getElementById('span-' + spanId);
-  if (!detailEl) return;
+function toggleSpanDetail(spanId) {
+  let el = document.getElementById('span-' + spanId);
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
 
-  if (detailEl.style.display !== 'none') {
-    detailEl.style.display = 'none';
-    return;
-  }
-
-  // Hide all other details
-  document.querySelectorAll('.span-detail').forEach(el => el.style.display = 'none');
-
-  if (!detailEl.dataset.loaded) {
-    // Find span data
-    let n = findSpanById(window._lastSpans, spanId);
-    if (n) {
-      let data = n.data || {};
-      let tags = n.tags || {};
-      let html = `<h4>Span Detail <span style="font-weight:400;color:#8b949e">${badge(n.type)} ${escape(n.function || '')}</span></h4>
+  if (!el.dataset.loaded) {
+    let span = findSpanById(window._spans, spanId);
+    if (span) {
+      let data = span.data || {};
+      let tags = span.tags || {};
+      el.innerHTML = `<div class="span-detail">
+        <h4>${escape(span.function || '')}</h4>
         <dl class="span-detail-grid">
-          <dt>ID</dt><dd><code>${escape(n.id || '')}</code></dd>
-          <dt>Session</dt><dd>${escape(n.session_id || '').slice(0, 30)}</dd>
-          <dt>Timestamp</dt><dd>${escape(n.timestamp || '')}</dd>
-          <dt>Duration</dt><dd>${data.duration_ms ? fmtDur(data.duration_ms) : '-'}</dd>
+          <dt>ID</dt><dd><code>${escape(span.id || '')}</code></dd>
+          <dt>Duration</dt><dd>${fmtDur(data.duration_ms)}</dd>
           <dt>Agent</dt><dd>${escape(typeof tags.agent === 'string' ? tags.agent : '')}</dd>
-          ${data.model ? '<dt>Model</dt><dd>' + escape(data.model) + '</dd>' : ''}
-          ${data.token_count ? '<dt>Tokens</dt><dd>' + data.token_count.toLocaleString() + '</dd>' : ''}
-          ${data.input_tokens ? '<dt>Input Tokens</dt><dd>' + data.input_tokens.toLocaleString() + '</dd>' : ''}
-          ${data.output_tokens ? '<dt>Output Tokens</dt><dd>' + data.output_tokens.toLocaleString() + '</dd>' : ''}
-          ${data.tool_name ? '<dt>Tool</dt><dd>' + escape(data.tool_name) + '</dd>' : ''}
-          ${data.tool_kind ? '<dt>Tool Kind</dt><dd>' + escape(data.tool_kind) + '</dd>' : ''}
-          ${data.agent_type ? '<dt>Agent Type</dt><dd>' + escape(data.agent_type) + '</dd>' : ''}
-          ${data.status ? '<dt>Status</dt><dd>' + statusBadge(data.status) + '</dd>' : ''}
-          ${data.error ? '<dt>Error</dt><dd style="color:#f85149">' + escape(data.error) + '</dd>' : ''}
-          ${data.cost_amount ? '<dt>Cost</dt><dd>' + escape(data.cost_amount + ' ' + (data.cost_currency || '')) + '</dd>' : ''}
-          ${data.note ? '<dt>Note</dt><dd>' + escape(data.note) + '</dd>' : ''}
-          ${data.context_used ? '<dt>Context Used</dt><dd>' + data.context_used.toLocaleString() + '</dd>' : ''}
-          ${data.cached_input_tokens ? '<dt>Cached Input</dt><dd>' + data.cached_input_tokens.toLocaleString() + '</dd>' : ''}
+          ${data.model ? `<dt>Model</dt><dd>${escape(data.model)}</dd>` : ''}
+          ${data.token_count ? `<dt>Tokens</dt><dd>${data.token_count.toLocaleString()}</dd>` : ''}
+          ${data.input_tokens ? `<dt>Input</dt><dd>${data.input_tokens.toLocaleString()}</dd>` : ''}
+          ${data.output_tokens ? `<dt>Output</dt><dd>${data.output_tokens.toLocaleString()}</dd>` : ''}
+          ${data.status ? `<dt>Status</dt><dd><span class="badge ${data.status === 'success' ? 'badge-green' : 'badge-red'}">${escape(data.status)}</span></dd>` : ''}
+          ${data.error ? `<dt>Error</dt><dd style="color:var(--red)">${escape(data.error)}</dd>` : ''}
         </dl>
-        <button class="btn" onclick="toggleRawJson(this, '${escape(n.id || '')}')" style="margin-top:8px">Show Raw JSON</button>
-        <div id="raw-${escape(n.id || '')}" class="raw-json">${escape(JSON.stringify(n, null, 2))}</div>`;
-      detailEl.innerHTML = html;
-      detailEl.dataset.loaded = '1';
+        <button class="btn btn-sm" onclick="toggleRaw(this, '${escape(spanId)}')">Raw JSON</button>
+        <div id="raw-${escape(spanId)}" class="raw-json">${escape(JSON.stringify(span, null, 2))}</div>
+      </div>`;
+      el.dataset.loaded = '1';
     }
   }
-  detailEl.style.display = 'block';
+  el.style.display = 'block';
+}
+
+function toggleRaw(btn, id) {
+  let el = document.getElementById('raw-' + id);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
 function findSpanById(spans, id) {
-  for (let s of spans) {
-    if (s.id === id) return s;
-    if (s.children) {
-      let found = findSpanById(s.children, id);
-      if (found) return found;
-    }
-  }
+  for (let s of spans) { if (s.id === id) return s; if (s.children) { let f = findSpanById(s.children, id); if (f) return f; } }
   return null;
 }
 
-function flattenSpans(nodes, depth, out) {
-  nodes.forEach(n => {
-    out.push({ span: n, depth });
-    if (n.children && n.children.length) flattenSpans(n.children, depth + 1, out);
-  });
-  return out;
-}
-
-function spanDurationSec(span) {
-  let d = span.data || {};
-  let v = d.duration_ms != null ? d.duration_ms : (span.duration_ms != null ? span.duration_ms : 0);
-  return Number(v) || 0;
-}
-
 function renderTimeline(tree, stats) {
-  let firstTs = stats && stats.first_ts;
-  let t0 = parseTs(firstTs);
-  if (!t0) return '';
-  let total = (stats && stats.duration_ms) ? Number(stats.duration_ms) : 0;
-  if (total <= 0) total = 1;
+  let firstTs = stats.first_ts; let t0 = new Date(firstTs);
+  if (!t0.getTime()) return '';
+  let total = stats.duration_ms || 1;
 
-  let rows = flattenSpans(tree || [], 0, []);
+  function flatten(nodes, out = []) {
+    nodes.forEach(n => { out.push(n); if (n.children) flatten(n.children, out); });
+    return out;
+  }
+
+  let rows = flatten(tree || []);
   if (!rows.length) return '';
 
-  let html = '<h3 style="color:#8b949e;font-size:0.85rem;margin:16px 0 8px;font-weight:500;">Timeline</h3><div class="timeline">';
-  rows.forEach(({ span, depth }) => {
-    let ts = parseTs(span.timestamp);
-    let startSec = ts ? (ts - t0) / 1000 : 0;
-    if (startSec < 0) startSec = 0;
-    let dur = spanDurationSec(span);
-    let leftPct = Math.min(100, (startSec / total) * 100);
-    let widthPct = Math.max(0.6, Math.min(100 - leftPct, (dur / total) * 100));
-    let isError = span.data && (span.data.status === 'error' || span.data.status === 'failed' || span.data.error);
-    let cls = 'tl-bar' + (span.type === 'ACP_EVENT' ? ' acp_event' : '') + (isError ? ' error' : '');
-    let label = escape((span.function || '?')) + (span.data && span.data.model ? ' [' + escape(span.data.model) + ']' : '');
-    html += `<div class="tl-row">
-      <div class="tl-label" style="padding-left:${depth * 12}px" onclick="toggleSpanDetailFromTree('${escape(span.id || '')}')" title="${label}">${label}</div>
-      <div class="tl-track"><div class="${cls}" style="left:${leftPct}%;width:${widthPct}%" onclick="toggleSpanDetailFromTree('${escape(span.id || '')}')" title="${fmtDur(dur)}"></div></div>
+  return `<div class="timeline-view">` + rows.map(span => {
+    let ts = new Date(span.timestamp);
+    let start = ts && !isNaN(ts.getTime()) ? (ts - t0) / 1000 : 0;
+    let dur = span.data?.duration_ms || 0;
+    let left = Math.min(100, (start / total) * 100);
+    let width = Math.max(0.5, Math.min(100 - left, (dur / total) * 100));
+    let isError = span.data?.status === 'error' || span.data?.failed || span.data?.error;
+    let color = span.type === 'ACP_EVENT' ? 'green' : isError ? 'red' : '';
+    return `<div class="timeline-row">
+      <div class="timeline-label" onclick="toggleSpanDetail('${escape(span.id || '')}')">${escape(span.function || '?')}</div>
+      <div class="timeline-track">
+        <div class="timeline-bar ${color}" style="left:${left}%;width:${width}%" onclick="toggleSpanDetail('${escape(span.id || '')}')" title="${fmtDur(dur)}"></div>
+      </div>
     </div>`;
-  });
-  html += '</div>';
-  // Axis (4 ticks)
-  html += '<div class="tl-axis"><span>0s</span><span>' + fmtDur(total * 0.25) + '</span><span>' + fmtDur(total * 0.5) + '</span><span>' + fmtDur(total * 0.75) + '</span><span>' + fmtDur(total) + '</span></div>';
-  return html;
-}
-
-function toggleSpanDetailFromTree(spanId) {
-  // Span detail containers (id="span-{id}") are created by renderTreeNodes,
-  // so toggleSpanDetail can locate and populate them.
-  toggleSpanDetail(document.createElement('div'), spanId);
-}
-
-function toggleRawJson(btn, spanId) {
-  let raw = document.getElementById('raw-' + spanId);
-  if (raw) {
-    if (raw.style.display !== 'none') { raw.style.display = 'none'; btn.textContent = 'Show Raw JSON'; }
-    else { raw.style.display = 'block'; btn.textContent = 'Hide Raw JSON'; }
-  }
-}
-
-/* ─── Compare ─── */
-let compareAllSessions = [];
-let compareSelected = [];
-
-async function loadCompare(ids) {
-  let el = document.getElementById('page-compare');
-  el.innerHTML = '<div class="loading">Loading compare</div>';
-
-  try {
-    let sessions = await api('/api/sessions?limit=500');
-    compareAllSessions = sessions.sessions || [];
-    compareSelected = ids ? ids.split(',').filter(Boolean) : [];
-    renderCompareSelector(el);
-  } catch(e) { el.innerHTML = `<div class="error-msg">${escape(e.message)}</div>`; }
-}
-
-function renderCompareSelector(el) {
-  let selectHtml = '<div class="comp-select">';
-  compareAllSessions.forEach(s => {
-    let agentStr = (s.agents || []).join(', ');
-    let checked = compareSelected.includes(s.session_id) ? 'checked' : '';
-    selectHtml += `<label><input type="checkbox" value="${escape(s.session_id)}" ${checked} onchange="onCompToggle(this)"> ${escape((s.session_id || '').slice(0, 16))}… (${escape(agentStr)}, ${s.span_count} spans)</label>`;
-  });
-  selectHtml += '</div><button class="btn btn-primary" onclick="doCompare()">Compare Selected</button>';
-  el.innerHTML = selectHtml + '<div id="compare-results"></div>';
-}
-
-function onCompToggle(cb) {
-  let id = cb.value;
-  if (cb.checked) {
-    if (!compareSelected.includes(id)) compareSelected.push(id);
-  } else {
-    compareSelected = compareSelected.filter(x => x !== id);
-  }
-  // NOTE: do NOT update location.hash here — it would re-trigger the router and
-  // re-run loadCompare, wiping any comparison results already shown.
-}
-
-async function doCompare() {
-  let checked = compareSelected.slice();
-  if (checked.length < 2) return;
-  let el = document.getElementById('compare-results');
-  if (!el) return;
-  el.innerHTML = '<div class="loading">Loading comparison</div>';
-
-  try {
-    let details = await Promise.all(checked.map(id => api('/api/sessions/' + encodeURIComponent(id))));
-    renderCompare(el, checked, details);
-  } catch(e) { el.innerHTML = `<div class="error-msg">${escape(e.message)}</div>`; }
-}
-
-function renderCompare(el, checked, details) {
-  let gridHtml = '<div class="compare-grid">';
-  details.forEach((d, i) => {
-    let s = d.stats || {};
-    gridHtml += `<div class="compare-card">
-      <h3>Session ${i + 1}: ${escape((checked[i] || '').slice(0, 20))}…</h3>
-      <table class="compare-table">
-        <tr><td>Duration</td><td class="highlight">${fmtDur(s.duration_ms)}</td></tr>
-        <tr><td>Spans</td><td>${(d.spans || []).length}</td></tr>
-        <tr><td>Tool Calls</td><td>${s.tool_calls || 0}</td></tr>
-        <tr><td>Total Tokens</td><td>${(s.total_tokens || 0).toLocaleString()}</td></tr>
-        <tr><td>Errors</td><td style="color:${s.error_count > 0 ? '#f85149' : '#3fb950'}">${s.error_count}</td></tr>
-        <tr><td>Agents</td><td>${escape((s.agents || []).join(', '))}</td></tr>
-      </table>`;
-    if (s.tools && Object.keys(s.tools).length) {
-      gridHtml += '<div style="margin-top:8px;font-size:0.8rem;color:#8b949e">Tools: ' + Object.entries(s.tools).map(([k, v]) => escape(k) + ' (' + v + ')').join(', ') + '</div>';
-    }
-    gridHtml += '</div>';
-  });
-  gridHtml += '</div>';
-  el.innerHTML = gridHtml;
+  }).join('') + `</div>`;
 }
 
 /* ─── Analytics ─── */
 async function loadAnalytics() {
-  let el = document.getElementById('page-analytics');
-  el.innerHTML = '<div class="loading">Loading analytics</div>';
-
   try {
-    let [models, tools, errors, loc] = await Promise.all([
-      api('/api/stats/models').catch(() => []),
-      api('/api/stats/tools').catch(() => []),
-      api('/api/stats/errors').catch(() => []),
-      api('/api/stats/loc').catch(() => ({})),
+    let [models, tools, loc, latency, scatter] = await Promise.all([
+      api('/api/stats/models'),
+      api('/api/stats/tools'),
+      api('/api/stats/loc'),
+      api('/api/stats/latency'),
+      api('/api/stats/scatter?limit=300'),
     ]);
 
-    let html = '<div class="analytics-grid">';
-
-    // Coding efficiency (tokens per 1K LOC)
-    loc = loc || {};
-    let tkl = loc.tokens_per_kloc || 0;
-    html += `<div class="analytics-box full"><h3>Coding Efficiency <span style="font-weight:400;color:#8b949e;font-size:0.78rem">Tokens per 1K lines of code added</span></h3>
-      <div class="cards" style="margin-bottom:4px">
-        <div class="card"><div class="card-num">${(loc.lines_added || 0).toLocaleString()}</div><div class="card-label">Lines Added</div></div>
-        <div class="card"><div class="card-num">${(loc.total_tokens || 0).toLocaleString()}</div><div class="card-label">Total Tokens</div></div>
-        <div class="card"><div class="card-num">${fmtNum(tkl)}</div><div class="card-label">Tokens / 1K LOC</div></div>
-      </div>
-      <div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Model</th><th>Lines Added</th><th>Tokens</th><th>Tokens / 1K LOC</th></tr></thead><tbody>`;
-    (loc.by_model || []).forEach(m => {
-      html += `<tr><td>${escape(m.model)}</td><td>${(m.lines_added || 0).toLocaleString()}</td><td>${(m.tokens || 0).toLocaleString()}</td><td>${fmtNum(m.tokens_per_kloc || 0)}</td></tr>`;
-    });
-    if (!loc.by_model || !loc.by_model.length) html += '<tr><td colspan="4" style="color:#8b949e;text-align:center">No line data yet — edit/write files to populate</td></tr>';
-    html += '</tbody></table></div></div>';
-
     // Models
-    html += `<div class="analytics-box"><h3>Model Performance</h3><div class="table-wrap">
-      <table><thead><tr><th>Model</th><th>Spans</th><th>Total Tokens</th><th>Avg Duration</th></tr></thead><tbody>`;
-    (models || []).forEach(m => {
-      html += `<tr><td>${escape(m.model)}</td><td>${m.span_count}</td><td>${(m.total_tokens || 0).toLocaleString()}</td><td>${m.avg_duration ? m.avg_duration.toFixed(1) + 's' : '-'}</td></tr>`;
+    document.getElementById('analytics-models').innerHTML = (models || []).map(m => {
+      let rate = m.success_rate || 0;
+      let badge = rate >= 95 ? 'badge-green' : rate >= 80 ? 'badge-yellow' : 'badge-red';
+      return `<tr>
+        <td><strong>${escape(m.model)}</strong></td>
+        <td>${fmtNum(m.span_count)}</td>
+        <td>${fmtNum(m.total_tokens)}</td>
+        <td>${m.avg_duration ? m.avg_duration.toFixed(2) + 's' : '-'}</td>
+        <td><span class="badge ${badge}">${rate}%</span></td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="5" class="empty-state">No data</td></tr>';
+
+    // Tools chart
+    let ctx = document.getElementById('chart-tools').getContext('2d');
+    CHARTS['tools'] = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: (tools || []).slice(0, 8).map(t => t.tool), datasets: [{ label: 'Calls', data: (tools || []).slice(0, 8).map(t => t.call_count), backgroundColor: '#f78166', borderRadius: 4 }] },
+      options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' }, beginAtZero: true }, y: { grid: { display: false }, ticks: { color: '#8b949e' } } } }
     });
-    if (!models || !models.length) html += '<tr><td colspan="4" style="color:#8b949e;text-align:center">No model data</td></tr>';
-    html += '</tbody></table></div></div>';
 
-    // Tools
-    html += `<div class="analytics-box"><h3>Tool Usage</h3><canvas id="chart-tools" style="height:200px"></canvas>
-      <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Tool</th><th>Calls</th><th>Avg Duration</th><th>Errors</th></tr></thead><tbody>`;
-    (tools || []).forEach(t => {
-      html += `<tr><td>${escape(t.tool)}</td><td>${t.call_count}</td><td>${t.avg_duration ? t.avg_duration.toFixed(1) + 's' : '-'}</td><td style="color:${t.error_count > 0 ? '#f85149' : '#8b949e'}">${t.error_count}</td></tr>`;
+    // Scatter
+    ctx = document.getElementById('chart-scatter').getContext('2d');
+    let colors = { success: '#3fb950', error: '#f85149', completed: '#3fb950', failed: '#f85149' };
+    CHARTS['scatter'] = new Chart(ctx, {
+      type: 'scatter',
+      data: { datasets: [{ label: 'Traces', data: (scatter || []).map(p => ({ x: (p.x || 0) * 1000, y: p.y || 0 })), backgroundColor: (scatter || []).map(p => colors[p.status] || '#58a6ff'), pointRadius: 4, pointHoverRadius: 6 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { type: 'linear', position: 'bottom', grid: { color: '#30363d' }, ticks: { color: '#8b949e', callback: v => v + 'ms' }, title: { display: true, text: 'Latency', color: '#8b949e' } }, y: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' }, title: { display: true, text: 'Tokens', color: '#8b949e' } } } }
     });
-    if (!tools || !tools.length) html += '<tr><td colspan="4" style="color:#8b949e;text-align:center">No tool data</td></tr>';
-    html += '</tbody></table></div></div>';
 
-    // Errors
-    html += `<div class="analytics-box full"><h3>Error Aggregation</h3><div class="table-wrap">
-      <table><thead><tr><th>Error Message</th><th>Count</th><th>Latest</th><th>Latest Session</th></tr></thead><tbody>`;
-    (errors || []).forEach(e => {
-      html += `<tr class="clickable" onclick="goDetail('${escape(e.latest_session || '')}')"><td style="color:#f85149">${escape((e.error || '').slice(0, 120))}</td><td>${e.count}</td><td>${fmtDate(e.latest)}</td><td style="max-width:100px;overflow:hidden;text-overflow:ellipsis">${escape((e.latest_session || '').slice(0, 16))}</td></tr>`;
+    // Latency histogram
+    ctx = document.getElementById('chart-latency-hist').getContext('2d');
+    let hist = latency?.histogram || [];
+    CHARTS['hist'] = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: hist.map(h => h.range), datasets: [{ label: 'Count', data: hist.map(h => h.count), backgroundColor: 'rgba(88,166,255,0.6)', borderRadius: 3 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e', maxRotation: 45 } }, y: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' }, beginAtZero: true } } }
     });
-    if (!errors || !errors.length) html += '<tr><td colspan="4" style="color:#8b949e;text-align:center;padding:20px">No errors found</td></tr>';
-    html += '</tbody></table></div></div>';
 
-    html += '</div>'; // close grid
+    // LOC
+    document.getElementById('analytics-loc').innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="stat-card"><div class="stat-label">Lines Added</div><div class="stat-value accent">${fmtNum(loc.lines_added || 0)}</div></div>
+        <div class="stat-card"><div class="stat-label">Tokens / 1K LOC</div><div class="stat-value purple">${fmtNum(loc.tokens_per_kloc || 0)}</div></div>
+      </div>`;
 
-    // Cost chart
-    try {
-      let cost = await api('/api/stats/cost');
-      if (cost && cost.daily && cost.daily.length) {
-        let costCard = `<div class="analytics-box full" style="margin-top:16px"><h3>Token Usage Over Time <span style="font-weight:400;color:#8b949e;font-size:0.78rem">(Total: ${(cost.total_tokens || 0).toLocaleString()})</span></h3><canvas id="chart-cost" style="height:200px"></canvas></div>`;
-        html += costCard;
-      }
-    } catch(e) {}
-
-    el.innerHTML = html;
-
-    // Tool chart
-    if (tools && tools.length) {
-      CHART_INSTANCES['chart-tools'] = new Chart(document.getElementById('chart-tools'), {
-        type: 'bar',
-        data: {
-          labels: tools.map(t => t.tool),
-          datasets: [{ label: 'Calls', data: tools.map(t => t.call_count), backgroundColor: '#1f6feb', borderRadius: 3 }]
-        },
-        options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y',
-          plugins: { legend: { display: false } },
-          scales: { x: { ticks: { color: '#8b949e' }, beginAtZero: true }, y: { ticks: { color: '#8b949e' } } } }
-      });
-    }
-
-    // Cost chart
-    let costChartCanvas = document.getElementById('chart-cost');
-    if (costChartCanvas) {
-      try {
-        let cost = await api('/api/stats/cost');
-        if (cost && cost.daily && cost.daily.length) {
-          CHART_INSTANCES['chart-cost'] = new Chart(costChartCanvas, {
-            type: 'line',
-            data: {
-              labels: cost.daily.map(d => d.day),
-              datasets: [
-                { label: 'Total Tokens', data: cost.daily.map(d => d.total_tokens), borderColor: '#58a6ff', backgroundColor: '#1f6feb33', fill: true, tension: 0.3 },
-                { label: 'Input Tokens', data: cost.daily.map(d => d.total_input), borderColor: '#3fb950', backgroundColor: '#23863633', fill: true, tension: 0.3 },
-                { label: 'Output Tokens', data: cost.daily.map(d => d.total_output), borderColor: '#f78166', backgroundColor: '#da363333', fill: true, tension: 0.3 },
-              ]
-            },
-            options: { responsive: true, maintainAspectRatio: false,
-              plugins: { legend: { labels: { color: '#8b949e' } } },
-              scales: { x: { ticks: { color: '#8b949e' } }, y: { ticks: { color: '#8b949e' }, beginAtZero: true } } }
-          });
-        }
-      } catch(e) {}
-    }
-
-  } catch(e) { el.innerHTML = `<div class="error-msg">${escape(e.message)}</div>`; }
+  } catch(e) { console.error(e); }
 }
 
-/* ─── Boot ─── */
-router();
+/* ─── Compare ─── */
+async function loadComparePage() {
+  try {
+    let sessions = await api('/api/sessions?limit=500');
+    STATE.sessions = sessions.sessions || [];
+    let el = document.getElementById('compare-sessions');
+    el.innerHTML = STATE.sessions.map(s => `<label style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-card);padding:6px 12px;border-radius:4px;border:1px solid var(--border);margin:4px;cursor:pointer">
+      <input type="checkbox" value="${escape(s.session_id)}" onchange="onCompToggle(this)"> ${escape((s.session_id || '').slice(0, 16))}… (${(s.agents || []).join(',')})
+    </label>`).join('');
+  } catch(e) { console.error(e); }
+}
+
+let compareSelected = [];
+function onCompToggle(cb) {
+  let id = cb.value;
+  if (cb.checked) { if (!compareSelected.includes(id)) compareSelected.push(id); }
+  else { compareSelected = compareSelected.filter(x => x !== id); }
+}
+
+async function doCompare() {
+  if (compareSelected.length < 2) { alert('Select at least 2 sessions'); return; }
+  let el = document.getElementById('compare-results');
+  el.innerHTML = '<div class="loading">Loading...</div>';
+  try {
+    let details = await Promise.all(compareSelected.map(id => api('/api/sessions/' + encodeURIComponent(id))));
+    let html = '<div class="compare-grid">' + details.map((d, i) => {
+      let s = d.stats || {};
+      return `<div class="compare-card">
+        <h3>Session ${i + 1}</h3>
+        <div class="compare-row"><span class="label">Duration</span><span class="value highlight">${fmtDur(s.duration_ms)}</span></div>
+        <div class="compare-row"><span class="label">Spans</span><span class="value">${(d.spans || []).length}</span></div>
+        <div class="compare-row"><span class="label">Tool Calls</span><span class="value">${s.tool_calls || 0}</span></div>
+        <div class="compare-row"><span class="label">Tokens</span><span class="value">${(s.total_tokens || 0).toLocaleString()}</span></div>
+        <div class="compare-row"><span class="label">Errors</span><span class="value" style="color:${s.error_count > 0 ? 'var(--red)' : 'var(--green)'}">${s.error_count}</span></div>
+        <div class="compare-row"><span class="label">Agents</span><span class="value">${(s.agents || []).join(', ')}</span></div>
+      </div>`;
+    }).join('') + '</div>';
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = `<div class="error-msg">${e.message}</div>`; }
+}
+
+/* ─── Users ─── */
+async function loadUsers() {
+  try {
+    let [users, tags, envs] = await Promise.all([
+      api('/api/stats/users'),
+      api('/api/stats/tags'),
+      api('/api/stats/environments'),
+    ]);
+
+    document.getElementById('env-body').innerHTML = (envs.environments || []).map(e => {
+      let badge = e.environment?.toLowerCase() || '';
+      return `<tr><td><span class="env-badge ${badge}">${escape(e.environment || '')}</span></td><td>${fmtNum(e.count)}</td><td>${e.error_rate ? e.error_rate.toFixed(1) + '%' : '-'}</td></tr>`;
+    }).join('') || '<tr><td colspan="3" class="empty-state">No data</td></tr>';
+
+    document.getElementById('tags-cloud').innerHTML = (tags || []).slice(0, 30).map(t => `<span class="badge badge-tag">${escape(t.tag)} (${t.count})</span>`).join('') || '<div class="empty-state">No tags</div>';
+
+    document.getElementById('users-body').innerHTML = (users || []).map(u => `<tr><td><strong>${escape(u.user_id)}</strong></td><td>${fmtNum(u.trace_count)}</td><td>${fmtNum(u.session_count)}</td><td>${fmtNum(u.total_tokens)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty-state">No users</td></tr>';
+
+  } catch(e) { console.error(e); }
+}
+
+/* ─── Errors ─── */
+async function loadErrors() {
+  try {
+    let errors = await api('/api/stats/errors');
+    document.getElementById('errors-body').innerHTML = (errors || []).map(e => `<tr class="clickable" onclick="goDetail('${escape(e.latest_session || '')}')">
+      <td style="color:var(--red);max-width:300px;overflow:hidden;text-overflow:ellipsis">${escape((e.error || '').slice(0, 100))}</td>
+      <td>${e.count}</td>
+      <td>${fmtDate(e.latest)}</td>
+      <td class="truncate">${escape((e.latest_session || '').slice(0, 20))}</td>
+    </tr>`).join('') || '<tr><td colspan="4" class="empty-state">No errors</td></tr>';
+  } catch(e) { console.error(e); }
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => loadPage('overview'));
 </script>
 </body>
 </html>

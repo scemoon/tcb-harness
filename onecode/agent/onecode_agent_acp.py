@@ -397,6 +397,19 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
                 "type": "content",
                 "content": {"type": "text", "text": text},
             }]
+        if include:
+            text = f"📁 Filter: `{include}`"
+            return [{
+                "type": "content",
+                "content": {"type": "text", "text": text},
+            }]
+        try:
+            return [{
+                "type": "content",
+                "content": {"type": "text", "text": f"```json\n{json.dumps(arguments, indent=2)}\n```"},
+            }]
+        except (TypeError, ValueError):
+            return []
 
     if name == "ToolSearch":
         return []
@@ -446,6 +459,18 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
             "type": "content",
             "content": {"type": "text", "text": "\n".join(lines)},
         }] if lines else []
+
+    if name is None or (name is not None and name not in (
+        "Read", "Write", "Edit", "Bash", "Grep", "ToolSearch", "ApplyPatch",
+        "Insert", "UndoEdit", "AskUser",
+    ) and not name.startswith("Todo") and not name.startswith("MCPTool")):
+        try:
+            return [{
+                "type": "content",
+                "content": {"type": "text", "text": f"```json\n{json.dumps(arguments, indent=2)}\n```"},
+            }]
+        except (TypeError, ValueError):
+            return []
 
     return []
 
@@ -1568,6 +1593,7 @@ class CDHACPAdapter:
             nonlocal text_buffer, thinking_sent_len, in_thinking, in_tool_call
             nonlocal in_minimax_tool_call, in_bare_tool_call, bare_tool_start
             text_buffer += text
+            self._agent_text_output += text
 
             # Watchdog: if a marker opened but the close never arrived
             # and the buffer has grown past the safety cap, give up
@@ -2403,10 +2429,6 @@ class CDHACPAdapter:
             self.send_session_update({
                 "sessionUpdate": "ask_user",
                 "question": _q_show,
-                "options": [
-                    {"label": "✓ 是", "value": "yes", "key": "y", "default": True},
-                    {"label": "✗ 取消", "value": "no", "key": "n"},
-                ],
                 "toolId": "auto-text-ask",
             })
             _auto_ans = ""
@@ -2424,7 +2446,7 @@ class CDHACPAdapter:
                     if _attempt == 0:
                         self.send_session_update({
                             "sessionUpdate": "ask_user_remind",
-                            "text": "请确认？",
+                            "text": "请回答",
                             "toolId": "auto-text-ask",
                         })
                     else:

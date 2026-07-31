@@ -1,0 +1,28 @@
+// Auto-generated from {{.SourceFile}}
+package types
+
+import groovy.transform.*
+import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
+
+{{range .Types}}
+@Canonical
+@Immutable
+class {{.Name}} {
+{{range .Properties}}    {{if .IsNullable}}String {{.Name}}{{else}}String {{.Name}}{{end}}
+{{end}}
+
+    static {{.Name}} fromJson(String jsonStr) {
+        def json = new JsonSlurper().parseText(jsonStr)
+        return new {{.Name}}(
+{{range .Properties}}            json.{{.JsonName}},
+{{end}}        )
+    }
+
+    String toJson() {
+        return JsonOutput.toJson([
+{{range .Properties}}            "{{.JsonName}}": {{.Name}},
+{{end}}        ])
+    }
+}
+{{end}}

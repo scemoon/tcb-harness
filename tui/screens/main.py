@@ -30,7 +30,6 @@ from tui.widgets.plan import Plan
 from tui.widgets.throbber import Throbber
 from tui.widgets.conversation import Conversation
 from tui.widgets.side_bar import SideBar
-from tui.widgets.session_tabs import SessionsTabs, SessionLabel
 from tui.screens.diff_screen import DiffScreen
 
 
@@ -336,14 +335,6 @@ class MainScreen(Screen, can_focus=False):
         session_tracker.close_session(current_mode)
         if next_mode:
             self.app.switch_mode(next_mode)
-            # Directly remove the closed tab from the visible screen's SessionsTabs
-            if sessions_tabs := self.app.screen.query_one_optional(
-                SessionsTabs
-            ):
-                if current_tab := sessions_tabs.query_one_optional(
-                    f"#{current_mode}", SessionLabel
-                ):
-                    await current_tab.remove()
         self.app.call_later(self.app.remove_mode, current_mode)
 
     def on_mount(self) -> None:

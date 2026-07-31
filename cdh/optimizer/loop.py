@@ -43,6 +43,7 @@ class HillclimbLoop:
         self._tool_count: int = 0
         self._test_pass_count: int = 0
         self._test_total_count: int = 0
+        self._resetting: bool = False
 
     def start(self, bus: Any = None) -> None:
         self.state = HillclimbState.COLLECTING
@@ -57,16 +58,16 @@ class HillclimbLoop:
         bus.subscribe(EventTypes.VERIFICATION_FAILED, self._on_verification_fail)
 
     def _on_tool_executed(self, event: Event) -> None:
-        if self.state == HillclimbState.COLLECTING:
+        if self.state == HillclimbState.COLLECTING and not self._resetting:
             self._tool_count += 1
 
     def _on_verification_pass(self, event: Event) -> None:
-        if self.state == HillclimbState.COLLECTING:
+        if self.state == HillclimbState.COLLECTING and not self._resetting:
             self._test_total_count += 1
             self._test_pass_count += 1
 
     def _on_verification_fail(self, event: Event) -> None:
-        if self.state == HillclimbState.COLLECTING:
+        if self.state == HillclimbState.COLLECTING and not self._resetting:
             self._test_total_count += 1
 
     def on_session_ended(self, event: Event) -> None:
@@ -121,10 +122,12 @@ class HillclimbLoop:
             self._apply_mutation(mutation)
             self.tracker.save_mutation(mutation)
 
+        self._resetting = True
         self.tracker.clear()
         self._tool_count = 0
         self._test_pass_count = 0
         self._test_total_count = 0
+        self._resetting = False
         self.min_sessions = min(self._base_min_sessions * 5, self.min_sessions + 2)
         self.state = HillclimbState.COLLECTING
 

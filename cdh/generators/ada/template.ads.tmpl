@@ -1,0 +1,7 @@
+-- Auto-generated from {{.SourceFile}}
+package Types is
+{{range .Types}}   type {{.Name}} is record
+{{range .Properties}}      {{.Name}} : String(1..100);
+{{end}}   end record;
+{{end}}
+end Types;

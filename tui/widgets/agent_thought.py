@@ -92,9 +92,7 @@ class AgentThought(Vertical, can_focus=True):
         if self._completed:
             return
         self._completed = True
-        self._collapsed = True
-        self._update_header()
-        self.query_one("#thought-content", Markdown).display = False
+        self.remove()
 
     def action_toggle(self) -> None:
         self._collapsed = not self._collapsed

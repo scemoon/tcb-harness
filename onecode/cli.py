@@ -997,15 +997,14 @@ def memory_clear(layer: str):
 
     am = AgentMemory()
     if layer:
-        layers_to_clear = [l for l in MemoryLayer if l.value == layer]
+        layers_to_clear = [ml for ml in MemoryLayer if ml.value == layer]
     else:
         layers_to_clear = list(MemoryLayer)
     removed = 0
-    for l in layers_to_clear:
-        entries = am.pyramid.list_by_layer(l)
+    for ml in layers_to_clear:
+        entries = am.pyramid.list_by_layer(ml)
         for e in entries:
-            am.pyramid._layers[l].remove(e)
-            am.backend.delete_entry(e.id)
+            am.forget(ml, e.id)
             removed += 1
     click.echo(f"Cleared {removed} memory entries.")
 

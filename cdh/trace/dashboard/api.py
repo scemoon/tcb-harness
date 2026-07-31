@@ -51,6 +51,17 @@ def _tags_val(key: str) -> str:
     return f"JSON_EXTRACT(tags, '$.{key}')"
 
 
+def _model_val() -> str:
+    """Return a SQLite expression to extract model from data.kwargs.model or tags.model."""
+    return (
+        "COALESCE("
+        "JSON_EXTRACT(data, '$.kwargs.model'), "
+        "JSON_EXTRACT(data, '$.model'), "
+        f"{_tags_val('model')}"
+        ")"
+    )
+
+
 def _parse_row(row: sqlite3.Row) -> dict:
     d = dict(row)
     if isinstance(d.get("tags"), str):
@@ -69,6 +80,8 @@ def _parse_row(row: sqlite3.Row) -> dict:
                 for k, v in data["kwargs"].items():
                     if k not in d or d[k] is None:
                         d[k] = v
+                    if k not in data:
+                        data[k] = v
         except (json.JSONDecodeError, TypeError):
             d["data"] = {}
     d["type"] = d.pop("trace_type", d.get("type", ""))
@@ -76,97 +89,167 @@ def _parse_row(row: sqlite3.Row) -> dict:
     return d
 
 
-def get_overview(db_path: Path) -> dict:
+def _percentile(sorted_data: list[float], p: float) -> float:
+    if not sorted_data:
+        return 0.0
+    idx = int(len(sorted_data) * p / 100.0)
+    idx = min(idx, len(sorted_data) - 1)
+    return sorted_data[idx]
+
+
+def get_overview(db_path: Path, start: str | None = None, end: str | None = None) -> dict:
     conn = _connect(db_path)
     if conn is None:
-        return {"total": 0, "total_today": 0, "sessions": 0, "agents": 0,
-                "avg_duration": 0, "p95_duration": 0, "error_count": 0,
-                "error_rate": 0, "total_tokens": 0, "lines_added": 0,
-                "tokens_per_kloc": 0, "type_distribution": {},
-                "hourly": [], "agent_breakdown": []}
+        return {
+            "total": 0, "total_today": 0, "sessions": 0, "agents": 0,
+            "avg_duration": 0, "p50_duration": 0, "p95_duration": 0, "p99_duration": 0,
+            "error_count": 0, "error_rate": 0,
+            "total_tokens": 0, "input_tokens": 0, "output_tokens": 0,
+            "cached_tokens": 0, "cache_hit_rate": 0,
+            "total_cost": 0, "estimated_cost": True,
+            "lines_added": 0, "tokens_per_kloc": 0,
+            "type_distribution": {}, "hourly": [], "agent_breakdown": [],
+            "model_breakdown": [], "daily_cost": [], "db_path": str(db_path),
+        }
     try:
         now = datetime.utcnow()
         today_start = now.strftime("%Y-%m-%dT00:00:00")
 
-        total = conn.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
+        time_filter = ""
+        time_params: list[Any] = []
+        if start:
+            time_filter += " AND timestamp >= ?"
+            time_params.append(start)
+        if end:
+            time_filter += " AND timestamp <= ?"
+            time_params.append(end)
+
+        total = conn.execute(f"SELECT COUNT(*) FROM traces WHERE 1=1{time_filter}", time_params).fetchone()[0]
         total_today = conn.execute(
-            "SELECT COUNT(*) FROM traces WHERE timestamp >= ?", (today_start,)
+            f"SELECT COUNT(*) FROM traces WHERE timestamp >= ?{time_filter}", (today_start, *time_params)
         ).fetchone()[0]
         sessions = conn.execute(
-            "SELECT COUNT(DISTINCT session_id) FROM traces"
+            f"SELECT COUNT(DISTINCT session_id) FROM traces WHERE 1=1{time_filter}", time_params
         ).fetchone()[0]
         agents = conn.execute(
-            "SELECT COUNT(DISTINCT {}) FROM traces WHERE {} IS NOT NULL".format(
-                _tags_val("agent"), _tags_val("agent")
-            )
+            f"SELECT COUNT(DISTINCT {_tags_val('agent')}) FROM traces WHERE {_tags_val('agent')} IS NOT NULL{time_filter}", time_params
         ).fetchone()[0]
 
-        # Duration stats (from data->duration_ms)
         durations = [
-            r[0]
+            float(r[0])
             for r in conn.execute(
-                "SELECT {} FROM traces WHERE {} IS NOT NULL".format(
-                    _json_val("duration_ms"), _json_val("duration_ms")
-                )
+                f"SELECT {_json_val('duration_ms')} FROM traces WHERE {_json_val('duration_ms')} IS NOT NULL{time_filter}",
+                time_params
             ).fetchall()
             if r[0] is not None
         ]
-        # The duration_ms column stores seconds (agenttrace stores the duration value
-        # verbatim), so the raw value is already in seconds — do NOT divide by 1000.
-        durations_s = [float(d) for d in durations]
-        avg_duration = sum(durations_s) / len(durations_s) if durations_s else 0
-        sorted_d = sorted(durations_s)
-        p95 = sorted_d[int(len(sorted_d) * 0.95)] if sorted_d else 0
+        sorted_d = sorted(durations)
+        avg_duration = sum(sorted_d) / len(sorted_d) if sorted_d else 0
+        p50 = _percentile(sorted_d, 50)
+        p95 = _percentile(sorted_d, 95)
+        p99 = _percentile(sorted_d, 99)
 
-        # Type distribution
         type_dist = {
             r["trace_type"]: r["cnt"]
             for r in conn.execute(
-                "SELECT trace_type, COUNT(*) as cnt FROM traces GROUP BY trace_type ORDER BY cnt DESC"
+                f"SELECT trace_type, COUNT(*) as cnt FROM traces WHERE 1=1{time_filter} GROUP BY trace_type ORDER BY cnt DESC",
+                time_params
             ).fetchall()
         }
 
-        # Time series (hourly, last 7 days)
         week_ago = (now - timedelta(days=7)).isoformat()
+        hourly_filter = " AND timestamp >= ?"
+        hourly_params = [start] if start else [week_ago]
         hourly = [
             {"bucket": r["bucket"], "count": r["cnt"]}
             for r in conn.execute(
-                """SELECT strftime('%Y-%m-%dT%H:00:00', timestamp) as bucket,
+                f"""SELECT strftime('%Y-%m-%dT%H:00:00', timestamp) as bucket,
                           COUNT(*) as cnt
-                   FROM traces WHERE timestamp >= ?
+                   FROM traces WHERE 1=1{hourly_filter}
                    GROUP BY bucket ORDER BY bucket""",
-                (week_ago,),
+                hourly_params,
             ).fetchall()
         ]
 
-        # Error rate
         errors = conn.execute(
-            "SELECT COUNT(*) FROM traces WHERE {} IS NOT NULL AND {} != ''".format(
-                _json_val("error"), _json_val("error")
-            )
+            f"SELECT COUNT(*) FROM traces WHERE {_json_val('error')} IS NOT NULL AND {_json_val('error')} != ''{time_filter}",
+            time_params
         ).fetchone()[0]
 
-        # Cost estimate (sum of token_count)
         total_tokens = conn.execute(
-            "SELECT COALESCE(SUM({}), 0) FROM traces".format(_json_val("token_count"))
+            f"SELECT COALESCE(SUM({_json_val('token_count')}), 0) FROM traces WHERE 1=1{time_filter}",
+            time_params
         ).fetchone()[0]
+        input_tokens = conn.execute(
+            f"SELECT COALESCE(SUM({_json_val('input_tokens')}), 0) FROM traces WHERE 1=1{time_filter}",
+            time_params
+        ).fetchone()[0]
+        output_tokens = conn.execute(
+            f"SELECT COALESCE(SUM({_json_val('output_tokens')}), 0) FROM traces WHERE 1=1{time_filter}",
+            time_params
+        ).fetchone()[0]
+        cached_tokens = conn.execute(
+            f"SELECT COALESCE(SUM({_json_val('cached_input_tokens')}), 0) FROM traces WHERE 1=1{time_filter}",
+            time_params
+        ).fetchone()[0]
+        cache_hit_rate = round(cached_tokens / input_tokens * 100, 1) if input_tokens else 0
 
-        # Lines of code added (Edit/Write tool calls at the collection layer)
         total_lines_added = conn.execute(
-            "SELECT COALESCE(SUM({}), 0) FROM traces".format(_json_val("lines_added"))
+            f"SELECT COALESCE(SUM({_json_val('lines_added')}), 0) FROM traces WHERE 1=1{time_filter}",
+            time_params
         ).fetchone()[0]
         tokens_per_kloc = (
             round(total_tokens / (total_lines_added / 1000), 2)
             if total_lines_added else 0
         )
 
-        # Agent breakdown for bar chart (case-insensitive grouping)
         agent_breakdown = [
             {"agent": r["agent"], "count": r["cnt"]}
             for r in conn.execute(
-                "SELECT MAX({0}) as agent, COUNT(*) as cnt FROM traces WHERE {1} IS NOT NULL GROUP BY LOWER({1}) ORDER BY cnt DESC".format(
-                    _tags_val("agent"), _tags_val("agent")
-                )
+                f"SELECT MAX({_tags_val('agent')}) as agent, COUNT(*) as cnt FROM traces WHERE {_tags_val('agent')} IS NOT NULL{time_filter} GROUP BY LOWER({_tags_val('agent')}) ORDER BY cnt DESC",
+                time_params
+            ).fetchall()
+        ]
+
+        model_breakdown = [
+            {
+                "model": r["model"],
+                "count": r["cnt"],
+                "total_tokens": r["tokens"],
+                "avg_duration": round(r["avg_dur"], 3) if r["avg_dur"] else 0,
+            }
+            for r in conn.execute(
+                f"""SELECT {_model_val()} as model,
+                          COUNT(*) as cnt,
+                          COALESCE(SUM({_json_val('token_count')}), 0) as tokens,
+                          AVG({_json_val('duration_ms')}) as avg_dur
+                   FROM traces
+                   WHERE {_model_val()} IS NOT NULL AND {_model_val()} != ''{time_filter}
+                   GROUP BY model
+                   ORDER BY tokens DESC
+                   LIMIT 10""",
+                time_params
+            ).fetchall()
+        ]
+
+        daily_cost = [
+            {
+                "day": r["day"],
+                "total_tokens": r["total_tokens"],
+                "input_tokens": r["total_input"],
+                "output_tokens": r["total_output"],
+            }
+            for r in conn.execute(
+                f"""SELECT strftime('%%Y-%%m-%%d', timestamp) as day,
+                          SUM(COALESCE({_json_val('token_count')}, 0)) as total_tokens,
+                          SUM(COALESCE({_json_val('input_tokens')}, 0)) as total_input,
+                          SUM(COALESCE({_json_val('output_tokens')}, 0)) as total_output
+                   FROM traces
+                   WHERE {_json_val('token_count')} IS NOT NULL{time_filter}
+                   GROUP BY day
+                   ORDER BY day DESC
+                   LIMIT 30""",
+                time_params
             ).fetchall()
         ]
 
@@ -175,16 +258,26 @@ def get_overview(db_path: Path) -> dict:
             "total_today": total_today,
             "sessions": sessions,
             "agents": agents,
-            "avg_duration": round(avg_duration, 2),
-            "p95_duration": round(p95, 2),
+            "avg_duration": round(avg_duration, 3),
+            "p50_duration": round(p50, 3),
+            "p95_duration": round(p95, 3),
+            "p99_duration": round(p99, 3),
             "error_count": errors,
             "error_rate": round(errors / total * 100, 2) if total else 0,
             "total_tokens": total_tokens,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_tokens": cached_tokens,
+            "cache_hit_rate": cache_hit_rate,
+            "total_cost": 0,
+            "estimated_cost": True,
             "lines_added": total_lines_added,
             "tokens_per_kloc": tokens_per_kloc,
             "type_distribution": type_dist,
             "hourly": hourly,
             "agent_breakdown": agent_breakdown,
+            "model_breakdown": model_breakdown,
+            "daily_cost": daily_cost,
             "db_path": str(db_path),
         }
     finally:
@@ -203,6 +296,9 @@ def get_traces(
     search: str | None = None,
     start: str | None = None,
     end: str | None = None,
+    user_id: str | None = None,
+    env: str | None = None,
+    tag: str | None = None,
 ) -> dict:
     conn = _connect(db_path)
     if conn is None:
@@ -235,6 +331,15 @@ def get_traces(
         if end:
             where.append("timestamp <= ?")
             params.append(end)
+        if user_id:
+            where.append("{} = ?".format(_tags_val("user_id")))
+            params.append(user_id)
+        if env:
+            where.append("{} = ?".format(_tags_val("environment")))
+            params.append(env)
+        if tag:
+            where.append("{} LIKE ?".format(_tags_val("tags")))
+            params.append(f"%{tag}%")
 
         where_clause = " AND ".join(where)
 
@@ -445,7 +550,7 @@ def _compute_session_stats(spans: list[dict]) -> dict:
         if isinstance(tags, dict) and tags.get("agent"):
             agents.add(tags["agent"])
 
-        model = d.get("model") or s.get("model")
+        model = d.get("model") or d.get("kwargs", {}).get("model") or s.get("model")
         if model:
             models.add(model)
 
@@ -505,6 +610,121 @@ def get_agents(db_path: Path) -> list[dict]:
         conn.close()
 
 
+def get_user_stats(db_path: Path) -> list[dict]:
+    conn = _connect(db_path)
+    if conn is None:
+        return []
+    try:
+        return [
+            {
+                "user_id": r["user_id"],
+                "trace_count": r["trace_count"],
+                "session_count": r["session_count"],
+                "total_tokens": r["total_tokens"],
+                "total_cost": r["total_cost"],
+            }
+            for r in conn.execute(
+                f"""SELECT {_tags_val('user_id')} as user_id,
+                          COUNT(*) as trace_count,
+                          COUNT(DISTINCT session_id) as session_count,
+                          COALESCE(SUM({_json_val('token_count')}), 0) as total_tokens,
+                          0 as total_cost
+                   FROM traces
+                   WHERE {_tags_val('user_id')} IS NOT NULL AND {_tags_val('user_id')} != ''
+                   GROUP BY user_id
+                   ORDER BY trace_count DESC
+                   LIMIT 100"""
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def get_tag_stats(db_path: Path) -> list[dict]:
+    conn = _connect(db_path)
+    if conn is None:
+        return []
+    try:
+        tags_data = conn.execute(
+            f"SELECT tags FROM traces WHERE tags IS NOT NULL"
+        ).fetchall()
+        tag_counts: dict[str, int] = {}
+        for row in tags_data:
+            try:
+                tags = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                if isinstance(tags, dict):
+                    for k, v in tags.items():
+                        key = str(k)
+                        val = str(v) if v is not None else ""
+                        tag_key = f"{key}={val}"
+                        tag_counts[tag_key] = tag_counts.get(tag_key, 0) + 1
+            except:
+                pass
+        return sorted(
+            [{"tag": k, "count": v} for k, v in tag_counts.items()],
+            key=lambda x: x["count"],
+            reverse=True
+        )[:50]
+    finally:
+        conn.close()
+
+
+def get_env_stats(db_path: Path) -> dict:
+    conn = _connect(db_path)
+    if conn is None:
+        return {"environments": [], "current": None}
+    try:
+        envs = [
+            {"environment": r["env"], "count": r["cnt"], "error_rate": r["error_rate"]}
+            for r in conn.execute(
+                f"""SELECT {_tags_val('environment')} as env,
+                          COUNT(*) as cnt,
+                          SUM(CASE WHEN {_json_val('error')} IS NOT NULL AND {_json_val('error')} != '' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as error_rate
+                   FROM traces
+                   WHERE {_tags_val('environment')} IS NOT NULL
+                   GROUP BY env
+                   ORDER BY cnt DESC"""
+            ).fetchall()
+        ]
+        return {"environments": envs}
+    finally:
+        conn.close()
+
+
+def get_scatter_data(db_path: Path, limit: int = 500) -> list[dict]:
+    conn = _connect(db_path)
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            f"""SELECT
+                    {_json_val('duration_ms')} as duration_ms,
+                    {_json_val('token_count')} as token_count,
+                    {_json_val('model')} as model,
+                    {_json_val('status')} as status,
+                    timestamp
+               FROM traces
+               WHERE {_json_val('duration_ms')} IS NOT NULL
+                  AND {_json_val('token_count')} IS NOT NULL
+                  AND {_json_val('model')} IS NOT NULL
+               ORDER BY timestamp DESC
+               LIMIT ?""",
+            (limit,)
+        ).fetchall()
+        return [
+            {
+                "x": float(r["duration_ms"] or 0),
+                "y": int(r["token_count"] or 0),
+                "model": r["model"] or "unknown",
+                "status": r["status"] or "unknown",
+                "timestamp": r["timestamp"],
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
 def get_model_stats(db_path: Path) -> list[dict]:
     conn = _connect(db_path)
     if conn is None:
@@ -515,17 +735,25 @@ def get_model_stats(db_path: Path) -> list[dict]:
                 "model": r["model"],
                 "span_count": r["span_count"],
                 "total_tokens": r["total_tokens"],
-                "avg_duration": r["avg_dur"] if r["avg_dur"] else 0,
+                "input_tokens": r["input_tokens"],
+                "output_tokens": r["output_tokens"],
+                "avg_duration": round(r["avg_dur"], 3) if r["avg_dur"] else 0,
+                "error_count": r["error_count"],
+                "error_rate": round(r["error_count"] / r["span_count"] * 100, 2) if r["span_count"] else 0,
+                "success_rate": round((r["span_count"] - r["error_count"]) / r["span_count"] * 100, 2) if r["span_count"] else 0,
             }
             for r in conn.execute(
-                f"""SELECT {_json_val('model')} as model,
+                f"""SELECT {_model_val()} as model,
                           COUNT(*) as span_count,
                           COALESCE(SUM({_json_val('token_count')}), 0) as total_tokens,
-                          AVG({_json_val('duration_ms')}) as avg_dur
+                          COALESCE(SUM({_json_val('input_tokens')}), 0) as input_tokens,
+                          COALESCE(SUM({_json_val('output_tokens')}), 0) as output_tokens,
+                          AVG({_json_val('duration_ms')}) as avg_dur,
+                          SUM(CASE WHEN {_json_val('status')} IN ('error','failed') OR ({_json_val('error')} IS NOT NULL AND {_json_val('error')} != '') THEN 1 ELSE 0 END) as error_count
                    FROM traces
-                   WHERE {_json_val('model')} IS NOT NULL AND {_json_val('model')} != ''
+                   WHERE {_model_val()} IS NOT NULL AND {_model_val()} != ''
                    GROUP BY model
-                   ORDER BY span_count DESC"""
+                   ORDER BY total_tokens DESC"""
             ).fetchall()
         ]
     finally:
@@ -582,6 +810,53 @@ def get_error_stats(db_path: Path) -> list[dict]:
                    ORDER BY cnt DESC"""
             ).fetchall()
         ]
+    finally:
+        conn.close()
+
+
+def get_latency_stats(db_path: Path) -> dict:
+    conn = _connect(db_path)
+    if conn is None:
+        return {"p50": 0, "p95": 0, "p99": 0, "histogram": []}
+    try:
+        durations = sorted([
+            float(r[0])
+            for r in conn.execute(
+                "SELECT {} FROM traces WHERE {} IS NOT NULL AND {} > 0".format(
+                    _json_val("duration_ms"), _json_val("duration_ms"), _json_val("duration_ms")
+                )
+            ).fetchall()
+            if r[0] is not None
+        ])
+
+        if not durations:
+            return {"p50": 0, "p95": 0, "p99": 0, "histogram": []}
+
+        p50 = _percentile(durations, 50)
+        p95 = _percentile(durations, 95)
+        p99 = _percentile(durations, 99)
+
+        max_dur = max(durations)
+        bucket_count = 20
+        bucket_size = max_dur / bucket_count
+        histogram = [0] * bucket_count
+        for d in durations:
+            idx = min(int(d / bucket_size), bucket_count - 1)
+            histogram[idx] += 1
+
+        buckets = [
+            {"range": f"{round(i * bucket_size, 2)}-{round((i + 1) * bucket_size, 2)}", "count": histogram[i]}
+            for i in range(bucket_count)
+        ]
+
+        return {
+            "p50": round(p50, 3),
+            "p95": round(p95, 3),
+            "p99": round(p99, 99),
+            "avg": round(sum(durations) / len(durations), 3),
+            "total": len(durations),
+            "histogram": buckets,
+        }
     finally:
         conn.close()
 

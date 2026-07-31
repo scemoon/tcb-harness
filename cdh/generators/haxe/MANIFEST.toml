@@ -1,0 +1,14 @@
+# Plugin manifest for haxe
+[plugin]
+name = "haxe"
+display_name = "Haxe"
+file_extension = ".hx"
+mime_type = "text/x-haxe"
+default_outdir = "haxe"
+output_filename_template = "{name}}.hx"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

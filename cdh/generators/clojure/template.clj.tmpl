@@ -1,0 +1,13 @@
+;; Auto-generated from {{.SourceFile}}
+(ns types)
+
+{{range .Types}}
+(defrecord {{.Name}} [{{range .Properties}}:{{.Name}} {{end}}]
+  {{.Name}}.
+  (from-json [m]
+    (->> m
+         (map (fn [[k v]] [(keyword k) v]))
+         (into {})))
+  (to-json [this]
+    (into {} (map (fn [[k v]] [(name k) v]) this))))
+{{end}}

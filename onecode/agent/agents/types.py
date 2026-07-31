@@ -152,14 +152,14 @@ class PlanAgent(AgentConfig):
             ),
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.DENY,
-            permission_bash=AgentPermission.DENY,
+            permission_bash=AgentPermission.ASK,
             permission_read=AgentPermission.ALLOW,
             permission_webfetch=AgentPermission.ALLOW,
             permission_websearch=AgentPermission.ALLOW,
             permission_todowrite=AgentPermission.DENY,
             max_turns=20,
             temperature=0.2,
-            tools=[],
+            disallowed_tools=["Write", "Edit", "Insert", "ApplyPatch", "UndoEdit"],
         )
 
 

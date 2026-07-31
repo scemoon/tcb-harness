@@ -1,0 +1,14 @@
+# Plugin manifest for matlab
+[plugin]
+name = "matlab"
+display_name = "MATLAB"
+file_extension = ".m"
+mime_type = "text/x-matlab"
+default_outdir = "matlab"
+output_filename_template = "{name}}.m"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

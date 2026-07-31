@@ -58,6 +58,10 @@ onecode = [
     "builtin_skills/**/*",
     "agent/agents/prompts/**/*",
 ]
+cdh = [
+    "generators/**/*.toml",
+    "generators/**/*.tmpl",
+]
 
 [tool.ruff]
 exclude = ["tui/", "dist/", ".venv/"]

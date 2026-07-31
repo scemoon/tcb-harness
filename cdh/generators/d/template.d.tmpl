@@ -1,0 +1,24 @@
+// Auto-generated from {{.SourceFile}}
+module types;
+
+import std.json;
+import std.uuid;
+
+{{range .Types}}
+struct {{.Name}} {
+{{range .Properties}}    {{if .IsNullable}}string{{else}}string{{end}} {{.Name}};
+{{end}}
+}
+
+{{.Name}} {{.Name}}_from_json(const JSONValue json) {
+    return {{.Name}}(
+{{range .Properties}}        json["{{.JsonName}}"].str,
+{{end}}    );
+}
+
+JSONValue {{.Name}}_to_json(const {{.Name}} obj) {
+    return JSONValue([
+{{range .Properties}}        "{{.JsonName}}": JSONValue(obj.{{.Name}}),
+{{end}}    ]);
+}
+{{end}}

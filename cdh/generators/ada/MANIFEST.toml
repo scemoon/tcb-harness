@@ -1,0 +1,14 @@
+# Plugin manifest for ada
+[plugin]
+name = "ada"
+display_name = "Ada"
+file_extension = ".ads"
+mime_type = "text/x-ada"
+default_outdir = "ada"
+output_filename_template = "{name}}.ads"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = false
+format_hints = ["date-time", "uuid"]

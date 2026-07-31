@@ -63,6 +63,9 @@ class TextualHighlightTheme(HighlightTheme):
 class HighlightedTextArea(TextArea):
     highlight_language = reactive("markdown")
 
+    MAX_PASTE_LINES = 100
+    MAX_PASTE_CHARS = 50000
+
     @dataclass
     class CursorMove(Message):
         selection: Selection

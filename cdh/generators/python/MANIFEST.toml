@@ -1,0 +1,18 @@
+[plugin]
+name = "python"
+display_name = "Python"
+file_extension = ".py"
+mime_type = "text/x-python"
+default_outdir = "."
+output_filename_template = "{name}.py"
+package_name_default = "types"
+
+[features]
+enums = true
+allOf = true
+oneOf = true
+anyOf = true
+nullable = true
+readOnly = true
+writeOnly = true
+format_hints = ["date-time", "uuid", "email", "uri", "double"]

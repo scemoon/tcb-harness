@@ -1,0 +1,14 @@
+# Plugin manifest for solidity
+[plugin]
+name = "solidity"
+display_name = "Solidity"
+file_extension = ".sol"
+mime_type = "text/x-solidity"
+default_outdir = "solidity"
+output_filename_template = "{name}}.sol"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = false
+format_hints = ["date-time", "uuid", "email"]

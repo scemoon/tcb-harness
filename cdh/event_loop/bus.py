@@ -34,6 +34,8 @@ class EventBus:
     _subscribers: dict[str, list[EventHandler]] = field(default_factory=dict)
     _history: list[Event] = field(default_factory=list)
     _max_history: int = 1000
+    _pending_tasks: set[asyncio.Task] = field(default_factory=set)
+    _max_pending_tasks: int = 100
 
     def subscribe(self, event_type: str, handler: EventHandler) -> None:
         if event_type not in self._subscribers:
@@ -47,6 +49,9 @@ class EventBus:
                 h for h in self._subscribers[event_type] if h != handler
             ]
 
+    def _cleanup_finished_tasks(self) -> None:
+        self._pending_tasks = {t for t in self._pending_tasks if not t.done()}
+
     def publish(self, event: Event) -> None:
         self._history.append(event)
         if len(self._history) > self._max_history:
@@ -56,11 +61,22 @@ class EventBus:
         if not handlers:
             return
 
+        self._cleanup_finished_tasks()
+
         try:
             loop = asyncio.get_running_loop()
             for handler in handlers:
                 if _is_async(handler):
-                    loop.create_task(self._invoke_async(handler, event))
+                    if len(self._pending_tasks) >= self._max_pending_tasks:
+                        logger.warning(
+                            "EventBus: pending task limit (%d) reached, skipping async handler %s",
+                            self._max_pending_tasks,
+                            getattr(handler, "__name__", handler),
+                        )
+                        continue
+                    task = loop.create_task(self._invoke_async(handler, event))
+                    self._pending_tasks.add(task)
+                    task.add_done_callback(self._pending_tasks.discard)
                 else:
                     self._invoke_sync(handler, event)
         except RuntimeError:

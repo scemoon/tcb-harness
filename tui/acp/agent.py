@@ -99,16 +99,21 @@ class Agent(AgentBase):
         agent: AgentData,
         session_id: str | None,
         session_pk: int | None = None,
+        default_model: str | None = None,
     ) -> None:
         """
 
         Args:
             project_root: Project root path.
-            command: Command to launch agent.
+            agent: Agent data.
+            session_id: Session ID.
+            session_pk: Session primary key.
+            default_model: Default model to use when _current_model is not set.
         """
         super().__init__(project_root)
 
         self._agent_data = agent
+        self._default_model = default_model
         self.session_id = session_id
 
         self.server = jsonrpc.Server()
@@ -139,6 +144,11 @@ class Agent(AgentBase):
         self.event_tap = AcpEventTap()
         self._current_model: str | None = None
         self._tool_call_start: dict[str, float] = {}
+
+    @property
+    def _effective_model(self) -> str | None:
+        """Return current model or fallback to default model."""
+        return self._current_model or self._default_model
 
     @property
     def command(self) -> str | None:
@@ -390,8 +400,8 @@ class Agent(AgentBase):
             "session_id": sessionId,
             "tags": tags,
         }
-        if self._current_model:
-            trace_kw["model"] = self._current_model
+        if self._effective_model:
+            trace_kw["model"] = self._effective_model
 
         tool_call_id = update.get("toolCallId")
         subagent_id = update.get("subagentId")
@@ -462,8 +472,8 @@ class Agent(AgentBase):
             "session_id": sessionId,
             "tags": tags,
         }
-        if self._current_model:
-            trace_kw["model"] = self._current_model
+        if self._effective_model:
+            trace_kw["model"] = self._effective_model
         if "status" in event:
             trace_kw["status"] = event["status"]
         if "error" in event:
@@ -734,10 +744,6 @@ class Agent(AgentBase):
                     if not all(isinstance(datum, dict) for datum in agent_data):
                         logger.error("Agent sent invalid data: %r", agent_data)
                         continue
-
-                if not isinstance(agent_data, dict):
-                    logger.error("Invalid JSON from agent: %r", agent_data)
-                    continue
 
                 if not isinstance(agent_data, dict):
                     logger.error("Invalid JSON from agent: %r", agent_data)
@@ -1097,8 +1103,8 @@ class Agent(AgentBase):
                     "update_type": "session_prompt",
                 },
             }
-            if self._current_model:
-                usage_kw["model"] = self._current_model
+            if self._effective_model:
+                usage_kw["model"] = self._effective_model
             if total := usage.get("total_tokens"):
                 usage_kw["token_count"] = total
             if inp := usage.get("input_tokens"):

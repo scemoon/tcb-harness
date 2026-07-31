@@ -1,0 +1,20 @@
+-- Auto-generated from {{.SourceFile}}
+module Types exposing ({{range .Types}}{{.Name}}{{end}})
+
+import Json.Decode as D
+import Json.Encode as E
+{{range .Types}}
+type alias {{.Name}} =
+    { {{range .Properties}}{{.Name}} : {{if .IsNullable}}Maybe {{.Type}}{{else}}{{.Type}}{{end}}{{end}}
+    }
+
+{{.Name}}Decoder : D.Decoder {{.Name}}
+{{.Name}}Decoder =
+    D.map {{.Name}}
+{{range .Properties}}        (D.field "{{.JsonName}}" {{if .IsNullable}}D.{{.Type}}Decoder{{else}}D.{{.Type}}{{end}}){{end}}
+
+{{.Name}}Encoder : {{.Name}} -> E.Value
+{{.Name}}Encoder {{.Name}} =
+    E.object
+{{range .Properties}}        [ ( "{{.JsonName}}", E.{{.Type}} {{.Name}}.{{.Name}} ){{end}}
+{{end}}

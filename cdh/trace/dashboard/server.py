@@ -15,14 +15,19 @@ from cdh.trace.dashboard.api import (
     export_traces,
     get_agents,
     get_cost_stats,
+    get_env_stats,
     get_error_stats,
+    get_latency_stats,
     get_loc_stats,
     get_model_stats,
     get_overview,
+    get_scatter_data,
     get_session_detail,
     get_sessions,
+    get_tag_stats,
     get_tool_stats,
     get_traces,
+    get_user_stats,
 )
 
 
@@ -62,6 +67,11 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
             "/api/stats/errors": self._api_errors,
             "/api/stats/cost": self._api_cost,
             "/api/stats/loc": self._api_loc,
+            "/api/stats/latency": self._api_latency,
+            "/api/stats/scatter": self._api_scatter,
+            "/api/stats/users": self._api_users,
+            "/api/stats/tags": self._api_tags,
+            "/api/stats/environments": self._api_envs,
             "/api/export": self._api_export,
         }
 
@@ -76,6 +86,8 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
             handler(params if path != "/" else None)
         elif path == "/favicon.ico":
             self._send_favicon()
+        elif not path.startswith("/api/"):
+            self._send_html()
         else:
             self.send_json({"status": "error", "error": "not found"}, 404)
 
@@ -100,10 +112,12 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data).encode("utf-8"))
 
-    def _api_overview(self, _params: dict):
+    def _api_overview(self, params: dict):
         try:
-            data = get_overview(self._db_path)
+            data = get_overview(self._db_path, start=params.get("start"), end=params.get("end"))
             self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
         except Exception as e:
             self.send_json({"status": "error", "error": str(e)}, 500)
 
@@ -123,6 +137,8 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
                 end=params.get("end"),
             )
             self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
         except Exception as e:
             self.send_json({"status": "error", "error": str(e)}, 500)
 
@@ -134,6 +150,8 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
                 offset=int(params.get("offset", 0)),
             )
             self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
         except Exception as e:
             self.send_json({"status": "error", "error": str(e)}, 500)
 
@@ -144,6 +162,8 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
                 self.send_json({"status": "error", "error": "session not found"}, 404)
             else:
                 self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
         except Exception as e:
             self.send_json({"status": "error", "error": str(e)}, 500)
 
@@ -151,6 +171,8 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
         try:
             data = get_agents(self._db_path)
             self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
         except Exception as e:
             self.send_json({"status": "error", "error": str(e)}, 500)
 
@@ -158,6 +180,8 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
         try:
             data = get_model_stats(self._db_path)
             self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
         except Exception as e:
             self.send_json({"status": "error", "error": str(e)}, 500)
 
@@ -165,6 +189,8 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
         try:
             data = get_tool_stats(self._db_path)
             self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
         except Exception as e:
             self.send_json({"status": "error", "error": str(e)}, 500)
 
@@ -172,6 +198,8 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
         try:
             data = get_error_stats(self._db_path)
             self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
         except Exception as e:
             self.send_json({"status": "error", "error": str(e)}, 500)
 
@@ -181,6 +209,8 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
             prices = json.loads(prices_raw) if isinstance(prices_raw, str) else {}
             data = get_cost_stats(self._db_path, prices)
             self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
         except Exception as e:
             self.send_json({"status": "error", "error": str(e)}, 500)
 
@@ -188,6 +218,54 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
         try:
             data = get_loc_stats(self._db_path)
             self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
+        except Exception as e:
+            self.send_json({"status": "error", "error": str(e)}, 500)
+
+    def _api_latency(self, _params: dict):
+        try:
+            data = get_latency_stats(self._db_path)
+            self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
+        except Exception as e:
+            self.send_json({"status": "error", "error": str(e)}, 500)
+
+    def _api_scatter(self, params: dict):
+        try:
+            limit = int(params.get("limit", 500))
+            data = get_scatter_data(self._db_path, limit)
+            self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
+        except Exception as e:
+            self.send_json({"status": "error", "error": str(e)}, 500)
+
+    def _api_users(self, _params: dict):
+        try:
+            data = get_user_stats(self._db_path)
+            self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
+        except Exception as e:
+            self.send_json({"status": "error", "error": str(e)}, 500)
+
+    def _api_tags(self, _params: dict):
+        try:
+            data = get_tag_stats(self._db_path)
+            self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
+        except Exception as e:
+            self.send_json({"status": "error", "error": str(e)}, 500)
+
+    def _api_envs(self, _params: dict):
+        try:
+            data = get_env_stats(self._db_path)
+            self.send_json({"status": "ok", "data": data})
+        except OSError:
+            pass
         except Exception as e:
             self.send_json({"status": "error", "error": str(e)}, 500)
 
@@ -211,6 +289,8 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
                 self.wfile.write(data.encode("utf-8"))
+        except OSError:
+            pass
         except Exception as e:
             self.send_json({"status": "error", "error": str(e)}, 500)
 

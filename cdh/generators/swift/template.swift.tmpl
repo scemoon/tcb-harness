@@ -1,0 +1,10 @@
+// Auto-generated from {{.SourceFile}}
+import Foundation
+
+public protocol GeneratedType: Codable {}
+
+{{range .Types}}public struct {{.Name}}: GeneratedType {
+{{range .Properties}}    public let {{.Name}}: {{.NullableType}}
+{{end}}}
+
+{{end}}

@@ -1,0 +1,14 @@
+# Plugin manifest for ocaml
+[plugin]
+name = "ocaml"
+display_name = "OCaml"
+file_extension = ".ml"
+mime_type = "text/x-ocaml"
+default_outdir = "ocaml"
+output_filename_template = "{name}}.ml"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

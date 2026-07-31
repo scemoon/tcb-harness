@@ -32,6 +32,7 @@ class MCPClient:
     command: str
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    timeout: float = 30.0
     _process: Optional[subprocess.Popen] = None
     _reader: Optional[asyncio.StreamReader] = None
     _writer_transport: Any = None
@@ -137,7 +138,7 @@ class MCPClient:
         self._pending[str(req_id)] = future
 
         try:
-            result = await asyncio.wait_for(future, timeout=30)
+            result = await asyncio.wait_for(future, timeout=self.timeout)
             return result
         except asyncio.TimeoutError:
             self._pending.pop(str(req_id), None)

@@ -1,0 +1,14 @@
+# Plugin manifest for racket
+[plugin]
+name = "racket"
+display_name = "Racket"
+file_extension = ".rkt"
+mime_type = "text/x-racket"
+default_outdir = "racket"
+output_filename_template = "{name}}.rkt"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

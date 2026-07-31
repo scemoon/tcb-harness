@@ -1,0 +1,14 @@
+# Plugin manifest for cpp
+[plugin]
+name = "cpp"
+display_name = "C++"
+file_extension = ".hpp"
+mime_type = "text/x-c++"
+default_outdir = "cpp"
+output_filename_template = "{name}}.hpp"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

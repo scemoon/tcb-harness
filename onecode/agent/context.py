@@ -55,6 +55,7 @@ class ContextConfig:
     max_tokens: int = 32000
     max_messages: int = 1000
     compact_threshold: float = 0.40
+    compact_mode: str = "auto"
     model: str = "gpt-4"
 
 
@@ -102,6 +103,7 @@ class ContextManager:
         self.config = config or ContextConfig()
         self.messages: list[Message] = []
         self._token_count = 0
+        self._manual_compact_requested = False
 
     def set_model(self, model: str) -> None:
         """Sync context config with the model's context window.
@@ -213,8 +215,16 @@ class ContextManager:
             total += self._estimate_message_tokens(m)
         self._token_count = total
 
+    def request_compact(self) -> None:
+        self._manual_compact_requested = True
+
     def should_compact(self) -> bool:
         if self.config.max_tokens <= 0:
+            return False
+        if self.config.compact_mode == "on_demand":
+            if self._manual_compact_requested:
+                self._manual_compact_requested = False
+                return True
             return False
         return self._token_count >= self.config.max_tokens * self.config.compact_threshold
 

@@ -1,0 +1,13 @@
+(* Auto-generated from {{.SourceFile}} *)
+open Yojson
+
+module Types = struct
+{{range .Types}}
+  type {{.Name | lower}} = {
+{{range .Properties}}    {{.Name | lower}} : {{if .IsNullable}}string option{{else}}string{{end}}{{end}}
+  }
+
+  let {{.Name | lower}}_of_json (json : Yojson.Safe.t) =
+{{range .Properties}}    {{.Name | lower}} : (json |> Yojson.Safe.Util.member "{{.JsonName}}" |> Yojson.Safe.Util.to_string_option){{end}}
+{{end}}
+end
