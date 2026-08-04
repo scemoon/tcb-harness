@@ -6,7 +6,10 @@ from textual.app import ComposeResult
 from textual import on
 from textual.containers import Horizontal, VerticalGroup
 from textual.message import Message
-from textual.widgets import Button, Checkbox, Input, Static
+from textual.widgets import (
+    Button, Checkbox, Input, RadioButton, RadioSet, TabbedContent, TabPane,
+)
+from textual.css.query import NoMatches
 
 
 class AskUserSubmitted(Message):
@@ -21,53 +24,63 @@ class AskUserWidget(VerticalGroup):
     DEFAULT_CSS = """
     AskUserWidget {
         height: auto;
-        padding: 1 2;
-        margin: 1 0;
+        padding: 1 1;
+        margin: 1 1 1 0;
+        background: $surface 80%;
         border: round $primary;
-        background: $boost;
     }
-    AskUserWidget #ask-question {
-        text-style: bold;
-        margin-bottom: 1;
-    }
-    AskUserWidget #ask-options {
+    AskUserWidget RadioSet {
         height: auto;
         margin-bottom: 1;
+    }
+    AskUserWidget RadioButton {
+        margin-bottom: 0;
+    }
+    AskUserWidget #ask-custom-wrap {
+        height: auto;
+        margin-bottom: 1;
+    }
+    AskUserWidget .ask-custom-btn {
+        margin-right: 1;
+        width: auto;
     }
     AskUserWidget #ask-input-row {
         height: auto;
     }
     AskUserWidget #ask-input {
         margin-right: 1;
+        width: 24;
     }
-    AskUserWidget #ask-answer-done {
-        margin: 0 1;
+    AskUserWidget .ask-q-input {
+        margin: 1 0 0 0;
+        width: 24;
+    }
+    AskUserWidget #ask-tabs {
+        height: auto;
+        margin-bottom: 1;
+    }
+    AskUserWidget #ask-tab-content {
+        height: auto;
     }
     AskUserWidget .ask-q-section {
         height: auto;
         margin-bottom: 1;
-        padding: 0 0 0 1;
-        border-left: solid $primary 30%;
-    }
-    AskUserWidget .ask-q-header {
-        text-style: bold;
-    }
-    AskUserWidget .ask-q-text {
-        margin-bottom: 1;
+        padding: 0;
     }
     AskUserWidget .ask-q-options {
         height: auto;
-        margin-bottom: 0;
+        margin-bottom: 1;
     }
-    AskUserWidget .ask-submit-row {
+    AskUserWidget #ask-rollback-row {
         height: auto;
-        margin-top: 1;
     }
-    AskUserWidget .ask-opt-btn {
-        margin-right: 1;
+    AskUserWidget #ask-send,
+    AskUserWidget #ask-submit-all,
+    AskUserWidget #ask-rollback {
+        width: auto;
     }
-    AskUserWidget .ask-q-input {
-        margin: 0 0 1 0;
+    AskUserWidget .-hidden {
+        display: none;
     }
     """
 
@@ -75,6 +88,7 @@ class AskUserWidget(VerticalGroup):
         self, tool_id: str, question: str = "",
         options: list[dict] | None = None,
         questions: list[dict] | None = None,
+        checkpoint_id: str = "",
     ) -> None:
         super().__init__()
         self._tool_id = tool_id
@@ -84,100 +98,178 @@ class AskUserWidget(VerticalGroup):
         self._is_multi = bool(self._questions)
         self._answer = ""
         self._done = False
-        self._option_buttons: dict[str, str] = {}
-        # multi-q state: btn_id → (question_index, value)
+        self._checkpoint_id = checkpoint_id
+        self._option_values: dict[str, str] = {}
         self._q_btn_map: dict[str, tuple[int, str]] = {}
-        # multi-q state: qid → set of selected option values (for "multiple" type)
         self._multi_selections: dict[str, set[str]] = {}
-        # multi-q state: qid → single selected value (for "single"/"confirm" type)
         self._q_selections: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
-        if self._done:
-            suffix = "multi" if self._is_multi else self._answer
-            yield Static(f"✅ AskUser — {suffix}", id="ask-answer-done")
-            return
         if self._is_multi:
             yield from self._compose_multi()
         else:
             yield from self._compose_single()
 
+    # ── Single question (no Tab) ─────────────────────────────────────────────
+
     def _compose_single(self) -> ComposeResult:
-        yield Static(f"❓ {self._question}", id="ask-question")
         if self._options:
-            with Horizontal(id="ask-options"):
+            yield RadioSet(id="ask-radio-set")
+
+        # ✍ 其他 — expands hidden input
+        yield Button("✍ 其他", id="ask-custom", variant="default", classes="ask-custom-btn")
+        with VerticalGroup(id="ask-custom-wrap", classes="-hidden"):
+            yield Input(placeholder="✍ 输入自定义方案\u2026", id="ask-input")
+            yield Button("Send", variant="primary", id="ask-send")
+
+        # bottom row: Rollback (left); Submit only shown if no options (right)
+        with Horizontal(id="ask-rollback-row"):
+            if self._checkpoint_id:
+                yield Button("Rollback", id="ask-rollback", variant="warning")
+            if not self._options:
+                yield Button("Submit", variant="primary", id="ask-submit-all")
+
+    # ── Multi question (Tabbed) ─────────────────────────────────────────────
+
+    def _compose_multi(self) -> ComposeResult:
+        yield TabbedContent(id="ask-tab-content")
+
+    async def _build_multi_panes(self) -> None:
+        tc = self.query_one("#ask-tab-content", TabbedContent)
+        for qi, q in enumerate(self._questions):
+            pane_id = f"_ask_pane_{qi}"
+            pane, to_mount = self._make_tab_pane(qi, q, pane_id)
+            await tc.add_pane(pane)
+            for item in to_mount:
+                widget_or_wrap, children = item
+                if children is not None:
+                    # wrap with children (e.g., input wrap)
+                    pane.mount(widget_or_wrap)
+                    for child in children:
+                        widget_or_wrap.mount(child)
+                else:
+                    pane.mount(widget_or_wrap)
+
+        rollback_row = Horizontal(id="ask-rollback-row")
+        await self.mount(rollback_row)
+        if self._checkpoint_id:
+            await rollback_row.mount(Button("Rollback", id="ask-rollback", variant="warning"))
+        await rollback_row.mount(Button("Submit All", variant="primary", id="ask-submit-all"))
+
+    def _make_tab_pane(self, qi: int, q: dict, pane_id: str) -> tuple[TabPane, list]:
+        qtype = q.get("type", "single")
+        qopts = q.get("options", [])
+        qid = f"_ask_q_{qi}"
+        header = q.get("header", f"Q{qi + 1}")
+
+        pane = TabPane(header, id=pane_id)
+        # Collect widgets to mount after pane is attached to TabbedContent
+        to_mount: list = []
+
+        if qtype == "multiple" and qopts:
+            for oi, opt in enumerate(qopts):
+                to_mount.append((
+                    Checkbox(f" {opt.get('label', '')}", id=f"{qid}_chk_{oi}"),
+                    None,
+                ))
+                self._multi_selections.setdefault(qid, set())
+        elif qtype == "confirm":
+            to_mount.append((
+                VerticalGroup(
+                    Button("Yes", id=f"{qid}_yes", variant="primary", classes="ask-opt-btn"),
+                    Button("No", id=f"{qid}_no", classes="ask-opt-btn"),
+                ),
+                None,
+            ))
+            self._q_btn_map[f"{qid}_yes"] = (qi, "yes")
+            self._q_btn_map[f"{qid}_no"] = (qi, "no")
+        elif qopts:
+            rs = RadioSet(id=f"{qid}_radios")
+            btns = []
+            for oi, opt in enumerate(qopts):
+                label = opt.get("label", "")
+                value = opt.get("value", "")
+                btn_id = f"{qid}_opt_{oi}"
+                self._option_values[btn_id] = value
+                self._q_btn_map[btn_id] = (qi, value)
+                btns.append(RadioButton(label, id=btn_id, value=value))
+            to_mount.append((rs, btns))
+
+        # ✍ 其他 + input wrap
+        to_mount.append((
+            Button("✍ 其他", id=f"{qid}_custom", variant="default", classes="ask-custom-btn"),
+            None,
+        ))
+        wrap = VerticalGroup(id=f"{qid}_custom-wrap", classes="-hidden")
+        to_mount.append((wrap, [Input(placeholder="✍ 输入自定义方案\u2026", id=f"{qid}_input", classes="ask-q-input")]))
+
+        return pane, to_mount
+
+    # ── Mount / Focus ───────────────────────────────────────────────────────
+
+    async def on_mount(self) -> None:
+        if self._is_multi:
+            await self._build_multi_panes()
+            self.query_one("#ask-tab-content", TabbedContent).active = "_ask_pane_0"
+            try:
+                self.query_one("RadioButton", RadioButton).focus()
+                return
+            except NoMatches:
+                pass
+            try:
+                self.query_one(".ask-opt-btn", Button).focus()
+                return
+            except NoMatches:
+                pass
+            try:
+                self.query_one(".ask-q-input", Input).focus()
+                return
+            except NoMatches:
+                pass
+            try:
+                self.query(Checkbox).first().focus()
+            except NoMatches:
+                self.focus()
+        else:
+            if self._options:
+                rs = self.query_one("#ask-radio-set", RadioSet)
                 for i, opt in enumerate(self._options):
                     label = opt.get("label", "")
                     value = opt.get("value", "")
                     key = opt.get("key")
-                    if key:
-                        display = f"[{key.upper()}] {label}"
-                    else:
-                        display = label
-                    btn_id = f"_ask_opt_{i}"
-                    self._option_buttons[btn_id] = value
-                    yield Button(display, id=btn_id)
-        with Horizontal(id="ask-input-row"):
-            yield Input(placeholder="Type your answer\u2026", id="ask-input")
-            yield Button("Send", variant="primary", id="ask-send")
-            yield Button("Cancel", id="ask-cancel")
-
-    def _compose_multi(self) -> ComposeResult:
-        for qi, q in enumerate(self._questions):
-            qheader = q.get("header", "") or f"Question {qi + 1}"
-            qtext = q.get("question", "")
-            qtype = q.get("type", "single")
-            qopts = q.get("options", [])
-            qid = f"_ask_q_{qi}"
-
-            with VerticalGroup(classes="ask-q-section"):
-                yield Static(qheader, classes="ask-q-header")
-                yield Static(qtext, classes="ask-q-text")
-
-                if qtype == "multiple" and qopts:
-                    with VerticalGroup(classes="ask-q-options"):
-                        for oi, opt in enumerate(qopts):
-                            opt_id = f"{qid}_chk_{oi}"
-                            label = opt.get("label", "")
-                            yield Checkbox(f" {label}", id=opt_id)
-                            self._multi_selections.setdefault(qid, set())
-                else:
-                    # single, confirm, or multiple without options → buttons + custom input
-                    with VerticalGroup(classes="ask-q-options"):
-                        if qtype == "confirm":
-                            yield Horizontal(
-                                Button("Yes", id=f"{qid}_yes", variant="primary", classes="ask-opt-btn"),
-                                Button("No", id=f"{qid}_no", classes="ask-opt-btn"),
-                            )
-                            self._q_btn_map[f"{qid}_yes"] = (qi, "yes")
-                            self._q_btn_map[f"{qid}_no"] = (qi, "no")
-                        elif qopts:
-                            with Horizontal():
-                                for oi, opt in enumerate(qopts):
-                                    label = opt.get("label", "")
-                                    value = opt.get("value", "")
-                                    btn_id = f"{qid}_opt_{oi}"
-                                    self._option_buttons[btn_id] = value
-                                    self._q_btn_map[btn_id] = (qi, value)
-                                    yield Button(label, id=btn_id, classes="ask-opt-btn")
-                        yield Input(placeholder="Custom answer\u2026", id=f"{qid}_input", classes="ask-q-input")
-
-        with Horizontal(classes="ask-submit-row"):
-            yield Button("Submit All", variant="primary", id="ask-submit-all")
-            yield Button("Cancel", id="ask-cancel")
-
-    def on_mount(self) -> None:
-        if not self._is_multi:
+                    display = f"[{key.upper()}] {label}" if key else label
+                    btn_id = f"_ask_opt_0_{i}"
+                    self._option_values[btn_id] = value
+                    await rs.mount(RadioButton(display, id=btn_id, value=value))
+                try:
+                    self.query_one("RadioButton", RadioButton).focus()
+                    return
+                except NoMatches:
+                    pass
             try:
                 self.query_one("#ask-input", Input).focus()
-            except Exception:
-                pass
+            except NoMatches:
+                self.focus()
 
-    # ── Single question handlers (backward compat) ──
+    # ── Single question handlers ─────────────────────────────────────────────
 
-    @on(Button.Pressed, "#ask-cancel")
-    def handle_cancel(self) -> None:
-        self.post_message(AskUserSubmitted("__cancel__", self._tool_id))
+    @on(RadioSet.Changed, "#ask-radio-set")
+    def handle_radio_changed(self, event: RadioSet.Changed) -> None:
+        if self._is_multi:
+            return
+        btn_id = event.pressed.id or ""
+        value = self._option_values.get(btn_id, "")
+        if value:
+            self._finish(value)
+
+    @on(Button.Pressed, "#ask-rollback")
+    def handle_rollback(self) -> None:
+        self.post_message(AskUserSubmitted("__rollback__", self._tool_id))
+
+    @on(Button.Pressed, "#ask-submit-all")
+    def handle_submit(self) -> None:
+        if self._is_multi:
+            return
 
     @on(Button.Pressed, "#ask-send")
     def handle_send(self) -> None:
@@ -191,16 +283,18 @@ class AskUserWidget(VerticalGroup):
         if value:
             self._finish(value)
 
-    @on(Button.Pressed)
-    def handle_option(self, event: Button.Pressed) -> None:
-        btn_id = event.button.id
-        if btn_id and btn_id in self._option_buttons and not self._is_multi:
-            self._finish(self._option_buttons[btn_id])
+    @on(Button.Pressed, "#ask-custom")
+    def handle_custom(self) -> None:
+        self.query_one("#ask-custom-wrap", VerticalGroup).display = True
+        self.query_one("#ask-custom", Button).display = False
+        self.query_one("#ask-input", Input).focus()
 
-    # ── Multi-question handlers ──
+    # ── Multi-question handlers ─────────────────────────────────────────────
 
     @on(Button.Pressed, "#ask-submit-all")
     def handle_submit_all(self) -> None:
+        if not self._is_multi:
+            return
         answers = {}
         for qi, q in enumerate(self._questions):
             qtype = q.get("type", "single")
@@ -231,8 +325,10 @@ class AskUserWidget(VerticalGroup):
                         pass
                 answers[str(qi)] = val or ""
 
-        # Check all questions have answers
-        unanswered = [str(i) for i, q in enumerate(self._questions) if not answers.get(str(i))]
+        unanswered = [
+            str(i) for i, q in enumerate(self._questions)
+            if not answers.get(str(i))
+        ]
         if unanswered:
             return
         self._finish(json.dumps(answers))
@@ -245,20 +341,44 @@ class AskUserWidget(VerticalGroup):
             qid = f"_ask_q_{q_idx}"
             self._q_selections[qid] = value
 
+    @on(RadioSet.Changed)
+    def handle_q_radio_changed(self, event: RadioSet.Changed) -> None:
+        btn_id = event.pressed.id or ""
+        entry = self._q_btn_map.get(btn_id)
+        if entry:
+            q_idx, _ = entry
+            qid = f"_ask_q_{q_idx}"
+            self._q_selections[qid] = str(event.pressed.value) if event.pressed.value else ""
+
+    @on(Button.Pressed, ".ask-custom-btn")
+    def handle_q_custom(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id or ""
+        if not btn_id.endswith("_custom"):
+            return
+        qid = btn_id[: -len("_custom")]
+        try:
+            self.query_one(f"#{qid}_custom-wrap", VerticalGroup).display = True
+        except NoMatches:
+            pass
+        event.button.display = False
+        try:
+            self.query_one(f"#{qid}_input", Input).focus()
+        except NoMatches:
+            pass
+
     @on(Input.Submitted)
     def handle_q_input(self, event: Input.Submitted) -> None:
         inp_id = event.input.id or ""
         if inp_id.startswith("_ask_q_") and inp_id.endswith("_input"):
-            qi = inp_id.replace("_ask_q_", "").replace("_input", "")
-            qid = f"_ask_q_{qi}"
+            qid = inp_id.rsplit("_input", 1)[0]
             val = event.value.strip()
             if val:
                 self._q_selections[qid] = val
 
-    # ── Finish ──
+    # ── Finish ─────────────────────────────────────────────────────────────
 
     def _finish(self, value: str) -> None:
         self._answer = value
         self._done = True
-        self.refresh(recompose=True)
         self.post_message(AskUserSubmitted(value, self._tool_id))
+        self.remove()
