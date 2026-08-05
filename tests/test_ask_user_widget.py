@@ -1,13 +1,12 @@
-"""Tests for the AskUserWidget: Radio options, custom input, and submission.
+"""Tests for the AskUserWidget: RadioSet options, 其他 as last option, and custom input.
 
 Verifies:
-- Options are rendered as RadioSet + RadioButton.
-- ✍ 其他 button expands hidden custom input.
-- Selecting a radio posts AskUserSubmitted with correct value.
-- Typing in custom input and pressing Enter/Send posts AskUserSubmitted.
-- Multi-question renders Tabs with per-question custom input.
+- Options rendered as RadioSet + RadioButton (including 其他 as last option).
+- Selecting 其他 shows custom input row.
+- Selecting normal radio posts AskUserSubmitted with correct value.
+- Typing in custom input and pressing Enter/发送 posts AskUserSubmitted.
+- Multi-question: 其他 as last RadioButton per pane, custom input shown when selected.
 - Submit All posts JSON of answers.
-- After submission, widget is removed (no done state).
 - Rollback button posts __rollback__.
 """
 
@@ -19,9 +18,9 @@ from dataclasses import dataclass, field
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Container
-from textual.widgets import Button, Checkbox, Input, RadioButton, RadioSet, Static, Tabs, TabbedContent
+from textual.widgets import Button, Checkbox, Input, RadioButton, RadioSet, Tabs, TabbedContent
 
-from tui.widgets.ask_user import AskUserSubmitted, AskUserWidget
+from tui.widgets.ask_user import AskUserSubmitted, AskUserWidget, CUSTOM_VALUE
 
 
 @dataclass
@@ -99,9 +98,10 @@ class TestAskUserSingleRendering:
                 await pilot.pause()
                 rs = app.query_one("#ask-radio-set", RadioSet)
                 radios = list(rs.query(RadioButton))
-                assert len(radios) == 2
+                # 2 options + 其他 = 3
+                assert len(radios) == 3
                 values = {r.value for r in radios}
-                assert values == {"yes", "no"}
+                assert values == {"yes", "no", CUSTOM_VALUE}
         _run(_test())
 
     def test_no_options_skips_radio_set(self):
@@ -114,26 +114,28 @@ class TestAskUserSingleRendering:
                 assert len(radios) == 0
         _run(_test())
 
-    def test_custom_button_shown(self):
-        """✍ 其他 button must be present for single question with options."""
-        options = [{"label": "Yes", "value": "yes"}]
-        app = _ProbeApp("Proceed?", options)
+    def test_other_option_is_last_radio(self):
+        """其他 must be the last RadioButton in the set."""
+        options = [{"label": "A", "value": "a"}, {"label": "B", "value": "b"}]
+        app = _ProbeApp("Pick?", options)
         async def _test():
             async with app.run_test() as pilot:
                 await pilot.pause()
-                custom = app.query_one("#ask-custom", Button)
-                assert custom is not None
+                rs = app.query_one("#ask-radio-set", RadioSet)
+                radios = list(rs.query(RadioButton))
+                assert radios[-1].value == CUSTOM_VALUE
+                assert radios[-1].label.plain == "其他"
         _run(_test())
 
-    def test_custom_input_initially_hidden(self):
-        """Custom input must be hidden by default."""
+    def test_custom_input_row_initially_hidden(self):
+        """Custom input row must be hidden by default."""
         options = [{"label": "Yes", "value": "yes"}]
         app = _ProbeApp("Proceed?", options)
         async def _test():
             async with app.run_test() as pilot:
                 await pilot.pause()
-                wrap = app.query_one("#ask-custom-wrap")
-                assert not wrap.display
+                row = app.query_one("#ask-custom-input-row")
+                assert not row.display
         _run(_test())
 
     def test_rollback_button_present_when_checkpoint(self):
@@ -164,7 +166,7 @@ class TestAskUserSingleRendering:
 
 class TestAskUserSingleSubmission:
     def test_selecting_radio_submits(self):
-        """Selecting a radio button posts AskUserSubmitted with its value."""
+        """Selecting a normal radio button posts AskUserSubmitted with its value."""
         options = [{"label": "Option A", "value": "a"}]
         app = _ProbeApp("Choose:", options)
         async def _test():
@@ -172,37 +174,46 @@ class TestAskUserSingleSubmission:
                 await pilot.pause()
                 rs = app.query_one("#ask-radio-set", RadioSet)
                 radios = list(rs.query(RadioButton))
+                # Select first (non-其他) option
                 radios[0].value = True
                 await pilot.pause()
                 assert len(app.capture.values) == 1
                 assert app.capture.values[0] == "a"
         _run(_test())
 
-    def test_clicking_custom_expands_input(self):
-        """Clicking ✍ 其他 reveals the hidden custom input."""
+    def test_selecting_other_shows_input(self):
+        """Selecting 其他 reveals the custom input row."""
         options = [{"label": "Yes", "value": "yes"}]
         app = _ProbeApp("Proceed?", options)
         async def _test():
             async with app.run_test() as pilot:
                 await pilot.pause()
-                app.query_one("#ask-custom", Button).press()
+                rs = app.query_one("#ask-radio-set", RadioSet)
+                radios = list(rs.query(RadioButton))
+                # Select 其他 (last)
+                radios[-1].value = True
                 await pilot.pause()
-                assert app.query_one("#ask-custom-wrap").display
-                assert not app.query_one("#ask-custom").display
+                row = app.query_one("#ask-custom-input-row")
+                assert row.display
+                inp = app.query_one("#ask-custom-input", Input)
+                assert inp.display
+                assert inp.has_focus
         _run(_test())
 
     def test_typing_in_custom_input_submits(self):
-        """Typing in the expanded custom input and pressing Send posts the value."""
+        """Typing in the custom input and pressing 发送 posts the value."""
         options = [{"label": "Yes", "value": "yes"}]
         app = _ProbeApp("Proceed?", options)
         async def _test():
             async with app.run_test() as pilot:
                 await pilot.pause()
-                app.query_one("#ask-custom", Button).press()
+                rs = app.query_one("#ask-radio-set", RadioSet)
+                radios = list(rs.query(RadioButton))
+                radios[-1].value = True
                 await pilot.pause()
-                inp = app.query_one("#ask-input", Input)
+                inp = app.query_one("#ask-custom-input", Input)
                 inp.value = "custom answer"
-                send_btn = app.query_one("#ask-send", Button)
+                send_btn = app.query_one("#ask-send-custom", Button)
                 send_btn.press()
                 await pilot.pause()
                 assert len(app.capture.values) == 1
@@ -216,9 +227,11 @@ class TestAskUserSingleSubmission:
         async def _test():
             async with app.run_test() as pilot:
                 await pilot.pause()
-                app.query_one("#ask-custom", Button).press()
+                rs = app.query_one("#ask-radio-set", RadioSet)
+                radios = list(rs.query(RadioButton))
+                radios[-1].value = True
                 await pilot.pause()
-                inp = app.query_one("#ask-input", Input)
+                inp = app.query_one("#ask-custom-input", Input)
                 inp.value = "Alice"
                 await inp.action_submit()
                 await pilot.pause()
@@ -292,6 +305,20 @@ class TestAskUserMultiQuestion:
                 await pilot.pause()
                 radios = list(app.query(RadioSet))
                 assert len(radios) == 1
+        _run(_test())
+
+    def test_multi_single_type_has_other_as_last_option(self):
+        """Single type RadioSet must have 其他 as last RadioButton."""
+        questions = [{"question": "Color?", "type": "single",
+                     "options": [{"label": "Red", "value": "red"}, {"label": "Blue", "value": "blue"}]}]
+        app = _ProbeAppMulti(questions)
+        async def _test():
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                rs = app.query_one("#_ask_q_0_radios", RadioSet)
+                radios = list(rs.query(RadioButton))
+                assert radios[-1].value == CUSTOM_VALUE
+                assert radios[-1].label.plain == "其他"
         _run(_test())
 
     def test_multi_submit_all_returns_json(self):
@@ -372,8 +399,8 @@ class TestAskUserMultiQuestion:
                 assert len(checkboxes) == 2
         _run(_test())
 
-    def test_multi_options_show_custom_button(self):
-        """A question with options shows ✍ 其他 button."""
+    def test_multi_other_option_shows_custom_row(self):
+        """Selecting 其他 shows the custom input row for that pane."""
         questions = [
             {"question": "Color?", "type": "single",
              "options": [{"label": "Red", "value": "red"}]},
@@ -382,8 +409,13 @@ class TestAskUserMultiQuestion:
         async def _test():
             async with app.run_test() as pilot:
                 await pilot.pause()
-                custom_btns = [b for b in app.query(Button) if b.id and b.id.endswith("_custom")]
-                assert len(custom_btns) == 1
+                rs = app.query_one("#_ask_q_0_radios", RadioSet)
+                radios = list(rs.query(RadioButton))
+                # Select 其他 (last)
+                radios[-1].value = True
+                await pilot.pause()
+                row = app.query_one("#_ask_q_0_custom-row")
+                assert row.display
         _run(_test())
 
     def test_multi_no_options_shows_input(self):
@@ -398,7 +430,7 @@ class TestAskUserMultiQuestion:
         _run(_test())
 
     def test_multi_custom_expands_input(self):
-        """Clicking ✍ 其他 in a tab reveals its custom input."""
+        """Selecting 其他 in a tab reveals its custom input row."""
         questions = [
             {"question": "Color?", "type": "single",
              "options": [{"label": "Red", "value": "red"}]},
@@ -407,10 +439,12 @@ class TestAskUserMultiQuestion:
         async def _test():
             async with app.run_test() as pilot:
                 await pilot.pause()
-                app.query_one("#_ask_q_0_custom", Button).press()
+                rs = app.query_one("#_ask_q_0_radios", RadioSet)
+                radios = list(rs.query(RadioButton))
+                radios[-1].value = True
                 await pilot.pause()
-                wrap = app.query_one("#_ask_q_0_custom-wrap")
-                assert wrap.display
+                row = app.query_one("#_ask_q_0_custom-row")
+                assert row.display
         _run(_test())
 
     def test_multi_input_submitted_via_submit_all(self):
@@ -423,7 +457,9 @@ class TestAskUserMultiQuestion:
         async def _test():
             async with app.run_test() as pilot:
                 await pilot.pause()
-                app.query_one("#_ask_q_0_custom", Button).press()
+                rs = app.query_one("#_ask_q_0_radios", RadioSet)
+                radios = list(rs.query(RadioButton))
+                radios[-1].value = True
                 await pilot.pause()
                 inp = app.query_one("#_ask_q_0_input", Input)
                 inp.value = "green"

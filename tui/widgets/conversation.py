@@ -712,6 +712,8 @@ class Conversation(containers.Vertical):
         if action == "mode_switcher":
             return bool(self.modes)
         if action == "cancel":
+            if self._pending_ask_user:
+                return True
             return True if (self.agent and self.turn == "agent") else None
         if action in {"expand_block", "collapse_block", "toggle_expand"}:
             if (cursor_block := self.cursor_block) is None:
@@ -955,13 +957,15 @@ class Conversation(containers.Vertical):
 
             if self._pending_ask_user:
                 self._pending_ask_user = False
+                self.prompt.display = True
                 self.agent.send_ask_user_answer(text, cancelled=False)
                 await self.post(UserInput(text))
-                self.window.scroll_end(animate=False)
+                self.focus_prompt()
                 return
 
             if self.turn == "agent":
                 self._pending_ask_user = False
+                self.prompt.display = True
                 self._pending_prompts.append(text)
                 self.prompt.pending_prompts = list(self._pending_prompts)
                 return
@@ -1345,6 +1349,16 @@ class Conversation(containers.Vertical):
             })
             return
 
+        # Single free-text question (no options, no questions) → skip widget,
+        # let user type directly in the Prompt Input.
+        has_options = bool(message.options) or bool(message.questions)
+        if not has_options:
+            self.turn = "client"
+            self._pending_ask_user = True
+            self.prompt.display = True
+            self.window.scroll_end(animate=False)
+            return
+
         # If a previous ask_user is still open, remove it before posting the
         # new one — otherwise widgets stack up and the user's answer becomes
         # ambiguous about which question it targets.
@@ -1382,10 +1396,13 @@ class Conversation(containers.Vertical):
             question=message.question,
             options=message.options or [],
             questions=message.questions or [],
+            checkpoint_id=message.checkpoint_id,
         )
         await self.post(widget, new_block=True)
+        self.prompt.display = False
         self._agent_response = None
         self._complete_thought()
+        self.call_after_refresh(lambda: self.window.scroll_end(animate=False))
 
     @on(acp_messages.AwaitingUserInput)
     async def on_acp_awaiting_user_input(self, message: acp_messages.AwaitingUserInput):
@@ -1408,15 +1425,36 @@ class Conversation(containers.Vertical):
         self._complete_thought()
 
     @on(AskUserSubmitted)
-    def on_ask_user_submitted(self, message: AskUserSubmitted) -> None:
+    async def on_ask_user_submitted(self, message: AskUserSubmitted) -> None:
         message.stop()
         self._pending_ask_user = False
         self.busy_count += 1
-        if self.agent is not None:
-            cancelled = message.value == "__cancel__"
-            self.agent.send_ask_user_answer(
-                message.value if not cancelled else "", cancelled=cancelled
+
+        # Widget already removed by _finish() in ask_user.py
+        try:
+            existing = self.contents.get_child_by_id(
+                message.tool_id, AskUserWidget
             )
+            if existing is not None:
+                await existing.remove()
+        except Exception:
+            pass
+
+        rollback = message.value == "__rollback__"
+
+        # Post answer to conversation as a user message
+        if not rollback:
+            await self.post(UserInput(message.value))
+
+        if self.agent is not None:
+            self.agent.send_ask_user_answer(
+                "" if rollback else message.value,
+                cancelled=False,
+                rollback=rollback,
+            )
+
+        self.prompt.display = True
+        self.focus_prompt()
 
     @on(acp_messages.Plan)
     async def on_acp_plan(self, message: acp_messages.Plan):
@@ -1780,8 +1818,10 @@ class Conversation(containers.Vertical):
 
     @on(acp_messages.SetModes)
     async def on_acp_set_modes(self, message: acp_messages.SetModes):
+        print(f"[DEBUG on_acp_set_modes] current_mode={message.current_mode!r}, modes={list(message.modes.keys())!r}", flush=True)
         self.modes = message.modes
         self.current_mode = self.modes[message.current_mode]
+        print(f"[DEBUG on_acp_set_modes] done. self.modes={list(self.modes.keys())!r}", flush=True)
 
     @on(messages.HistoryMove)
     async def on_history_move(self, message: messages.HistoryMove) -> None:
@@ -1977,8 +2017,13 @@ class Conversation(containers.Vertical):
                 "Open the structured trace viewer",
             ),
             SlashCommand(
-                "/home",
-                "Open the agent/home selection screen",
+                "/engine",
+                "Open the agent/engine selection screen",
+            ),
+            SlashCommand(
+                "/cls",
+                "Search TCB/SCF logs via CLS (requestId tracing)",
+                "<--request-id ID --function NAME>",
             ),
             SlashCommand(
                 "/diff",
@@ -2113,6 +2158,17 @@ class Conversation(containers.Vertical):
             return
         try:
             widget.query_ancestor(Prompt)
+        except NoMatches:
+            pass
+        else:
+            return
+
+        # AskUserWidget is an interactive block (Input/Buttons): clicking
+        # inside it must not move the block cursor, because
+        # refresh_block_cursor() would call window.focus() and steal focus
+        # from the ask-user input the user just clicked on.
+        try:
+            widget.query_ancestor(AskUserWidget)
         except NoMatches:
             pass
         else:
@@ -2382,17 +2438,32 @@ class Conversation(containers.Vertical):
 
     async def action_cancel(self) -> None:
         now = monotonic()
+
+        # If AskUser is showing, single ESC closes it
+        if self._pending_ask_user:
+            self._pending_ask_user = False
+            try:
+                for child in self.contents.children:
+                    if isinstance(child, AskUserWidget):
+                        await child.remove()
+                        break
+            except Exception:
+                pass
+            self.prompt.display = True
+            self.flash("AskUser closed")
+            self.focus_prompt()
+            self._last_escape_time = now
+            return
+
+        # Normal double-ESC logic for session cancellation
         if now - self._last_escape_time < 3:
             if (agent := self.agent) is not None:
                 self._last_escape_time = 0.0
                 await agent.cancel()
-                # Honest feedback: we asked the agent to stop, but it only
-                # actually stops when the session/prompt response returns
-                # stopReason="cancelled". That is flashed in agent_turn_over.
                 self.flash("Cancel requested…", style="success")
         else:
             self.flash("Press [b]esc[/] again to cancel agent's turn")
-            self._last_escape_time = now
+        self._last_escape_time = now
 
     def focus_prompt(self, reset_cursor: bool = True, scroll_end: bool = True) -> None:
         """Focus the prompt input.
@@ -2574,9 +2645,11 @@ class Conversation(containers.Vertical):
         elif command == "trace":
             self.app.action_trace()
             return True
-        elif command == "home":
+        elif command == "engine":
             self.app.push_screen("store")
             return True
+        elif command == "cls":
+            return await self._handle_cls_command(parameters)
         elif command == "exit":
             if self.session_start_time is not None:
                 session_time = monotonic() - self.session_start_time
@@ -2614,6 +2687,150 @@ class Conversation(containers.Vertical):
         self.app.push_screen(
             IdeScreen(project_dir=self.project_path, filepath=filepath)
         )
+        return True
+
+    async def _handle_cls_command(self, parameters: str) -> bool:
+        import asyncio
+        import re
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        parts = parameters.strip().split()
+        args = ["cdh", "cls", "search", "--json"]
+        has_request_id = False
+        has_function = False
+
+        i = 0
+        while i < len(parts):
+            part = parts[i]
+            if part in ("--request-id", "--rid"):
+                if i + 1 < len(parts):
+                    args.extend(["--request-id", parts[i + 1]])
+                    has_request_id = True
+                    i += 2
+                else:
+                    self.notify("Missing value for --request-id", title="/cls", severity="error")
+                    return True
+            elif part == "--function":
+                if i + 1 < len(parts):
+                    args.extend(["--function", parts[i + 1]])
+                    has_function = True
+                    i += 2
+                else:
+                    self.notify("Missing value for --function", title="/cls", severity="error")
+                    return True
+            elif part == "--keyword":
+                if i + 1 < len(parts):
+                    args.extend(["--keyword", parts[i + 1]])
+                    i += 2
+                else:
+                    self.notify("Missing value for --keyword", title="/cls", severity="error")
+                    return True
+            elif part == "--limit":
+                if i + 1 < len(parts):
+                    args.extend(["--limit", parts[i + 1]])
+                    i += 2
+                else:
+                    self.notify("Missing value for --limit", title="/cls", severity="error")
+                    return True
+            elif part == "--region":
+                if i + 1 < len(parts):
+                    args.extend(["--region", parts[i + 1]])
+                    i += 2
+                else:
+                    self.notify("Missing value for --region", title="/cls", severity="error")
+                    return True
+            elif part == "--env":
+                if i + 1 < len(parts):
+                    args.extend(["--env", parts[i + 1]])
+                    i += 2
+                else:
+                    self.notify("Missing value for --env", title="/cls", severity="error")
+                    return True
+            elif part.startswith("-"):
+                self.notify(f"Unknown option: {part}", title="/cls", severity="error")
+                return True
+            else:
+                self.notify(f"Unexpected argument: {part}", title="/cls", severity="error")
+                return True
+
+        if not has_request_id and not has_function:
+            self.notify(
+                "/cls requires --request-id or --function\n"
+                "Usage: /cls --request-id <ID> --function <NAME>\n"
+                "       /cls --function <NAME> --keyword <KW>",
+                title="/cls",
+                severity="error"
+            )
+            return True
+
+        try:
+            self.app.push_screen("terminal", run=f"cdh cls search --help")
+
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                self.notify(f"CLS search failed: {error_msg}", title="/cls", severity="error")
+                return True
+
+            import json
+            results = json.loads(stdout.decode()) if stdout else []
+
+            if not results:
+                self.notify("No logs found", title="/cls")
+                return True
+
+            lines = [f"Found {len(results)} log entries:"]
+            for log in results[:20]:
+                time_str = log.get("time", "?")
+                msg = log.get("message", "")
+                req_id = log.get("request_id", "")
+                func = log.get("function", "")
+                level = log.get("level", "INFO")
+                duration = log.get("duration_ms", 0)
+
+                header = f"[{time_str}]"
+                if req_id:
+                    header += f" {req_id[:20]}..."
+                if func:
+                    header += f" {func}"
+                header += f" [{level}]"
+                if duration:
+                    header += f" {duration}ms"
+
+                lines.append(header)
+                if msg:
+                    lines.append(f"  {msg[:200]}")
+
+            if len(results) > 20:
+                lines.append(f"... and {len(results) - 20} more entries")
+
+            from tui.widgets.markdown_note import MarkdownNote
+            content = "```\n" + "\n".join(lines) + "\n```"
+            await self.post(MarkdownNote(content, classes="cls-results"))
+            self.app.copy_to_clipboard(content)
+            self.notify(
+                f"Found {len(results)} logs — copied to clipboard",
+                title="/cls"
+            )
+
+        except FileNotFoundError:
+            self.notify(
+                "cdh command not found. Install with: pip install -e .",
+                title="/cls",
+                severity="error"
+            )
+        except json.JSONDecodeError:
+            self.notify("Failed to parse CLS output", title="/cls", severity="error")
+        except Exception as e:
+            self.notify(f"Error: {e}", title="/cls", severity="error")
+
         return True
 
     async def _handle_tui_session_project_dispatch(

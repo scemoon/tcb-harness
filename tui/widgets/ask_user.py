@@ -19,6 +19,9 @@ class AskUserSubmitted(Message):
         self.tool_id = tool_id
 
 
+CUSTOM_VALUE = "__custom__"
+
+
 class AskUserWidget(VerticalGroup):
     DEFAULT_CLASSES = "block"
     DEFAULT_CSS = """
@@ -36,30 +39,15 @@ class AskUserWidget(VerticalGroup):
     AskUserWidget RadioButton {
         margin-bottom: 0;
     }
-    AskUserWidget #ask-custom-wrap {
+    AskUserWidget #ask-custom-input-row {
         height: auto;
         margin-bottom: 1;
     }
-    AskUserWidget .ask-custom-btn {
-        margin-right: 1;
-        width: auto;
-    }
-    AskUserWidget #ask-input-row {
-        height: auto;
-    }
-    AskUserWidget #ask-input {
+    AskUserWidget #ask-custom-input {
         margin-right: 1;
         width: 24;
     }
-    AskUserWidget .ask-q-input {
-        margin: 1 0 0 0;
-        width: 24;
-    }
-    AskUserWidget #ask-tabs {
-        height: auto;
-        margin-bottom: 1;
-    }
-    AskUserWidget #ask-tab-content {
+    AskUserWidget #ask-rollback-row {
         height: auto;
     }
     AskUserWidget .ask-q-section {
@@ -71,12 +59,21 @@ class AskUserWidget(VerticalGroup):
         height: auto;
         margin-bottom: 1;
     }
-    AskUserWidget #ask-rollback-row {
+    AskUserWidget #ask-tabs {
+        height: auto;
+        margin-bottom: 1;
+    }
+    AskUserWidget #ask-tab-content {
         height: auto;
     }
-    AskUserWidget #ask-send,
+    AskUserWidget .ask-q-input {
+        margin: 1 0 0 0;
+        width: 24;
+    }
+    AskUserWidget #ask-send-custom,
     AskUserWidget #ask-submit-all,
-    AskUserWidget #ask-rollback {
+    AskUserWidget #ask-rollback,
+    AskUserWidget .ask-send-btn {
         width: auto;
     }
     AskUserWidget .-hidden {
@@ -116,13 +113,10 @@ class AskUserWidget(VerticalGroup):
         if self._options:
             yield RadioSet(id="ask-radio-set")
 
-        # ✍ 其他 — expands hidden input
-        yield Button("✍ 其他", id="ask-custom", variant="default", classes="ask-custom-btn")
-        with VerticalGroup(id="ask-custom-wrap", classes="-hidden"):
-            yield Input(placeholder="✍ 输入自定义方案\u2026", id="ask-input")
-            yield Button("Send", variant="primary", id="ask-send")
+        with Horizontal(id="ask-custom-input-row", classes="-hidden"):
+            yield Input(placeholder="✍ 输入自定义方案\u2026", id="ask-custom-input")
+            yield Button("发送", variant="primary", id="ask-send-custom")
 
-        # bottom row: Rollback (left); Submit only shown if no options (right)
         with Horizontal(id="ask-rollback-row"):
             if self._checkpoint_id:
                 yield Button("Rollback", id="ask-rollback", variant="warning")
@@ -143,12 +137,11 @@ class AskUserWidget(VerticalGroup):
             for item in to_mount:
                 widget_or_wrap, children = item
                 if children is not None:
-                    # wrap with children (e.g., input wrap)
-                    pane.mount(widget_or_wrap)
+                    await pane.mount(widget_or_wrap)
                     for child in children:
-                        widget_or_wrap.mount(child)
+                        await widget_or_wrap.mount(child)
                 else:
-                    pane.mount(widget_or_wrap)
+                    await pane.mount(widget_or_wrap)
 
         rollback_row = Horizontal(id="ask-rollback-row")
         await self.mount(rollback_row)
@@ -163,7 +156,6 @@ class AskUserWidget(VerticalGroup):
         header = q.get("header", f"Q{qi + 1}")
 
         pane = TabPane(header, id=pane_id)
-        # Collect widgets to mount after pane is attached to TabbedContent
         to_mount: list = []
 
         if qtype == "multiple" and qopts:
@@ -192,16 +184,25 @@ class AskUserWidget(VerticalGroup):
                 btn_id = f"{qid}_opt_{oi}"
                 self._option_values[btn_id] = value
                 self._q_btn_map[btn_id] = (qi, value)
-                btns.append(RadioButton(label, id=btn_id, value=value))
+                btns.append(RadioButton(label, id=btn_id, value=value))  # type: ignore[arg-type]
+            # Add "其他" as last option
+            custom_btn_id = f"{qid}_opt_custom"
+            self._q_btn_map[custom_btn_id] = (qi, CUSTOM_VALUE)
+            btns.append(RadioButton("其他", id=custom_btn_id, value=CUSTOM_VALUE))  # type: ignore[arg-type]
             to_mount.append((rs, btns))
-
-        # ✍ 其他 + input wrap
-        to_mount.append((
-            Button("✍ 其他", id=f"{qid}_custom", variant="default", classes="ask-custom-btn"),
-            None,
-        ))
-        wrap = VerticalGroup(id=f"{qid}_custom-wrap", classes="-hidden")
-        to_mount.append((wrap, [Input(placeholder="✍ 输入自定义方案\u2026", id=f"{qid}_input", classes="ask-q-input")]))
+            # Hidden custom input for this pane
+            wrap = Horizontal(id=f"{qid}_custom-row", classes="-hidden")
+            to_mount.append((wrap, [
+                Input(placeholder="✍ 输入自定义方案\u2026", id=f"{qid}_input", classes="ask-q-input"),
+                Button("发送", variant="primary", id=f"{qid}_send", classes="ask-send-btn"),
+            ]))
+        else:
+            # No options: show input directly (not hidden)
+            wrap = Horizontal(id=f"{qid}_custom-row")
+            to_mount.append((wrap, [
+                Input(placeholder="✍ 输入自定义方案\u2026", id=f"{qid}_input", classes="ask-q-input"),
+                Button("发送", variant="primary", id=f"{qid}_send", classes="ask-send-btn"),
+            ]))
 
         return pane, to_mount
 
@@ -223,11 +224,6 @@ class AskUserWidget(VerticalGroup):
                 pass
             try:
                 self.query_one(".ask-q-input", Input).focus()
-                return
-            except NoMatches:
-                pass
-            try:
-                self.query(Checkbox).first().focus()
             except NoMatches:
                 self.focus()
         else:
@@ -240,16 +236,20 @@ class AskUserWidget(VerticalGroup):
                     display = f"[{key.upper()}] {label}" if key else label
                     btn_id = f"_ask_opt_0_{i}"
                     self._option_values[btn_id] = value
-                    await rs.mount(RadioButton(display, id=btn_id, value=value))
+                    await rs.mount(RadioButton(display, id=btn_id, value=value))  # type: ignore[arg-type]
+                # Add "其他" as last option
+                custom_btn_id = "_ask_opt_0_custom"
+                self._option_values[custom_btn_id] = CUSTOM_VALUE
+                await rs.mount(RadioButton("其他", id=custom_btn_id, value=CUSTOM_VALUE))  # type: ignore[arg-type]
                 try:
                     self.query_one("RadioButton", RadioButton).focus()
-                    return
                 except NoMatches:
-                    pass
-            try:
-                self.query_one("#ask-input", Input).focus()
-            except NoMatches:
-                self.focus()
+                    self.focus()
+            else:
+                try:
+                    self.query_one("#ask-custom-input", Input).focus()
+                except NoMatches:
+                    self.focus()
 
     # ── Single question handlers ─────────────────────────────────────────────
 
@@ -259,7 +259,10 @@ class AskUserWidget(VerticalGroup):
             return
         btn_id = event.pressed.id or ""
         value = self._option_values.get(btn_id, "")
-        if value:
+        if value == CUSTOM_VALUE:
+            self.query_one("#ask-custom-input-row", Horizontal).display = True
+            self.query_one("#ask-custom-input", Input).focus()
+        elif value:
             self._finish(value)
 
     @on(Button.Pressed, "#ask-rollback")
@@ -271,23 +274,17 @@ class AskUserWidget(VerticalGroup):
         if self._is_multi:
             return
 
-    @on(Button.Pressed, "#ask-send")
-    def handle_send(self) -> None:
-        value = self.query_one("#ask-input", Input).value.strip()
+    @on(Button.Pressed, "#ask-send-custom")
+    def handle_send_custom(self) -> None:
+        value = self.query_one("#ask-custom-input", Input).value.strip()
         if value:
             self._finish(value)
 
-    @on(Input.Submitted, "#ask-input")
-    def handle_input_submitted(self) -> None:
-        value = self.query_one("#ask-input", Input).value.strip()
+    @on(Input.Submitted, "#ask-custom-input")
+    def handle_custom_input_submitted(self) -> None:
+        value = self.query_one("#ask-custom-input", Input).value.strip()
         if value:
             self._finish(value)
-
-    @on(Button.Pressed, "#ask-custom")
-    def handle_custom(self) -> None:
-        self.query_one("#ask-custom-wrap", VerticalGroup).display = True
-        self.query_one("#ask-custom", Button).display = False
-        self.query_one("#ask-input", Input).focus()
 
     # ── Multi-question handlers ─────────────────────────────────────────────
 
@@ -346,28 +343,28 @@ class AskUserWidget(VerticalGroup):
         btn_id = event.pressed.id or ""
         entry = self._q_btn_map.get(btn_id)
         if entry:
-            q_idx, _ = entry
+            q_idx, value = entry
             qid = f"_ask_q_{q_idx}"
-            self._q_selections[qid] = str(event.pressed.value) if event.pressed.value else ""
+            if value == CUSTOM_VALUE:
+                self.query_one(f"#{qid}_custom-row", Horizontal).display = True
+                self.query_one(f"#{qid}_input", Input).focus()
+            else:
+                self._q_selections[qid] = str(event.pressed.value) if event.pressed.value else ""
 
-    @on(Button.Pressed, ".ask-custom-btn")
-    def handle_q_custom(self, event: Button.Pressed) -> None:
+    @on(Button.Pressed, ".ask-send-btn")
+    def handle_q_send(self, event: Button.Pressed) -> None:
         btn_id = event.button.id or ""
-        if not btn_id.endswith("_custom"):
-            return
-        qid = btn_id[: -len("_custom")]
+        qid = btn_id.rsplit("_send", 1)[0]
         try:
-            self.query_one(f"#{qid}_custom-wrap", VerticalGroup).display = True
-        except NoMatches:
-            pass
-        event.button.display = False
-        try:
-            self.query_one(f"#{qid}_input", Input).focus()
+            inp = self.query_one(f"#{qid}_input", Input)
+            val = inp.value.strip()
+            if val:
+                self._q_selections[qid] = val
         except NoMatches:
             pass
 
-    @on(Input.Submitted)
-    def handle_q_input(self, event: Input.Submitted) -> None:
+    @on(Input.Submitted, ".ask-q-input")
+    def handle_q_input_submitted(self, event: Input.Submitted) -> None:
         inp_id = event.input.id or ""
         if inp_id.startswith("_ask_q_") and inp_id.endswith("_input"):
             qid = inp_id.rsplit("_input", 1)[0]
