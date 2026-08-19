@@ -216,54 +216,112 @@ See on-screen instructions for details.
             self.app.settings.get("experimental.disable_paste_summary", bool)
         )
 
+    QUICK_COUNT_SAMPLE = 1000
+    HUGE_PASTE_THRESHOLD = 100000
+
+    async def _on_paste(self, event: events.Paste) -> None:
+        """Handle paste events with fast path for large text to avoid blocking UI."""
+        if self.read_only:
+            return
+
+        text_len = len(event.text)
+        MAX_PASTE_CHARS = 50000
+
+        if text_len > MAX_PASTE_CHARS:
+            self.post_message(
+                messages.Flash(
+                    "内容过大，已截断",
+                    style="warning",
+                    duration=3,
+                )
+            )
+            self._paste_fingerprint = ""
+            self._paste_queue.clear()
+            text_copy = event.text[:MAX_PASTE_CHARS]
+            self._paste_queue.append((text_copy, "[Pasted large content]"))
+            self.insert("[Pasted large content] ")
+            return
+
+        await super()._on_paste(event)
+
     def _replace_via_keyboard(self, text: str, start, end) -> EditResult | None:
         if self.read_only:
             return None
 
-        fingerprint = text.replace('\r\n', '\n').replace('\r', '\n').strip()
+        text_len = len(text)
+        MAX_PASTE_CHARS = 50000
+
+        if text_len > MAX_PASTE_CHARS:
+            self._paste_fingerprint = ""
+            self._paste_queue.clear()
+            sample = text[: self.QUICK_COUNT_SAMPLE]
+            sample_lines = sample.count("\n") + 1
+            estimated_line_count = int(sample_lines * text_len / len(sample))
+            marker = f"[Pasted ~{estimated_line_count} lines] (truncated)"
+            self._paste_queue.append((text[:MAX_PASTE_CHARS], marker))
+            self.post_message(
+                messages.Flash(
+                    f"[Pasted ~{estimated_line_count} lines, 内容过大已截断]",
+                    style="warning",
+                    duration=3,
+                )
+            )
+            self.insert(marker + " ")
+            return None
+
+        fingerprint = text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
         if fingerprint and self._paste_fingerprint == fingerprint:
             self._paste_fingerprint = ""
             return None
 
-        is_large_paste = text.count('\n') + 1 >= 3 or len(text) > 150
+        if text_len <= 150:
+            self._paste_fingerprint = ""
+            self._paste_queue.clear()
+            return super()._replace_via_keyboard(text, start, end)
 
-        if is_large_paste and self._paste_summary_enabled:
-            self._paste_fingerprint = fingerprint
-            MAX_PASTE_CHARS = 50000
-            normalized = text.replace('\r\n', '\n').replace('\r', '\n')
-            line_count = normalized.rstrip('\n').count('\n') + 1
-            char_count = len(text)
-            text_to_store = text
-            truncated = False
+        if not self._paste_summary_enabled:
+            self._paste_fingerprint = ""
+            self._paste_queue.clear()
+            return super()._replace_via_keyboard(text, start, end)
 
-            if char_count > MAX_PASTE_CHARS:
-                text_to_store = text[:MAX_PASTE_CHARS]
-                truncated = True
-                self.post_message(
-                    messages.Flash(
-                        f"[Pasted ~{line_count} lines, 内容过大已截断]",
-                        style="warning",
-                        duration=3,
-                    )
+        self._paste_fingerprint = fingerprint
+
+        sample = text[: self.QUICK_COUNT_SAMPLE]
+        sample_normalized = sample.replace("\r\n", "\n").replace("\r", "\n")
+        sample_lines = sample_normalized.count("\n") + 1
+        if text_len <= self.QUICK_COUNT_SAMPLE:
+            line_count = sample_lines
+        else:
+            line_count = int(sample_lines * text_len / len(sample))
+
+        char_count = text_len
+        text_to_store = text
+        truncated = False
+
+        if char_count > MAX_PASTE_CHARS:
+            text_to_store = text[:MAX_PASTE_CHARS]
+            truncated = True
+            self.post_message(
+                messages.Flash(
+                    f"[Pasted ~{line_count} lines, 内容过大已截断]",
+                    style="warning",
+                    duration=3,
                 )
-            elif line_count > 30:
-                self.post_message(
-                    messages.Flash(
-                        f"[Pasted ~{line_count} lines]",
-                        style="default",
-                        duration=2,
-                    )
+            )
+        elif line_count > 30:
+            self.post_message(
+                messages.Flash(
+                    f"[Pasted ~{line_count} lines]",
+                    style="default",
+                    duration=2,
                 )
+            )
 
-            marker = f"[Pasted ~{line_count} lines]" + (" (truncated)" if truncated else "")
-            self._paste_queue.append((text_to_store, marker))
-            self.insert(marker + " ")
-            return None
-
-        self._paste_fingerprint = ""
-        self._paste_queue.clear()
-        return super()._replace_via_keyboard(text, start, end)
+        marker = f"[Pasted ~{line_count} lines]" + (" (truncated)" if truncated else "")
+        self._paste_queue.append((text_to_store, marker))
+        self.insert(marker + " ")
+        return None
 
     def action_copy(self) -> None:
         """Copy selection to clipboard; if no selection, clear the text area."""
@@ -320,16 +378,20 @@ See on-screen instructions for details.
                 )
             )
             return
-        body = self.text
-        for original, marker in self._paste_queue:
-            if marker in body:
-                body = body.replace(marker, original, 1)
+        body = self._expand_paste_markers(self.text)
         self._paste_queue.clear()
         self.post_message(UserInputSubmitted(body, self.shell_mode))
         self.clear()
 
     def action_newline(self) -> None:
         self.insert("\n")
+
+    def _expand_paste_markers(self, body: str) -> str:
+        """Expand paste markers in body text by replacing them with original content."""
+        for original, marker in self._paste_queue:
+            if marker in body:
+                body = body.replace(marker, original, 1)
+        return body
 
     def action_submit(self) -> None:
         if not self.agent_ready and not self.shell_mode:
@@ -354,10 +416,7 @@ See on-screen instructions for details.
                     self.insert(self.suggestion + " ")
                 self.suggestion = ""
             return
-        body = self.text
-        for original, marker in self._paste_queue:
-            if marker in body:
-                body = body.replace(marker, original, 1)
+        body = self._expand_paste_markers(self.text)
         self._paste_queue.clear()
         self.post_message(UserInputSubmitted(body, self.shell_mode))
         self.clear()
