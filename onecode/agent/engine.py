@@ -5,6 +5,7 @@ import json
 import logging
 import random
 import re
+import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from onecode.agent.agents.types import AgentPermission
+from onecode.agent.cdh_loader import CdhProjectLoader
 from onecode.agent.context import ContextManager
 from onecode.agent.permissions_store import PermissionStore
 from onecode.models.provider import ContentBlockType, ProviderRegistry
@@ -523,6 +525,10 @@ class AgentEngine:
         self._plan_dirty: bool = False
         # Plan mode denial counter — reset per session
         self._plan_denial_count: int = 0
+        # Per-tool denial counters for loop protection (any agent/mode)
+        self._tool_denial_count: dict[str, int] = {}
+        # Path of the plan document saved when the plan agent submits for approval
+        self._approved_plan_path: str | None = None
         # Cache of the last plan snapshot that was emitted to the TUI.  Used
         # by ``_emit_plan_update`` to dedupe redundant emits when the todos
         # have not actually changed between turns.  The first emit of a
@@ -664,6 +670,10 @@ class AgentEngine:
 
         # Track injected nudge messages for cleanup after chat_stream exits.
         self._injected_msg_indices: list[int] = []
+
+        # Checkpoint manager for protecting file state before destructive operations
+        from onecode.agent.checkpoint import CheckpointManager
+        self._checkpoint_manager = CheckpointManager(self._project_dir)
 
     def _build_tool_registry(self) -> ToolRegistry:  # noqa: F821
         from onecode.agent.tools.registry import ToolRegistry
@@ -955,10 +965,34 @@ class AgentEngine:
     def _workspace(self) -> Path:
         return self._project_dir
 
-    def set_agent(self, agent_type: str) -> None:
+    def _get_affected_files(self, tool_name: str, tool_input: dict) -> list[str]:
+        """Extract list of file paths affected by a tool call."""
+        if tool_name in ("Edit", "Write", "Insert", "Read", "Glob", "Grep", "List"):
+            path = tool_input.get("path", "")
+            return [path] if path else []
+        if tool_name == "Bash":
+            cmd = tool_input.get("command", "")
+            files = []
+            for part in cmd.split():
+                if self._project_dir.exists() and (self._project_dir / part).exists():
+                    if (self._project_dir / part).is_file():
+                        files.append(part)
+            return files
+        if tool_name == "ApplyPatch":
+            content = tool_input.get("patch", "") or tool_input.get("content", "")
+            import re
+            paths = re.findall(r'^(?:---|\+\+\+) [ab]/(.+)$', content, re.MULTILINE)
+            return list(set(paths))
+        return []
+
+    def set_agent(self, agent_type: str, keep_todos: bool = False) -> None:
         from onecode.agent.agents.types import (
             AgentMode,
             AgentPermission,
+            BUILD_AGENT_INSTRUCTIONS,
+            PLAN_AGENT_INSTRUCTIONS,
+            SOLO_AGENT_INSTRUCTIONS,
+            EXPLORE_AGENT_INSTRUCTIONS,
             SUBAGENT_CONSTRAINTS,
             create_agent,
             PLAN_GATE_HARD,
@@ -967,40 +1001,59 @@ class AgentEngine:
         )
         was_plan_mode = self._is_plan_mode()
         self.current_agent = create_agent(agent_type)
-        system_parts = [self.current_agent.description]
+
+        # Plan / solo / build agents get dedicated, self-contained instruction
+        # templates (workflow / format / constraints / response style)
+        # instead of the generic description + gate + response-style
+        # assembly below.
+        agent_templates = {
+            "plan": PLAN_AGENT_INSTRUCTIONS,
+            "solo": SOLO_AGENT_INSTRUCTIONS,
+            "build": BUILD_AGENT_INSTRUCTIONS,
+            "explore": EXPLORE_AGENT_INSTRUCTIONS,
+        }
+        template = agent_templates.get(self.current_agent.name)
+        system_parts = [template] if template else [self.current_agent.description]
 
         if was_plan_mode and not self._is_plan_mode():
-            self._todo_manager.clear_todos()
+            if not keep_todos:
+                self._todo_manager.clear_todos()
+                self.context.remove_system_by_marker("<!-- PENDING_TODOS -->")
             self._just_exited_plan_mode = True
             self._plan_denial_count = 0
-            self.context.remove_system_by_marker("<!-- PENDING_TODOS -->")
+            self._tool_denial_count.clear()
+            self.context.remove_system_by_marker("<!-- PLAN_MODE_DENIED -->")
 
-        edit_ask = self.current_agent.should_ask_for_edit()
-        bash_ask = self.current_agent.should_ask_for_bash()
-        if edit_ask or bash_ask:
-            restrictions = []
-            if edit_ask:
-                restrictions.append("- File edits require user approval")
-            if bash_ask:
-                restrictions.append("- Shell commands require user approval")
-            system_parts.append("\n".join(restrictions))
+        if self.current_agent.name not in agent_templates:
+            edit_ask = self.current_agent.should_ask_for_edit()
+            bash_ask = self.current_agent.should_ask_for_bash()
+            if edit_ask or bash_ask:
+                restrictions = []
+                if edit_ask:
+                    restrictions.append("- File edits require user approval")
+                if bash_ask:
+                    restrictions.append("- Shell commands require user approval")
+                system_parts.append("\n".join(restrictions))
 
         if self.current_agent.mode == AgentMode.SUBAGENT:
             system_parts.append(SUBAGENT_CONSTRAINTS)
 
-        if self.current_agent.permission_task != AgentPermission.DENY:
-            if self.current_agent.mode.name == "SUBAGENT":
-                pass  # subagents don't need plan gate
-            elif self.current_agent.permission_edit == AgentPermission.DENY and self.current_agent.permission_bash == AgentPermission.DENY:
-                pass  # read-only mode, no gate needed
-            elif self.current_agent.permission_task == AgentPermission.DENY:
-                pass
-            else:
-                gate = PLAN_GATE_HARD if self.current_agent.mode == AgentMode.PRIMARY and self.current_agent.name == "plan" else PLAN_GATE_SOFT
-                system_parts.append(gate)
+        if self.current_agent.name not in agent_templates:
+            if self.current_agent.permission_task != AgentPermission.DENY:
+                if self.current_agent.mode.name == "SUBAGENT":
+                    pass  # subagents don't need plan gate
+                elif self.current_agent.permission_edit == AgentPermission.DENY and self.current_agent.permission_bash == AgentPermission.DENY:
+                    pass  # read-only mode, no gate needed
+                elif self.current_agent.permission_task == AgentPermission.DENY:
+                    pass
+                else:
+                    gate = PLAN_GATE_HARD if self.current_agent.mode == AgentMode.PRIMARY and self.current_agent.name == "plan" else PLAN_GATE_SOFT
+                    system_parts.append(gate)
 
         # Response style with CoT reasoning guidance.
-        if self.current_agent.mode == AgentMode.SUBAGENT:
+        if self.current_agent.name in agent_templates:
+            pass  # response style already embedded in the instruction templates
+        elif self.current_agent.mode == AgentMode.SUBAGENT:
             system_parts.append(
                 "\n## Response style\n"
                 "- **Every round starts with Chain of Thought reasoning** "
@@ -1111,25 +1164,29 @@ class AgentEngine:
         self.context.remove_system_by_marker("<!-- SKILL:")
         self.context.remove_system_by_marker("<!-- PROJECT_DOC -->")
         self.context.remove_system_by_marker("<!-- CDH_PROJECT -->")
+        self.context.remove_system_by_marker("<!-- AIDLC_NUDGE -->")
         self._skills_loaded = True
 
         has_cloudbase = False
         for skill in self._skill_loader.get_enabled():
             tagged = f"<!-- SKILL:{skill.name} -->\n{skill.content}"
             self.context.add_system(tagged)
-            if skill.name == "cloudbase":
+            if skill.name in ("cloudbase", "tcb"):
                 has_cloudbase = True
 
         if has_cloudbase:
             from onecode.mcp.cloudbase import ensure_configured as _ensure_cb
-            _ensure_cb(self._mcp)
-            if not self._mcp.is_connected("cloudbase"):
+            needs_reconnect = not _ensure_cb(self._mcp)
+            if not self._mcp.is_connected("cloudbase") or needs_reconnect:
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
-                        asyncio.create_task(self._mcp.connect("cloudbase"))
-                except Exception:
-                    pass
+                        task = asyncio.create_task(self._mcp.connect("cloudbase"))
+                        task.add_done_callback(
+                            lambda t: logger.info("CloudBase MCP connection task completed")
+                        )
+                except Exception as e:
+                    logger.warning("Failed to schedule CloudBase MCP connect: %s", e)
 
         # Project-level single-file doc (AGENTS.md at workspace root)
         from onecode.agent.project_doc import load_project_doc
@@ -1138,10 +1195,14 @@ class AgentEngine:
             self.context.add_system(f"<!-- PROJECT_DOC -->\n{project_doc}")
 
         # Load project .cdh/ state into context
-        from onecode.agent.cdh_loader import CdhProjectLoader
         cdh_content = CdhProjectLoader.load_for_workspace(self._workspace)
         if cdh_content:
             self.context.add_system(f"<!-- CDH_PROJECT -->\n{cdh_content}")
+
+        # AI-DLC contextual nudge (passive triggering for AI-DLC projects)
+        aidlc_nudge = CdhProjectLoader.load_aidlc_nudge(self._workspace)
+        if aidlc_nudge:
+            self.context.add_system(aidlc_nudge)
 
     def _inject_project_context(self, project_name: str) -> None:
         if not project_name:
@@ -1186,13 +1247,27 @@ class AgentEngine:
             return None
 
     async def chat(self, user_input: str) -> str:
-        self._load_skills()
+        await asyncio.to_thread(self._load_skills)
 
         project_name = getattr(self.app, "current_project", None) or ""
         if project_name:
             self._inject_project_context(project_name)
 
         self.context.add_user(user_input)
+
+        # Proactive AI-DLC intent analysis for AI-DLC projects
+        from cdh.project_loader import CdhProjectLoader
+        if CdhProjectLoader.is_aidlc_project(self._workspace):
+            intent_analysis = CdhProjectLoader.analyze_user_intent(user_input, self._workspace)
+            if intent_analysis and intent_analysis.get("confidence", 0) >= 0.6:
+                analysis_msg = (
+                    f"\n<!-- AI-DLC Intent Analysis (auto-injected) -->\n"
+                    f"User intent detected: {intent_analysis['suggestion']}\n"
+                    f"Reasons: {', '.join(intent_analysis.get('reasons', []))}\n"
+                    f"If this is an AI-DLC task, consider starting with phase: "
+                    f"`{intent_analysis['phases'][0]}`\n"
+                )
+                self.context.add_system(analysis_msg)
 
         self.context.set_model(self.app.current_model)
         if self.context.should_compact():
@@ -1308,6 +1383,120 @@ class AgentEngine:
             return json.dumps({"success": False, "error": f"{name} requires approval", "requires_approval": True})
         return None
 
+    def hidden_tool_names(self) -> set[str]:
+        """Tools that must NOT be advertised to the LLM for the current agent.
+
+        Mirrors ``_check_tool_permission`` exactly: a tool is hidden when it
+        is disallowed by the agent's allow/deny lists, or when its permission
+        key resolves to hard DENY. Unmapped non-read-only tools fall back to
+        the edit permission, matching the runtime fallback.
+        """
+        from onecode.agent.agents.types import AgentPermission
+        agent = self.current_agent
+        tools_config = agent.get_tools_config()
+        hidden: set[str] = set()
+        for spec in self._tool_registry.list_specs():
+            name = spec.name
+            if not agent.tool_allowed(name):
+                hidden.add(name)
+                continue
+            perm_key = self._TOOL_NAME_TO_PERM_KEY.get(name)
+            if perm_key is not None:
+                if tools_config.get(perm_key, AgentPermission.ALLOW) == AgentPermission.DENY:
+                    hidden.add(name)
+            elif not spec.is_read_only:
+                if tools_config.get("edit", AgentPermission.ALLOW) == AgentPermission.DENY:
+                    hidden.add(name)
+        return hidden
+
+    def _register_tool_denial(self, name: str) -> None:
+        """Track repeated permission denials for one tool and inject an
+        escalating hint so the model stops retrying calls that can never
+        succeed in the current mode."""
+        count = self._tool_denial_count.get(name, 0) + 1
+        self._tool_denial_count[name] = count
+        marker = f"<!-- TOOL_DENIED_{name} -->"
+        self.context.remove_system_by_marker(marker)
+        if count >= 3:
+            self.context.insert_system_before_non_system(
+                f"{marker}\n"
+                f"## Repeatedly blocked tool: {name}\n"
+                f"You have tried to use `{name}` {count} times and it was "
+                f"denied every time. It will NEVER succeed in the current "
+                f"agent/mode. Stop calling it. Re-read the plan and the "
+                f"available tool list, adjust your approach, or use AskUser "
+                f"to ask the user how to proceed."
+            )
+        else:
+            self.context.insert_system_before_non_system(
+                f"{marker}\n"
+                f"You attempted to use `{name}` but it was denied by the "
+                f"current agent's permissions. Do NOT retry the same call — "
+                f"adjust your approach or ask the user via AskUser."
+            )
+
+    def _save_plan_document(self, plan_text: str) -> str | None:
+        """Persist the submitted plan to ``.cdh/plans/plan-{id}.md``.
+
+        Returns the absolute path, or None on failure. The document survives
+        context compaction and is re-read by the execution agent at handoff.
+        """
+        try:
+            from onecode.agent.cdh_loader import CdhProjectLoader
+            cdh_dir = CdhProjectLoader.find_cdh_dir_for_todos(self._project_dir)
+            if cdh_dir is None:
+                cdh_dir = self._project_dir / CdhProjectLoader.CDH_DIRNAME
+            plans_dir = cdh_dir / "plans"
+            plans_dir.mkdir(parents=True, exist_ok=True)
+            path = plans_dir / f"plan-{int(time.time())}.md"
+            path.write_text(plan_text or "(empty plan)", "utf-8")
+            return str(path)
+        except Exception as e:
+            logger.warning("Failed to save plan document: %s", e)
+            return None
+
+    def _plan_handoff(self, plan_path: str | None) -> None:
+        """Switch from the plan agent to the execution agent after approval.
+
+        Keeps the approved task list (todos) and injects the approved plan
+        document into the execution agent's system context so it survives
+        compaction and stays the single source of truth.
+        """
+        try:
+            if self.current_agent.name != "plan":
+                return
+            self.set_agent("solo", keep_todos=True)
+            plan_text = ""
+            if plan_path:
+                try:
+                    plan_text = Path(plan_path).read_text("utf-8")
+                except Exception:
+                    plan_text = ""
+            todos = "\n".join(
+                f"- [{t['id']}] {t['subject']}"
+                for t in self._todo_manager.list_todos()
+            )
+            section = (
+                "<!-- APPROVED_PLAN -->\n"
+                "## Approved plan (execution mode)\n"
+                f"Plan document: {plan_path}\n\n"
+                f"{plan_text}\n\n"
+                "### Task list\n"
+                f"{todos or '(empty)'}\n\n"
+                "Execute the approved plan: work through the task list and "
+                "mark each todo completed via TodoUpdate as you finish it."
+            )
+            if not self.context.replace_system_section("<!-- APPROVED_PLAN -->", section):
+                self.context.insert_system_before_non_system(section)
+        except Exception as e:
+            logger.warning("Plan handoff failed: %s", e)
+
+    def _react_phase_text(self, round_no: int) -> str:
+        """Per-round CoT guidance header; the plan agent has its own stages."""
+        if self.current_agent and self.current_agent.name == "plan":
+            return f"<!-- REACT_PHASE -->\n## Round {round_no} — 思考 → 规划 → 审批\n"
+        return f"<!-- REACT_PHASE -->\n## Round {round_no} — 思考 → Todo → 行动\n"
+
     async def _execute_tool(self, tool_call: dict) -> dict:
         from onecode.agent.tools.registry import ToolCall as RegistryToolCall
         name = tool_call["name"]
@@ -1318,6 +1507,7 @@ class AgentEngine:
         try:
             denied = self._check_tool_permission(name, inp)
             if denied:
+                self._register_tool_denial(name)
                 return {**base, "content": denied, "is_error": True}
 
             call = RegistryToolCall(name=name, input=inp, tool_use_id=tid)
@@ -1378,7 +1568,7 @@ class AgentEngine:
             pass
 
     async def chat_stream(self, user_input: str | list[dict]) -> AsyncIterator[StreamEvent | str]:
-        self._load_skills()
+        await asyncio.to_thread(self._load_skills)
         self._ctx_err_retries = 0
         self._verification_fail_count = 0
         preview = user_input[:100] if isinstance(user_input, str) else f"[{len(user_input)} content blocks]"
@@ -1459,7 +1649,7 @@ class AgentEngine:
         # ── REACT_PHASE must be injected BEFORE add_user so system
         # messages stay at the top of the message list.  On subsequent
         # chat_stream calls replace_system_section updates it in-place.
-        cot_phase_init = "<!-- REACT_PHASE -->\n## Round 1 — 思考 → Todo → 行动\n"
+        cot_phase_init = self._react_phase_text(1)
         if not self.context.replace_system_section("<!-- REACT_PHASE -->", cot_phase_init):
             self.context.add_system(cot_phase_init)
 
@@ -1527,10 +1717,12 @@ class AgentEngine:
 
         # ── Agent loop: 思考 → Todo → 行动 (per-Round) ──
         is_anthropic = provider.is_anthropic_style()
-        max_turns = self.current_agent.max_turns or 10
+        max_turns = self.current_agent.max_turns or 5000
         hard_limit = max_turns
         hard_limit_extensions = 0
-        max_hard_limit_extensions = 3
+        max_hard_limit_extensions = float('inf') if (
+            self.current_agent.name == "solo" or self._has_pending_todos()
+        ) else 5
 
         def _infinite_turns():
             t = 0
@@ -1542,12 +1734,12 @@ class AgentEngine:
             # Absolute ceiling: never exceed max_iterations (safety net)
             absolute_ceiling = self.app.config.agent.max_iterations
             if turn >= absolute_ceiling:
-                logger.warning(
-                    "Absolute ceiling (%d) reached at turn %d — stopping "
-                    "regardless of pending todos",
-                    absolute_ceiling, turn,
-                )
-                break
+                if not self._has_pending_todos():
+                    logger.warning(
+                        "Absolute ceiling (%d) reached at turn %d — stopping",
+                        absolute_ceiling, turn,
+                    )
+                    break
             # Dynamic extension: if hard_limit reached but agent is still
             # actively working (pending todos, or just called tools), keep going.
             if turn >= hard_limit:
@@ -1563,7 +1755,7 @@ class AgentEngine:
                         hard_limit, turn, pending,
                         hard_limit_extensions, max_hard_limit_extensions,
                     )
-                    hard_limit += 5
+                    hard_limit += 20
                     lines = [
                         "<!-- FORCE_CONTINUE -->",
                         f"## {turn} rounds completed, {pending} todos still pending",
@@ -1575,10 +1767,14 @@ class AgentEngine:
                         pending = sum(1 for t in self._todo_manager.list_todos()
                                       if t.get("status") in ("pending", "in_progress"))
                         logger.warning(
-                            "hard_limit extensions exhausted at turn %d with %d pending todos — stopping",
+                            "hard_limit extensions exhausted at turn %d with %d pending todos — pausing",
                             turn, pending,
                         )
-                    break
+                        yield StreamEvent.text_delta(
+                            f"\n\n*Pausing: hard_limit extensions exhausted with {pending} pending todos. "
+                            "Type 'continue' to proceed or 'stop' to end.*\n\n"
+                        )
+                        return
             if self._cancelled:
                 self._cleanup_injected_messages()
                 yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
@@ -1595,7 +1791,7 @@ class AgentEngine:
             if turn > 0:
                 self.context.replace_system_section(
                     "<!-- REACT_PHASE -->",
-                    f"<!-- REACT_PHASE -->\n## Round {turn + 1} — 思考 → Todo → 行动\n",
+                    self._react_phase_text(turn + 1),
                 )
 
             self._pending_thinking_blocks = []
@@ -1635,7 +1831,9 @@ class AgentEngine:
                     on_text_chunk=stream_cb,
                     on_tool_call_delta=self.on_tool_call_delta,
                     cancel_check=lambda: self._cancelled,
-                    tools=self._tool_registry.make_openai_schemas(),
+                    tools=self._tool_registry.make_openai_schemas(
+                        exclude=self.hidden_tool_names()
+                    ),
                 )
                 response_text = chat_response.content
                 tool_uses = chat_response.tool_uses
@@ -1668,7 +1866,9 @@ class AgentEngine:
                     model_response = await provider.chat(
                         context_messages,
                         model=model_name,
-                        tools=self._tool_registry.make_openai_schemas(),
+                    tools=self._tool_registry.make_openai_schemas(
+                        exclude=self.hidden_tool_names()
+                    ),
                     )
                     response_text = model_response.get_text()
                     tool_uses = [
@@ -1701,8 +1901,19 @@ class AgentEngine:
                         turn_usage = model_response.usage
                 except TransientProviderError:
                     raise  # propagate to outer TransientProviderError handler for retry
+                except (KeyboardInterrupt, asyncio.CancelledError):
+                    self._cleanup_injected_messages()
+                    yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
+                    return
                 except Exception as e:
                     logger.exception(f"Error during chat() fallback turn {turn+1}: {e}")
+                    if self._has_pending_todos():
+                        pending = sum(1 for t in self._todo_manager.list_todos()
+                                      if t.get("status") in ("pending", "in_progress"))
+                        yield StreamEvent.text_delta(
+                            f"\n\n*Error: {safe_error_msg(e)}, {pending} todos remaining. Attempting to continue...*\n\n"
+                        )
+                        continue
                     yield StreamEvent.error(safe_error_msg(e))
                     break
             except TurnCancelledError:
@@ -1741,6 +1952,13 @@ class AgentEngine:
                         f"Context length exceeded (turn {turn+1}), "
                         f"compaction exhausted after {ctx_retries} attempts"
                     )
+                    if self._has_pending_todos():
+                        pending = sum(1 for t in self._todo_manager.list_todos()
+                                      if t.get("status") in ("pending", "in_progress"))
+                        yield StreamEvent.text_delta(
+                            f"\n\n*Context overflow with {pending} pending todos. Pausing for user input...*\n\n"
+                        )
+                        return
                     break
                 level = self.context.compact()
                 ctx_tokens_after = self.context._token_count
@@ -1833,7 +2051,18 @@ class AgentEngine:
                     "message": str(e),
                 })
                 yield StreamEvent.error(f"Provider error (turn {turn+1}): {safe_error_msg(e)}")
+                if self._has_pending_todos():
+                    pending = sum(1 for t in self._todo_manager.list_todos()
+                                  if t.get("status") in ("pending", "in_progress"))
+                    yield StreamEvent.text_delta(
+                        f"\n\n*Transient error exhausted with {pending} pending todos. Pausing for user input...*\n\n"
+                    )
+                    return
                 break
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                self._cleanup_injected_messages()
+                yield StreamEvent.text_delta("\n\n*Turn cancelled*\n\n")
+                return
             except Exception as e:
                 ctx_msgs = len(self.context.messages)
                 ctx_tokens = self.context._token_count
@@ -1842,6 +2071,14 @@ class AgentEngine:
                     f"  provider={provider_name} model={model_name} "
                     f"context_msgs={ctx_msgs} ctx_tokens={ctx_tokens}"
                 )
+                if self._has_pending_todos():
+                    pending = sum(1 for t in self._todo_manager.list_todos()
+                                  if t.get("status") in ("pending", "in_progress"))
+                    logger.info(f"Error with %d pending todos, attempting to continue...", pending)
+                    yield StreamEvent.text_delta(
+                        f"\n\n*Error: {safe_error_msg(e)}, {pending} todos remaining. Attempting to continue...*\n\n"
+                    )
+                    continue
                 yield StreamEvent.error(f"Provider error (turn {turn+1}): {safe_error_msg(e)}")
                 break
 
@@ -1890,121 +2127,46 @@ class AgentEngine:
                 self._streaming_used,
             )
 
-            # ── Auto-ask detection: if the LLM output a question as plain text
-            # AND also generated tool calls, the Do phase should become AskUser.
-            # Instead of executing the original tools (which may depend on the
-            # answer), we REPLACE tool_uses with a single AskUser tool call.
+            # ── Auto-ask detection: if the LLM output a question as plain text,
+            # the Do phase should become AskUser — regardless of whether tool
+            # calls accompanied it. Instead of executing the original tools
+            # (which may depend on the answer) or treating the turn as an
+            # empty round (which would bury the question and queue the user's
+            # input), we REPLACE tool_uses with a single AskUser tool call.
             # The normal tool execution loop then handles AskUser naturally,
             # pausing until the user responds.
             #
-            # Detection uses two layers:
-            # Layer 1 — Semantic (Thought intent): detect explicit "need user input" signals
-            # Layer 2 — Syntax (punctuation): detect question marks as fallback
-            #
-            # Self-talk patterns are excluded (LLM is reasoning to itself, no input needed).
-            _stripped = clean_text.rstrip() if clean_text else ""
+            # Detection logic uses strict=True only: semantic intent OR trailing
+            # `?`/`？` triggers auto-ask. Implementation tools (Read/Write/Grep/
+            # Bash/etc.) are excluded — a question before file operations is
+            # unlikely to need user input.
+            from onecode.agent.question_detect import looks_like_question
 
-            # Layer 1: Semantic detection via Thought intent patterns
-            # Patterns indicating the LLM explicitly needs human input
-            _SEMANTIC_NEEDS_INPUT = [
-                r"需要用户", r"需要您", r"需要您提供",
-                r"请确认", r"请选择", r"询问您", r"问您",
-                r"需要确认", r"需要知道", r"请告诉我",
-                r"等待您的", r"需要.*信息", r"需要哪些参数",
-                r"请提供", r"请问要", r"请问您", r"需要.*id",
-                r"哪个用户", r"哪个文件", r"什么参数", r"如何处理",
-                r"could you (tell me|confirm|provide|let me know)",
-                r"i need to know",
-                r"please (confirm|tell me|specify|provide|select|choose)",
-                r"which .*(user|file|parameter|option|setting)",
-                r"what .*(parameter|user|file|option|setting)",
-                r"what should i",
-                r"which (file|user|option|one)",
-                r"should i (proceed|continue|upgrade|execute)",
-                r"do you want (me to|to)",
-                r"can you (tell me|confirm|specify)",
-                r"let me know (which|what|if|whether)",
-                r"i'?m not sure (which|what|who|how)",
-                r"you('d| would) like (me to|to)",
-                r"would you like (me to|to)",
-                r"(could i|may i) get (the|your)",
-                r"pick (a|an|the)",
-                r"choose (a|an|the|which)",
-                r"what'?s the (user|file|path|parameter)",
-                r"which one",
-                r"confirm the (user|file|path|parameter)",
-                r"specify (the|which|what)",
-                r"what .*(file|user|path|parameter)",
-                r"which .*should i",
-                r"(do you|would you|should i)",
-            ]
-            # Patterns indicating the LLM is just reasoning (self-talk, no input needed)
-            _SEMANTIC_SELF_TALK = [
-                r"^让我想想", r"^我需要先", r"^我可以先",
-                r"^首先", r"^然后", r"^接下来", r"^好的",
-                r"自言自语", r"我在想", r"我在考虑",
-                r"让我先", r"我先来", r"先执行",
-                r"^let me (think|check|read|look|find|see)",
-                r"^i('ll| will| can| should)?( be)? (checking|reading|looking|finding|seeing|thinking)",
-                r"^first(ly)?(,| )?(i('ll| will| can| should)?)?",
-                r"^then(,| )?(i('ll| will| can| should)?)?",
-                r"^next(,| )?(i('ll| will| can| should)?)?",
-                r"^okay(|,| ) (so|let me|i('ll| will| can| should)?)",
-                r"^alright(|,| ) (so|let me|i('ll| will| can| should)?)",
-                r"^sure(|,| ) (so|let me|i('ll| will| can| should)?)",
-                r"^sounds good(|,| )",
-                r"^i('ll| will| can| should)?( go ahead| start| begin| proceed| execute)",
-                r"^i('ll| will| can| should)?( need to| have to| want to) (check|read|look|find|see|think|consider|proceed|execute|verify|confirm|fix|update|change|add|remove)",
-                r"^i('m| am)( going to| about to)?",
-                r"^looks like",
-                r"^it seems (like|that)",
-                r"^based on",
-                r"^let me just",
-                r"^i('ll| will)? just (check|read|look|find|see|try)",
-                r"^i think (that )?",
-                r"^i believe (that )?",
-                r"i('m| am) thinking (about|that)",
-                r"i('m| am) considering",
-                r"^here('s| is)",
-                r"^so(,| )? i('ll| will| can| should)?",
-                r"^okay so",
-                r"i need to consider",
-            ]
+            _IMPLEMENTATION_TOOLS = {
+                "Read", "Write", "Edit", "Glob", "Grep", "Bash", "Search",
+                "WebFetch", "Run", "Execute", "Tool", "Task", "TodoWrite",
+                "TodoClear", "TodoSet", "SlotSet", "ContextGet", "ContextSet",
+            }
+            _tool_names = {tu.get("name") for tu in tool_uses}
+            _has_impl_tools = bool(_tool_names & _IMPLEMENTATION_TOOLS)
 
-            _thought_needs_input = False
-            for p in _SEMANTIC_SELF_TALK:
-                if re.search(p, _stripped, re.IGNORECASE):
-                    _thought_needs_input = False
-                    break
-            else:
-                for p in _SEMANTIC_NEEDS_INPUT:
-                    if re.search(p, _stripped, re.IGNORECASE):
-                        _thought_needs_input = True
-                        break
-
-            # Layer 2: Syntax detection (punctuation-based, fallback)
-            _prev_cjk_or_fullwidth = (
-                len(_stripped) >= 2 and
-                ('\u4e00' <= _stripped[-2] <= '\u9fff' or '\u3000' <= _stripped[-2] <= '\u303f')
+            _is_auto_ask = bool(
+                clean_text and
+                looks_like_question(clean_text, strict=True) and
+                not _has_impl_tools
             )
-            _syntax_has_question = bool(
-                _stripped and (
-                    _stripped.endswith('\uff1f') or
-                    (_stripped.endswith('?') and _prev_cjk_or_fullwidth) or
-                    _stripped.endswith('：') or
-                    '?' in _stripped
-                )
-            )
-
-            _is_auto_ask = bool(_stripped and tool_uses and (_thought_needs_input or _syntax_has_question))
 
             if _is_auto_ask:
                 _ask_id = f"auto-ask-{self._tool_id_counter}"
                 self._tool_id_counter += 1
+                # Show the trailing question sentence in the dialog instead of
+                # dumping the whole preamble into the AskUser widget.
+                from onecode.agent.question_detect import compact_question
+                _ask_question = compact_question(clean_text)
                 tool_uses = [{
                     "id": _ask_id,
                     "name": "AskUser",
-                    "input": {"question": clean_text},
+                    "input": {"question": _ask_question},
                 }]
 
             # Add assistant response to context with proper content blocks.
@@ -2059,18 +2221,23 @@ class AgentEngine:
                 # forceful continuation nudge and loop again instead of
                 # exiting the turn loop.
                 self._empty_tool_turns += 1
-                if self._empty_tool_turns >= 3:
-                    pending_count = sum(
-                        1 for t in self._todo_manager.list_todos()
-                        if t.get("status") in ("pending", "in_progress")
-                    )
-                    logger.warning(
-                        "LLM produced %d consecutive empty turns with %d "
-                        "remaining todos — breaking loop",
-                        self._empty_tool_turns, pending_count,
-                    )
-                    break
+                max_empty_turns = getattr(self._cfg.agent, 'max_empty_turns', 10)
                 if self._has_pending_todos():
+                    if self._empty_tool_turns >= max_empty_turns:
+                        pending_count = sum(
+                            1 for t in self._todo_manager.list_todos()
+                            if t.get("status") in ("pending", "in_progress")
+                        )
+                        logger.warning(
+                            "LLM produced %d consecutive empty turns with %d "
+                            "remaining todos — pausing for user input",
+                            self._empty_tool_turns, pending_count,
+                        )
+                        yield StreamEvent.text_delta(
+                            f"\n\n*Pausing: {self._empty_tool_turns} empty turns with {pending_count} pending todos. "
+                            "Type 'continue' to proceed or 'stop' to end.*\n\n"
+                        )
+                        return
                     open_count = sum(
                         1 for t in self._todo_manager.list_todos()
                         if t.get("status") in ("pending", "in_progress")
@@ -2108,22 +2275,20 @@ class AgentEngine:
                         ]
                         self._inject_nudge(lines)
                     continue
-                # No pending todos and no tool calls: work appears done.
+                # All todos completed — end session immediately
                 all_todos = self._todo_manager.list_todos()
-                if not all_todos and self.iterations > 1:
-                    confirm_lines = [
-                        "# Final check",
-                        "",
-                        "You haven't created any plan in this session. "
-                        "Are you sure all work is complete?",
-                        "",
-                        "If work remains → output a plan as Markdown and continue.",
-                        "If done → output a visible summary of what you accomplished.",
-                    ]
-                    self._inject_nudge(confirm_lines)
-                    self._empty_tool_turns += 1
-                    continue
-                break
+                if all_todos and all(t.get("status") == "completed" for t in all_todos):
+                    logger.info("All %d todo(s) completed, ending session", len(all_todos))
+                    break
+                if self._empty_tool_turns >= max_empty_turns:
+                    logger.warning(
+                        "LLM produced %d consecutive empty turns with no pending todos — breaking loop",
+                        self._empty_tool_turns,
+                    )
+                    break
+                # No pending todos and no tool calls: work appears done.
+                if not all_todos:
+                    break
 
             # Emit ToolEvents (Clawd-Code pattern) and StreamEvents for TUI
             for tu in tool_uses:
@@ -2146,74 +2311,81 @@ class AgentEngine:
 
                 # ── Plan mode guard ──
                 # In plan mode (edit=DENY && bash=DENY), reject any tool not
-                # marked as read-only. Returns a clear message telling the LLM
-                # to switch to Build mode instead of silently failing.
+                # marked as read-only UNLESS the permission system explicitly
+                # allows it (e.g. TodoCreate/TodoUpdate, which are the plan
+                # artifact and are ALLOWed for the plan agent). Returns a
+                # clear message telling the LLM to switch to Build mode
+                # instead of silently failing.
                 if self._is_plan_mode():
                     spec = self._tool_registry.get(tu["name"])
                     if spec and not spec.spec().is_read_only:
-                        self._plan_denial_count += 1
-                        result = {
-                            "tool_use_id": tu["id"],
-                            "is_error": True,
-                            "category": "mode",
-                            "content": json.dumps({
-                                "success": False,
-                                "error": (
-                                    f"Tool '{tu['name']}' is not available in Plan mode. "
-                                    "Plan mode is read-only: you may use Read/Glob/Grep/WebFetch/"
-                                    "WebSearch for analysis, and AskUser for questions. "
-                                    "Writing files, running shell commands, or any "
-                                    "other mutation requires switching to Build mode."
-                                ),
-                            }),
-                        }
-                        if self._plan_denial_count >= 3:
-                            self.context.insert_system_before_non_system(
-                                "<!-- PLAN_MODE_DENIED -->\n"
-                                "## CRITICAL: Repeated write attempts in Plan mode\n"
-                                "You have repeatedly attempted write operations in Plan mode.\n"
-                                "This will NEVER succeed. Stop trying and use only read/planning tools.\n"
-                                "To execute changes, the user must switch to Build mode first."
+                        denied = self._check_tool_permission(tu["name"], tu["input"])
+                        if denied is not None:
+                            self._plan_denial_count += 1
+                            self._register_tool_denial(tu["name"])
+                            result = {
+                                "tool_use_id": tu["id"],
+                                "is_error": True,
+                                "category": "mode",
+                                "content": json.dumps({
+                                    "success": False,
+                                    "error": (
+                                        f"Tool '{tu['name']}' is not available in Plan mode. "
+                                        "Plan mode is read-only: you may use Read/Glob/Grep/WebFetch/"
+                                        "WebSearch for analysis, AskUser for questions, and "
+                                        "TodoCreate/TodoUpdate to build the task list. "
+                                        "Writing files, running shell commands, or any "
+                                        "other mutation requires switching to Build mode."
+                                    ),
+                                }),
+                            }
+                            if self._plan_denial_count >= 3:
+                                self.context.insert_system_before_non_system(
+                                    "<!-- PLAN_MODE_DENIED -->\n"
+                                    "## CRITICAL: Repeated write attempts in Plan mode\n"
+                                    "You have repeatedly attempted write operations in Plan mode.\n"
+                                    "This will NEVER succeed. Stop trying and use only read/planning tools.\n"
+                                    "To execute changes, the user must switch to Build mode first."
+                                )
+                            else:
+                                self.context.insert_system_before_non_system(
+                                    "<!-- PLAN_MODE_DENIED -->\n"
+                                    f"You attempted to use '{tu['name']}' which requires write access.\n"
+                                    "Plan mode is read-only. Do NOT call write-capable tools again.\n"
+                                    "Switch to Build mode if you need to execute changes."
+                                )
+                            # Emit tool result event before continuing to next tool
+                            result_str = str(result.get("content", ""))
+                            is_error = result.get("is_error", False)
+                            _cat = result.get("category", "unknown")
+                            from onecode.models.messages import ToolCategory as MsgToolCategory
+                            try:
+                                result_cat = MsgToolCategory(_cat)
+                            except ValueError:
+                                result_cat = MsgToolCategory.UNKNOWN
+                            self._notify_event(ToolEvent(
+                                kind="tool_result",
+                                tool_name=tu["name"],
+                                tool_use_id=tu["id"],
+                                tool_output=result_str,
+                                is_error=is_error,
+                            ))
+                            yield StreamEvent.tool_result(
+                                call_id=tu["id"],
+                                content=result_str,
+                                is_error=is_error,
+                                category=result_cat,
                             )
-                        else:
-                            self.context.insert_system_before_non_system(
-                                "<!-- PLAN_MODE_DENIED -->\n"
-                                f"You attempted to use '{tu['name']}' which requires write access.\n"
-                                "Plan mode is read-only. Do NOT call write-capable tools again.\n"
-                                "Switch to Build mode if you need to execute changes."
-                            )
-                        # Emit tool result event before continuing to next tool
-                        result_str = str(result.get("content", ""))
-                        is_error = result.get("is_error", False)
-                        _cat = result.get("category", "unknown")
-                        from onecode.models.messages import ToolCategory as MsgToolCategory
-                        try:
-                            result_cat = MsgToolCategory(_cat)
-                        except ValueError:
-                            result_cat = MsgToolCategory.UNKNOWN
-                        self._notify_event(ToolEvent(
-                            kind="tool_result",
-                            tool_name=tu["name"],
-                            tool_use_id=tu["id"],
-                            tool_output=result_str,
-                            is_error=is_error,
-                        ))
-                        yield StreamEvent.tool_result(
-                            call_id=tu["id"],
-                            content=result_str,
-                            is_error=is_error,
-                            category=result_cat,
-                        )
-                        if is_anthropic:
-                            self.context.add_tool_result(tu["id"], result_str, is_error)
-                        else:
-                            self.context.add_message(
-                                "tool",
-                                [{"type": "tool_result", "tool_use_id": tu["id"],
-                                  "content": result_str, "is_error": is_error}],
-                                name=tu["id"],
-                            )
-                        continue
+                            if is_anthropic:
+                                self.context.add_tool_result(tu["id"], result_str, is_error)
+                            else:
+                                self.context.add_message(
+                                    "tool",
+                                    [{"type": "tool_result", "tool_use_id": tu["id"],
+                                      "content": result_str, "is_error": is_error}],
+                                    name=tu["id"],
+                                )
+                            continue
 
                 # Spawn tool: forward subagent text deltas to the TUI as
                 # subagent_chunk events so the SubAgent widget actually has
@@ -2419,11 +2591,28 @@ class AgentEngine:
                 if tu["name"] == "AskUser":
                     parsed = json.loads(result_str) if result_str else {}
                     question = parsed.get("question", "") if isinstance(parsed, dict) else ""
+                    context = parsed.get("context", "") if isinstance(parsed, dict) else ""
                     options = parsed.get("options", []) if isinstance(parsed, dict) else []
                     questions = parsed.get("questions", []) if isinstance(parsed, dict) else []
+                    plan_submit = bool(parsed.get("plan_submit", False)) if isinstance(parsed, dict) else False
+
+                    # Plan submission: persist the plan document so it survives
+                    # compaction and can be re-read by the execution agent.
+                    plan_path = None
+                    if plan_submit:
+                        plan_path = self._save_plan_document(
+                            context or question or result_str
+                        )
+                        if plan_path:
+                            self._approved_plan_path = plan_path
+                            suffix = f"\n\nPlan saved to: {plan_path}"
+                            if context:
+                                context = f"{context}{suffix}"
+                            elif question:
+                                question = f"{question}{suffix}"
 
                     # Check for auto-default on single question + single option
-                    if not questions and len(options) == 1 and options[0].get("default"):
+                    if not questions and not plan_submit and len(options) == 1 and options[0].get("default"):
                         default_val = options[0]["value"]
                         self._pending_approval = None
                         yield StreamEvent.tool_result(
@@ -2434,7 +2623,7 @@ class AgentEngine:
 
                     # Auto-default for multi-question: skip questions that have
                     # a single option with default=true
-                    if questions:
+                    if questions and not plan_submit:
                         auto_answers = {}
                         remaining = []
                         for i, q in enumerate(questions):
@@ -2453,7 +2642,13 @@ class AgentEngine:
                         questions = remaining
 
                     has_questions = bool(questions)
-                    self._pending_approval = {"tool_call": tu, "category": category, "ask_user": True}
+                    self._pending_approval = {
+                        "tool_call": tu,
+                        "category": category,
+                        "ask_user": True,
+                        "plan_submit": plan_submit,
+                        "plan_path": plan_path,
+                    }
                     if has_questions:
                         yield StreamEvent.ask_user(
                             call_id=tu["id"],
@@ -2463,6 +2658,7 @@ class AgentEngine:
                             options=[],
                             questions=questions,
                             action_type="ask_user",
+                            plan_submit=plan_submit,
                         )
                     else:
                         yield StreamEvent.ask_user(
@@ -2472,6 +2668,7 @@ class AgentEngine:
                             context=result_str,
                             options=options,
                             action_type="ask_user",
+                            plan_submit=plan_submit,
                         )
                     continue
 
@@ -2484,7 +2681,25 @@ class AgentEngine:
                     pass
 
                 if requires_approval:
-                    self._pending_approval = {"tool_call": tu, "category": category}
+                    checkpoint_id = ""
+                    tool_input = tu.get("input", {})
+                    affected_files = self._get_affected_files(tu["name"], tool_input)
+                    should_ckpt, reason = self._checkpoint_manager.should_checkpoint(
+                        tu["name"], tool_input, affected_files
+                    )
+                    if should_ckpt:
+                        checkpoint_id = self._checkpoint_manager.create(
+                            agent=self.current_agent.name,
+                            reason=reason,
+                            files=affected_files,
+                            tool_call_id=tu["id"],
+                            description=f"{tu['name']} requires approval",
+                        )
+                    self._pending_approval = {
+                        "tool_call": tu,
+                        "category": category,
+                        "checkpoint_id": checkpoint_id,
+                    }
                     self._notify_event(ToolEvent(
                         kind="tool_result",
                         tool_name=tu["name"],
@@ -2500,6 +2715,7 @@ class AgentEngine:
                         action_type=tu["name"].lower(),
                         path=tu["input"].get("path", ""),
                         command=tu["input"].get("command", "")[:200],
+                        checkpoint_id=checkpoint_id,
                     )
                     # Generator resumes here after approval. The approved tool
                     # may have mutated todos (e.g. TodoUpdate via resolve_approval),
@@ -2541,11 +2757,17 @@ class AgentEngine:
                     # context; compress immediately if we're over threshold.
                     self.context.set_model(self.app.current_model)
                     if self.context.should_compact():
-                        level = self.context.compact()
-                        if level not in ("none",):
-                            logger.info(
-                                "Mid-turn compaction at turn %d after tool %s: %s",
-                                turn + 1, tu["name"], level,
+                        try:
+                            level = self.context.compact()
+                            if level not in ("none",):
+                                logger.info(
+                                    "Mid-turn compaction at turn %d after tool %s: %s",
+                                    turn + 1, tu["name"], level,
+                                )
+                        except Exception as e:
+                            logger.error(
+                                "Mid-turn compaction failed at turn %d after tool %s: %s",
+                                turn + 1, tu["name"], e,
                             )
                     # Emit plan update when tasks/todos changed.  Any
                     # mutating path through TodoManager flips
@@ -2673,6 +2895,9 @@ class AgentEngine:
         
         tc = self._pending_approval["tool_call"]
         is_ask_user = self._pending_approval.get("ask_user", False)
+        plan_submit = self._pending_approval.get("plan_submit", False)
+        plan_path = self._pending_approval.get("plan_path")
+        checkpoint_id = self._pending_approval.get("checkpoint_id", "")
         self._pending_approval = None
 
         # Handle AskUser — return user's answer as tool result
@@ -2684,6 +2909,9 @@ class AgentEngine:
                     "is_error": True,
                     "category": tc.get("category", "unknown"),
                 }
+            # Plan approved → hand off to the execution agent (keeps todos).
+            if plan_submit:
+                self._plan_handoff(plan_path)
             # answer is a JSON string when multi-question, plain text otherwise
             try:
                 parsed = json.loads(answer)
@@ -2711,6 +2939,15 @@ class AgentEngine:
                 "is_error": True,
                 "category": tc.get("category", "unknown"),
             }
+
+        if answer == "__rollback__" and checkpoint_id:
+            self._checkpoint_manager.restore(checkpoint_id)
+            return {
+                "tool_use_id": tc["id"],
+                "content": json.dumps({"success": False, "error": "Rolled back to checkpoint"}),
+                "is_error": True,
+                "category": tc.get("category", "unknown"),
+            }
         
         perm_key = self._TOOL_NAME_TO_PERM_KEY.get(tc["name"])
         if perm_key is None:
@@ -2724,6 +2961,18 @@ class AgentEngine:
         finally:
             setattr(self.current_agent, attr_name, saved)
 
+    async def rollback_to_checkpoint(self, checkpoint_id: str) -> bool:
+        """Restore files to a previous checkpoint state."""
+        return self._checkpoint_manager.restore(checkpoint_id)
+
+    def get_checkpoint_diff(self, checkpoint_id: str, file_path: str) -> str:
+        """Get diff between checkpoint and current state for a file."""
+        return self._checkpoint_manager.get_diff(checkpoint_id, file_path)
+
+    def list_checkpoints(self, limit: int = 10) -> list[dict]:
+        """List recent checkpoints."""
+        return self._checkpoint_manager.list(limit=limit)
+
     def _reset_react_state(self) -> None:
         """Reset ReAct loop state for a fresh cycle."""
         self._react_phase = "thought"
@@ -2734,6 +2983,9 @@ class AgentEngine:
         self._last_tool_results.clear()
         self._cleanup_injected_messages()
         self.context.remove_system_by_marker("<!-- PLAN_MODE_DENIED -->")
+        for name in list(self._tool_denial_count):
+            self.context.remove_system_by_marker(f"<!-- TOOL_DENIED_{name} -->")
+        self._tool_denial_count.clear()
         self.context.remove_system_by_marker("<!-- VERIFY_FAIL -->")
         self._last_emitted_plan = ()
         self.context.remove_system_by_marker("<!-- REACT_PHASE -->")
@@ -2833,8 +3085,16 @@ class AgentEngine:
         """
         # Depth check: limit from config (default 1 = leaf nodes only).
         depth_limit = getattr(self.app.config.agent, 'max_subagent_depth', _MAX_SUBAGENT_DEPTH)
+        subagent_timeout = getattr(self.app.config.agent, 'max_subagent_timeout', _SUBAGENT_TIMEOUT)
         if self._subagent_depth >= depth_limit:
             err = f"Subagent cannot spawn nested subagents (max depth={depth_limit})"
+            yield (StreamEvent.subagent_end(
+                "", agent_type=agent_type, status="failed", error=err,
+            ), err)
+            return
+
+        if self.current_agent.name == "plan" and agent_type not in ("explore", "scout"):
+            err = f"PlanAgent can only spawn read-only agents (explore, scout), not '{agent_type}'"
             yield (StreamEvent.subagent_end(
                 "", agent_type=agent_type, status="failed", error=err,
             ), err)
@@ -2909,7 +3169,7 @@ class AgentEngine:
         # and a background task puts chat_stream events into the same queue.
         # The main loop reads from the queue and yields (event, text) pairs,
         # giving the TUI live subagent output instead of "等待输出".
-        _queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+        _queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue(maxsize=1000)
         _sa_log_prefix = f"[SA-STREAM {agent_type} depth={self._subagent_depth + 1}]"
         _sa_total_bytes = 0
         _sa_chunk_count = 0
@@ -2920,23 +3180,29 @@ class AgentEngine:
             nonlocal _sa_total_bytes, _sa_text_count, _sa_first_byte_logged
             try:
                 _queue.put_nowait(("text", text))
-                _sa_text_count += 1
-                _sa_total_bytes += len(text)
-                if not _sa_first_byte_logged:
-                    _sa_first_byte_logged = True
-                    logger.debug(
-                        "%s on_text_chunk FIRST token bytes=%d (text_count so far=%d)",
-                        _sa_log_prefix, len(text), _sa_text_count,
-                    )
-                if _sa_text_count % 20 == 0:
-                    logger.debug(
-                        "%s on_text_chunk progress text_calls=%d total_bytes=%d "
-                        "queued=%d",
-                        _sa_log_prefix, _sa_text_count, _sa_total_bytes,
-                        _queue.qsize(),
-                    )
-            except Exception as e:
-                logger.warning("%s on_text_chunk queue.put failed: %s", _sa_log_prefix, e)
+            except asyncio.QueueFull:
+                logger.warning(
+                    "%s on_text_chunk queue full (maxsize=1000) — dropping text chunk "
+                    "of %d bytes. Consider increasing max_subagent_timeout to allow "
+                    "faster processing.",
+                    _sa_log_prefix, len(text),
+                )
+                return
+            _sa_text_count += 1
+            _sa_total_bytes += len(text)
+            if not _sa_first_byte_logged:
+                _sa_first_byte_logged = True
+                logger.debug(
+                    "%s on_text_chunk FIRST token bytes=%d (text_count so far=%d)",
+                    _sa_log_prefix, len(text), _sa_text_count,
+                )
+            if _sa_text_count % 20 == 0:
+                logger.debug(
+                    "%s on_text_chunk progress text_calls=%d total_bytes=%d "
+                    "queued=%d",
+                    _sa_log_prefix, _sa_text_count, _sa_total_bytes,
+                    _queue.qsize(),
+                )
 
         sub_engine.on_text_chunk = _on_subagent_text
         logger.debug("%s wiring on_text_chunk → queue (sub_engine id=%x)",
@@ -2971,7 +3237,7 @@ class AgentEngine:
 
         try:
             logger.debug("%s entering queue.get() consumer loop", _sa_log_prefix)
-            _sa_deadline = _SUBAGENT_TIMEOUT
+            _sa_deadline = subagent_timeout
             while True:
                 if self._cancelled:
                     logger.debug("%s cancelled — breaking consumer loop", _sa_log_prefix)
@@ -2984,17 +3250,17 @@ class AgentEngine:
                         _queue.get(),
                         timeout=min(1.0, _sa_deadline),
                     )
-                    _sa_deadline = _SUBAGENT_TIMEOUT  # reset on each item
+                    _sa_deadline = subagent_timeout  # reset on each item
                 except asyncio.TimeoutError:
                     _sa_deadline -= 1.0
                     if _sa_deadline <= 0:
                         logger.warning(
                             "%s subagent timed out after %ds — cancelling",
-                            _sa_log_prefix, _SUBAGENT_TIMEOUT,
+                            _sa_log_prefix, subagent_timeout,
                         )
                         yield (StreamEvent.subagent_end(
                             "", agent_type=agent_type, status="failed",
-                            error=f"timed out after {_SUBAGENT_TIMEOUT}s",
+                            error=f"timed out after {subagent_timeout}s",
                         ), "")
                         return
                     continue
@@ -3174,14 +3440,7 @@ class AgentEngine:
             return {"success": False, "error": "Subagent denied"}
         import asyncio
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                future = asyncio.run_coroutine_threadsafe(
-                    self._spawn_subagent_async(agent_type, prompt), loop
-                )
-                result = future.result(timeout=300)
-            else:
-                result = asyncio.run(self._spawn_subagent_async(agent_type, prompt))
+            result = asyncio.run(self._spawn_subagent_async(agent_type, prompt))
         except Exception as e:
             logger.exception(f"Subagent error: {e}")
             return {"success": False, "error": safe_error_msg(e)}

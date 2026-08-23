@@ -859,14 +859,14 @@ class Conversation(containers.Vertical):
 
         if self._agent_data is not None and self.session_start_time is not None:
             session_time = monotonic() - self.session_start_time
-            await self.app.capture_event(
+            self.app.capture_event(
                 "agent-session-end",
                 agent=self._agent_data["identity"],
                 duration=session_time,
                 agent_session_fail=self._agent_fail,
                 shell_count=self._shell_count,
                 turn_count=self._turn_count,
-            ).wait()
+            )
 
             session_id = getattr(self.agent, "session_id", None) or self._agent_session_id or ""
             self.app._exit_metrics = {
@@ -957,6 +957,7 @@ class Conversation(containers.Vertical):
 
             if self._pending_ask_user:
                 self._pending_ask_user = False
+                self.turn = "agent"
                 self.prompt.display = True
                 self.agent.send_ask_user_answer(text, cancelled=False)
                 await self.post(UserInput(text))
@@ -1202,6 +1203,8 @@ class Conversation(containers.Vertical):
         created_subagents: dict[str, SubAgent] = {}
         current_thought: AgentThought | None = None
         widgets: list[Widget] = []
+        seen_tool_ids: set[str] = set()
+        seen_ask_user_ids: set[str] = set()
 
         for entry in self._replay_buffer:
             match entry["kind"]:
@@ -1225,9 +1228,13 @@ class Conversation(containers.Vertical):
                         current_thought.append_fragment(entry["text"])
 
                 case "tool_call":
+                    tool_id = entry["tool_id"]
+                    if tool_id in seen_tool_ids:
+                        continue
+                    seen_tool_ids.add(tool_id)
                     current_thought = None
                     self.new_block()
-                    widgets.append(ToolCall(entry["tool_call"], id=entry["tool_id"]))
+                    widgets.append(ToolCall(entry["tool_call"], id=tool_id))
 
                 case "plan":
                     current_thought = None
@@ -1267,10 +1274,14 @@ class Conversation(containers.Vertical):
                         )
 
                 case "ask_user":
+                    ask_id = entry["tool_id"]
+                    if ask_id in seen_ask_user_ids:
+                        continue
+                    seen_ask_user_ids.add(ask_id)
                     current_thought = None
                     self.new_block()
                     widgets.append(AskUserWidget(
-                        entry["tool_id"],
+                        ask_id,
                         question=entry["question"],
                         options=entry.get("options", []),
                         questions=entry.get("questions", []),
@@ -1340,9 +1351,13 @@ class Conversation(containers.Vertical):
     async def on_acp_ask_user(self, message: acp_messages.AskUser):
         message.stop()
         if self._replay:
+            tool_id = message.tool_id
+            for existing in self._replay_buffer:
+                if existing.get("kind") == "ask_user" and existing.get("tool_id") == tool_id:
+                    return
             self._replay_buffer.append({
                 "kind": "ask_user",
-                "tool_id": message.tool_id,
+                "tool_id": tool_id,
                 "question": message.question,
                 "options": message.options or [],
                 "questions": message.questions or [],
@@ -1455,6 +1470,7 @@ class Conversation(containers.Vertical):
 
         self.prompt.display = True
         self.focus_prompt()
+        self.turn = "agent"
 
     @on(acp_messages.Plan)
     async def on_acp_plan(self, message: acp_messages.Plan):
@@ -1520,10 +1536,17 @@ class Conversation(containers.Vertical):
 
         if self._replay:
             if isinstance(message, acp_messages.ToolCall):
-                self._replay_buffer.append({"kind": "tool_call", "tool_call": tool_call, "tool_id": tool_id})
+                # Avoid duplicate tool_call entries with the same tool_id.
+                for existing in self._replay_buffer:
+                    if existing.get("kind") == "tool_call" and existing.get("tool_id") == tool_id:
+                        break
+                else:
+                    self._replay_buffer.append({"kind": "tool_call", "tool_call": tool_call, "tool_id": tool_id})
             else:
                 # ToolCallUpdate during replay: merge result content/status/title
-                # into the corresponding buffered tool_call entry.
+                # into the corresponding buffered tool_call entry. If no match,
+                # create a new entry from the update data.
+                matched = False
                 for entry in self._replay_buffer:
                     if entry.get("kind") == "tool_call" and entry.get("tool_id") == tool_id:
                         new_content = tool_call.get("content", [])
@@ -1534,7 +1557,10 @@ class Conversation(containers.Vertical):
                         new_title = tool_call.get("title", "")
                         if new_title:
                             entry["tool_call"]["title"] = new_title
+                        matched = True
                         break
+                if not matched:
+                    self._replay_buffer.append({"kind": "tool_call", "tool_call": tool_call, "tool_id": tool_id})
             return
 
         content = tool_call.get("content", None) or []
@@ -2439,7 +2465,7 @@ class Conversation(containers.Vertical):
     async def action_cancel(self) -> None:
         now = monotonic()
 
-        # If AskUser is showing, single ESC closes it
+        # If AskUser is showing (simple question path), single ESC closes it
         if self._pending_ask_user:
             self._pending_ask_user = False
             try:
@@ -2449,10 +2475,13 @@ class Conversation(containers.Vertical):
                         break
             except Exception:
                 pass
+            if self.agent is not None and self.agent._process is not None:
+                self.agent.send_ask_user_answer("", cancelled=True)
             self.prompt.display = True
             self.flash("AskUser closed")
             self.focus_prompt()
-            self._last_escape_time = now
+            self._last_escape_time = 0.0
+            self.turn = "agent"
             return
 
         # Normal double-ESC logic for session cancellation
@@ -2664,6 +2693,8 @@ class Conversation(containers.Vertical):
                     "wall_time": session_time,
                     "agent_title": self.agent_title or "Agent",
                 }
+            if self.agent is not None:
+                await self.agent.stop()
             self.app.exit()
             return True
         elif command == "session":
@@ -2980,7 +3011,9 @@ class Conversation(containers.Vertical):
                 self.app.project_dir = new_project_dir
                 self._emit_aidlc_state(new_project_dir)
                 self.post_message(messages.ProjectDirectoryUpdated(project_dir=new_project_dir))
-                self.flash(f"Switched to project: {sub_name}", style="success")
+                launched = self.app._launch_new_session_for_project(new_project_dir)
+                suffix = " (new session opened)" if launched else ""
+                self.flash(f"Switched to project: {sub_name}{suffix}", style="success")
                 return True
 
             elif sub_sub == "new":
@@ -3025,8 +3058,13 @@ class Conversation(containers.Vertical):
                 self.app.project_dir = ws
                 self._emit_aidlc_state(ws)
                 self.post_message(messages.ProjectDirectoryUpdated(project_dir=ws))
-                suffix = f" (components: {', '.join(selected)})" if selected else ""
-                self.flash(f"Created and switched to AIDC project: {sub_name}{suffix}", style="success")
+                launched = self.app._launch_new_session_for_project(ws)
+                session_suffix = " (new session opened)" if launched else ""
+                components_suffix = f" (components: {', '.join(selected)})" if selected else ""
+                self.flash(
+                    f"Created and switched to AIDLC project: {sub_name}{components_suffix}{session_suffix}",
+                    style="success",
+                )
                 return True
 
             elif sub_sub == "init":
@@ -3055,7 +3093,9 @@ class Conversation(containers.Vertical):
                 self.app.project_dir = target
                 self._emit_aidlc_state(target)
                 self.post_message(messages.ProjectDirectoryUpdated(project_dir=target))
-                self.flash(f"Initialized AIDC project in: {target}", style="success")
+                launched = self.app._launch_new_session_for_project(target)
+                session_suffix = " (new session opened)" if launched else ""
+                self.flash(f"Initialized AIDLC project in: {target}{session_suffix}", style="success")
                 return True
 
             elif sub_sub == "check":
@@ -3064,7 +3104,7 @@ class Conversation(containers.Vertical):
                 target = Path(sub_name or ".").expanduser().resolve()
                 result = _check_dlc_project(target)
                 if result["valid"]:
-                    lines = [f"\u2713 Valid AIDC project: {result['name']}"]
+                    lines = [f"\u2713 Valid AIDLC project: {result['name']}"]
                     lines.append(f"  Location: {result['path']}")
                     if result["components"]:
                         lines.append(f"  Components: {', '.join(result['components'])}")
@@ -3075,7 +3115,7 @@ class Conversation(containers.Vertical):
                         else "  CDH state: \u2717 not initialized"
                     )
                 else:
-                    lines = [f"\u2717 Not a valid AIDC project: {target}"]
+                    lines = [f"\u2717 Not a valid AIDLC project: {target}"]
                 for s in result["suggestions"]:
                     lines.append(f"  \u2022 {s}")
                 self.notify("\n".join(lines), title="/aidlc project check")

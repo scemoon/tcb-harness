@@ -71,3 +71,19 @@ class TestFormatTuiDisplayText:
         result = json.dumps({"success": True, "path": "/tmp/foo.txt", "content": "hello"})
         # Read returns the "content" field verbatim
         assert _format_tui_display_text(result, "Read") == "hello"
+
+    def test_read_plain_text_returns_as_is(self):
+        """FileOps.read returns plain text — it must pass through untouched."""
+        text = "const x = 1;\nmodule.exports = x;\n"
+        assert _format_tui_display_text(text, "Read") == text
+
+    def test_read_json_file_content_returns_as_is(self):
+        """A file whose content parses as JSON (e.g. package.json) must still
+        be shown verbatim instead of being swallowed by parsed.get('content')."""
+        result = '{"name": "app", "version": "1.0.0"}'
+        assert _format_tui_display_text(result, "Read") == result
+
+    def test_read_chunk_returns_as_is(self):
+        """A chunked read (offset/limit slice) displays the chunk verbatim."""
+        chunk = "    line1\n    line2\n}"
+        assert _format_tui_display_text(chunk, "Read") == chunk

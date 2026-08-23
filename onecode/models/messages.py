@@ -323,6 +323,8 @@ class StreamEvent:
     ask_action_type: str = ""
     ask_path: str = ""
     ask_command: str = ""
+    ask_checkpoint_id: str = ""
+    ask_plan_submit: bool = False
     # ERROR fields
     error_message: str = ""
     # PLAN fields
@@ -396,7 +398,9 @@ class StreamEvent:
                  context: str = "", action_type: str = "",
                  path: str = "", command: str = "",
                  options: list[dict] | None = None,
-                 questions: list[dict] | None = None) -> "StreamEvent":
+                 questions: list[dict] | None = None,
+                 checkpoint_id: str = "",
+                 plan_submit: bool = False) -> "StreamEvent":
         return cls(
             type=StreamEventType.ASK_USER,
             tool_id=call_id,
@@ -408,6 +412,8 @@ class StreamEvent:
             ask_action_type=action_type,
             ask_path=path,
             ask_command=command,
+            ask_checkpoint_id=checkpoint_id,
+            ask_plan_submit=plan_submit,
         )
 
     @classmethod

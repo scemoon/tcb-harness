@@ -28,3 +28,46 @@
 - Native 组件依赖 `BACKEND_URL` 在构建时注入
 - E2E 测试在真机或模拟器中运行
 - 不包含平台特定 UI 逻辑（web 端）
+
+## Design System 规范
+
+### 必读规范
+| 规范 | 路径 |
+|------|------|
+| Design Tokens | `phases/plan/design_system/design_tokens.md` |
+| Atomic Design | `phases/plan/design_system/atomic_design.md` |
+| Component Spec | `phases/plan/design_system/component_spec.md` |
+| Accessibility | `phases/plan/design_system/accessibility.md` |
+| Theme System | `phases/plan/design_system/theme_system.md` |
+| Native UI | `phases/plan/design_system/platform_ui/native.md` |
+| Iconography | `phases/plan/design_system/iconography.md` |
+
+### 平台适配要求
+
+| 平台 | 设计语言 | 安全区域 |
+|------|----------|----------|
+| iOS | Human Interface Guidelines (HIG), SF Pro 字体 | SafeAreaView |
+| Android | Material Design 3, Roboto 字体 | WindowInsets |
+
+### iOS 规范
+- 使用 `SafeAreaView` 处理刘海屏和 Home Indicator
+- 字体: SF Pro (System font)
+- 系统蓝: #007AFF
+- 最小点击目标: 44x44pt
+
+### Android 规范
+- 使用 `WindowInsets` 处理状态栏和导航栏
+- 字体: Roboto
+- Primary 色: #0066CC
+- 最小点击目标: 48x48dp
+
+### 状态管理
+- 推荐: Zustand (轻量) / Redux Toolkit (复杂)
+- 状态持久化: AsyncStorage / MMKV
+
+### 组件分层
+- Atom: Button, Input, Badge, Icon
+- Molecule: SearchBar, FormField, CardHeader
+- Organism: Header, ListView, DetailCard
+- Template: ListScreen, DetailScreen
+- Page: UserListScreen, ProductDetailScreen

@@ -12,17 +12,17 @@
 2. [核心循环](#2-核心循环)
 3. [自适应流程（复杂度评估）](#3-自适应流程复杂度评估)
 4. [Master Agent 编排](#4-master-agent-编排)
-5. [Phase ①: Understand（理解）](#5-phase--understand理解)
-6. [Phase ②: Plan（规划）](#6-phase--plan规划)
-7. [Phase ③: Verify（验证）](#7-phase--verify验证)
-8. [Phase ④: Deliver（交付）](#8-phase--deliver交付)
-9. [Integration 合约规约](#9-integration-合约规约)
-10. [Stack 栈级规则](#10-stack-栈级规则)
-11. [Security 安全基线](#11-security-安全基线)
-12. [项目架构](#12-项目架构)
-13. [Cloud Provider](#13-cloud-provider)
-14. [Quality Gates 质量门](#14-quality-gates-质量门)
-15. [Brownfield 存量项目](#15-brownfield-存量项目)
+5. [Phase 0: Brownfield（存量探索）](#5-phase-0-brownfield存量探索)
+6. [Phase ①: Understand（理解）](#6-phase-①understand理解)
+7. [Phase ②: Plan（规划）](#7-phase-②plan规划)
+8. [Phase ③: Verify（验证）](#8-phase-③verify验证)
+9. [Phase ④: Deliver（交付）](#9-phase-④deliver交付)
+10. [Integration 合约规约](#10-integration-合约规约)
+11. [Stack 栈级规则](#11-stack-栈级规则)
+12. [Security 安全基线](#12-security-安全基线)
+13. [项目架构](#13-项目架构)
+14. [Cloud Provider](#14-cloud-provider)
+15. [Quality Gates 质量门](#15-quality-gates-质量门)
 16. [Cross-Tool 跨工具导出](#16-cross-tool-跨工具导出)
 17. [与 onecode 的集成](#17-与-onecode-的集成)
 18. [文件清单](#18-文件清单)
@@ -31,7 +31,7 @@
 
 ## 1. 概述
 
-AI-DLC 是面向 **monorepo 多组件栈** 的 AI 驱动开发生命周期框架。通过四个核心阶段 —— Understand、Plan、Verify、Deliver —— 以及一个一等公民 **Integration** 规约，覆盖从需求到生产的完整开发流。
+AI-DLC 是面向 **monorepo 多组件栈** 的 AI 驱动开发生命周期框架。通过五个阶段（Brownfield 可选、Understand、Plan、Verify、Deliver）—— 以及一个一等公民 **Integration** 规约，覆盖从需求到生产的完整开发流。
 
 ### 1.1 组件体系
 
@@ -59,6 +59,7 @@ AI-DLC 是面向 **monorepo 多组件栈** 的 AI 驱动开发生命周期框架
 ## 2. 核心循环
 
 ```
+0 Brownfield (optional)  Explore existing codebase → Context summary
 ① Understand (SDD+BDD)   Intent → Spec Delta → BDD Feature Files
 ② Plan (SDD+TDD)         Design Doc → Task DAG → Test Plan
 ③ Verify (BDD+TDD)       Red → Green → Refactor per scenario
@@ -131,16 +132,54 @@ Spawn(
 | ai-dlc-plan | `phases/plan/entry.md` | subagent |
 | ai-dlc-verify | `phases/verify/entry.md` | subagent |
 | ai-dlc-deliver | `phases/deliver/entry.md` | subagent |
+| ai-dlc-brownfield | `brownfield/entry.md` | subagent |
 
 ---
 
-## 5. Phase ①: Understand（理解）
+## 5. Phase 0: Brownfield（存量探索）
 
 ### 5.1 目标
 
+为已有项目自动生成语义上下文，辅助 AI Agent 理解代码库。
+
+### 5.2 触发条件
+
+- L2+ 复杂度且有存量代码
+- Master Agent 自动调用
+
+### 5.3 流程
+
+```
+Brownfield Phase 触发
+  → 运行 brownfield/scripts/discover.sh 发现组件
+  → 运行 brownfield/scripts/extract-api.sh 提取 API 表面
+  → 运行 brownfield/scripts/deps.sh 生成依赖图
+  → 生成 aidlc/AI-DLC-CONTEXT.md
+```
+
+### 5.4 产出
+
+`aidlc/AI-DLC-CONTEXT.md` 包含：
+1. 组件列表 + 技术栈
+2. API 端点摘要
+3. 跨组件依赖 Mermaid 图
+4. 架构速览
+
+### 5.5 在 AI-DLC 流程中的作用
+
+- 确认 `affects` 声明的准确性
+- 发现潜在的跨组件依赖
+- 为后续 Phase 提供上下文
+
+---
+
+## 6. Phase ①: Understand（理解）
+
+### 6.1 目标
+
 将业务意图转化为无歧义、可验证的需求，在任何设计或编码工作之前。
 
-### 5.2 流程
+### 6.2 流程
 
 ```
 Intent（业务需求/用户故事）
@@ -151,7 +190,7 @@ Intent（业务需求/用户故事）
   → Gate: 人工审查 → approved 或 revise
 ```
 
-### 5.3 EARS 格式
+### 6.3 EARS 格式
 
 | 模式 | 语法 | 用途 |
 |------|------|------|
@@ -161,7 +200,7 @@ Intent（业务需求/用户故事）
 | Unwanted | `If {condition}, the system SHALL ...` | 错误处理 |
 | Optional | `Where {feature} enabled, the system SHALL ...` | 功能开关 |
 
-### 5.4 制品位置
+### 6.4 制品位置
 
 | 制品 | 位置 |
 |------|------|
@@ -171,7 +210,7 @@ Intent（业务需求/用户故事）
 | 跨栈 BDD | `aidlc/features/cross-stack/{domain}/{feature}.feature` |
 | 合约规格 | `aidlc/contracts/{api,events}/{name}.{yaml,graphql}` |
 
-### 5.5 规则 (UND-001 ~ UND-006)
+### 6.5 规则 (UND-001 ~ UND-006)
 
 | 规则 | 级别 | 描述 |
 |------|------|------|
@@ -182,7 +221,7 @@ Intent（业务需求/用户故事）
 | UND-005 | MUST | 跨组件 feature 拆分为 per-component FR + INT-FR + cross-stack feature file |
 | UND-006 | MUST | Contract-first：任何公开 API/event 变更必须更新 `aidlc/contracts/` |
 
-### 5.6 门禁
+### 6.6 门禁
 
 - `affects: [...]` 已声明
 - Spec delta 使用 EARS 格式
@@ -193,13 +232,13 @@ Intent（业务需求/用户故事）
 
 ---
 
-## 6. Phase ②: Plan（规划）
+## 7. Phase ②: Plan（规划）
 
-### 6.1 目标
+### 7.1 目标
 
 将已批准的规格转化为可逐单元执行的明确技术计划，包含跨组件依赖和合约引用。
 
-### 6.2 流程
+### 7.2 流程
 
 ```
 Approved Spec + BDD Features
@@ -210,7 +249,7 @@ Approved Spec + BDD Features
   → Gate: 人工审查
 ```
 
-### 6.3 设计文档结构（多组件）
+### 7.3 设计文档结构（多组件）
 
 ```markdown
 ## Design — CHG-{id}
@@ -227,7 +266,7 @@ Approved Spec + BDD Features
 - Flow, Contract refs, Failure modes, Backward compat
 ```
 
-### 6.4 Task DAG 格式
+### 7.4 Task DAG 格式
 
 ```yaml
 units:
@@ -246,7 +285,7 @@ units:
     layer: cross-stack
 ```
 
-### 6.5 规则 (PLN-001 ~ PLN-004)
+### 7.5 规则 (PLN-001 ~ PLN-004)
 
 | 规则 | 描述 |
 |------|------|
@@ -255,7 +294,7 @@ units:
 | PLN-003 | Test Plan 先于实现编写，按场景命名测试层级 |
 | PLN-004 | 合约变更必须标识版本影响（additive vs breaking），列出受影响消费者和兼容策略 |
 
-### 6.6 门禁
+### 7.6 门禁
 
 - 设计文档含 per-component + Integration 段
 - 任务分解为显式 DAG
@@ -266,13 +305,13 @@ units:
 
 ---
 
-## 7. Phase ③: Verify（验证）
+## 8. Phase ③: Verify（验证）
 
-### 7.1 目标
+### 8.1 目标
 
 确保每个 BDD 场景在正确的层级正确实现，每个合约向后兼容，全栈 e2e 流正常工作 —— 在交付之前。
 
-### 7.2 流程
+### 8.2 流程
 
 ```
 Plan + Tasks approved
@@ -286,7 +325,7 @@ Plan + Tasks approved
   → Gate: 所有层级通过 + 合约兼容 + cross-stack 通过
 ```
 
-### 7.3 测试层级
+### 8.3 测试层级
 
 | 层级 | 时机 | 位置 | 运行对象 |
 |------|------|------|----------|
@@ -296,7 +335,7 @@ Plan + Tasks approved
 | `cross-stack` | 全多客户端↔backend 流 | `aidlc/tests/cross-stack/` | 统一栈 preview URL |
 | `contract` | 合约形状 + 向后兼容 | `aidlc/tests/contract/` | 生成的 `aidlc/packages/shared/` |
 
-### 7.4 合约验证
+### 8.4 合约验证
 
 ```bash
 aidlc/tools/generate_shared.py       # 重新生成 shared types
@@ -304,7 +343,7 @@ pytest aidlc/tests/contract/          # 合约测试 (INT-001)
 aidlc/tools/contract_diff.py         # 向后兼容检查 (INT-002)
 ```
 
-### 7.5 规则
+### 8.5 规则
 
 | 规则组 | 编号 | 描述 |
 |--------|------|------|
@@ -323,13 +362,13 @@ aidlc/tools/contract_diff.py         # 向后兼容检查 (INT-002)
 
 ---
 
-## 8. Phase ④: Deliver（交付）
+## 9. Phase ④: Deliver（交付）
 
-### 8.1 目标
+### 9.1 目标
 
-将验证过的代码作为一个一致的整体栈交付到生产环境 —— unified preview → per-component e2e → cross-stack e2e → stack BVT → stack rollback。
+确保将验证过的代码作为一个一致的整体栈交付到生产环境 —— unified preview → per-component e2e → cross-stack e2e → stack BVT → stack rollback。
 
-### 8.2 流程
+### 9.2 流程
 
 ```
 All Verify gates passed
@@ -344,7 +383,7 @@ All Verify gates passed
   → Gate: BVT pass → 完成 | BVT fail → stack rollback
 ```
 
-### 8.3 Unified Stack Preview
+### 9.3 Unified Stack Preview
 
 `deploy_stack --preview` 部署整体栈：
 
@@ -352,7 +391,7 @@ All Verify gates passed
 2. 所有客户端（`web`, `native`, `desktop`, `wxa`, `mya`, `tta`）并行部署，构建时注入 `BACKEND_URL`
 3. 输出：`STACK_URL` (= `BACKEND_URL`) + 各组件 URL
 
-### 8.4 Stack BVT 检查项
+### 9.4 Stack BVT 检查项
 
 1. Backend `/health` 返回 200
 2. Web 首页返回 200 / shell 加载
@@ -363,7 +402,7 @@ All Verify gates passed
 7. 延迟 p99 < 500ms
 8. Contract diff 归档
 
-### 8.5 规则
+### 9.5 规则
 
 | 规则组 | 编号 | 描述 |
 |--------|------|------|
@@ -620,7 +659,9 @@ AI-DLC 可将规则/配置导出到多个 AI 编码工具：
 
 ### 17.2 项目文档加载
 
-`onecode/agent/project_doc.py` 的 `load_project_doc()` 在读取 `AGENTS.md` 时，也会解析其中的 `` `SKILL.md` `` 引用（如 `` `ai-dlc-skill/SKILL.md` ``），并将内容追加为项目上下文（使用 `<!-- PROJECT_SKILL:... -->` 标记）。
+`onecode/agent/project_doc.py` 的 `load_project_doc()` 直接读取 `AGENTS.md` 文件内容并注入为项目上下文（使用 `<!-- PROJECT_DOC -->` 标记）。AGENTS.md 头部包含 `Skill Location` 字段指向 SKILL.md 的实际路径。
+
+注意：`load_project_doc()` 不会解析或追加 SKILL.md 内容——SKILL.md 通过 `<!-- SKILL:ai-dlc-skill -->` 标记单独注入。
 
 ### 17.3 CDH 脚手架
 
@@ -640,18 +681,14 @@ AI-DLC 可将规则/配置导出到多个 AI 编码工具：
 ai-dlc-skill/
 ├── SKILL.md                         # Master Orchestrator 入口
 ├── skill.yaml                       # 技能元数据、拓扑、质量门
-├── requirements.md                  # FR-001 ~ FR-006 功能需求
+├── aidlc/
+│   ├── CONFIG.md                    # 路径变量定义
+│   └── tools/                       # deploy_stack.sh, contract_diff.py, generate_shared.py
 │
 ├── core/
 │   ├── adaptive-flow.md             # L1-L5 复杂度评估
-│   └── security.md                  # SEC-001 ~ SEC-007 安全基线
-│
-├── agents/
-│   ├── master.md                    # Master Agent 编排指南
-│   ├── understand-agent.md          # Understand phase agent
-│   ├── plan-agent.md               # Plan phase agent
-│   ├── verify-agent.md             # Verify phase agent
-│   └── deliver-agent.md            # Deliver phase agent
+│   ├── security.md                  # SEC-001 ~ SEC-007 安全基线
+│   └── task-registry.md             # 任务状态注册表
 │
 ├── phases/
 │   ├── understand/                  # Phase ①: entry, lifecycle, rules, prompt
@@ -674,10 +711,6 @@ ai-dlc-skill/
 ├── contracts/
 │   └── README.md                    # 三层合约说明
 │
-├── workflows/
-│   ├── ai-dlc.yaml                  # AI-DLC 工作流定义
-│   └── deployment.yaml              # 部署流水线
-│
 ├── providers/
 │   ├── README.md
 │   ├── tcb/                         # TCB: provider, preview, deployment
@@ -685,15 +718,16 @@ ai-dlc-skill/
 │
 ├── brownfield/
 │   ├── README.md
+│   ├── entry.md                     # Brownfield phase entry
 │   ├── generate-context.sh
 │   └── scripts/                     # discover, extract-api, deps
 │
 ├── cross-tool/
-│   ├── export.sh                    # 总导出脚本
+│   ├── README.md
 │   ├── cursor/export.sh
 │   ├── cline/export.sh
 │   ├── copilot/export.sh
-│   └── onecode/                     # export.sh, export-skills.sh, config.yaml.tpl
+│   └── opencode/export.sh
 │
 ├── walkthrough/
 │   ├── collect.sh

@@ -273,6 +273,7 @@ See on-screen instructions for details.
 
         if fingerprint and self._paste_fingerprint == fingerprint:
             self._paste_fingerprint = ""
+            self._paste_queue.clear()
             return None
 
         if text_len <= 150:

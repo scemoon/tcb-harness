@@ -1,6 +1,7 @@
 ---
 name: ai-dlc-plan
 description: "Plan Phase: Design Doc → Task DAG → Test Plan"
+entry_point: phases/plan/entry.md
 triggers:
   - plan
   - design
@@ -11,7 +12,7 @@ triggers:
 
 Convert approved spec into technical design and task decomposition.
 
-## Entry
+## Lifecycle
 
 See `lifecycle.md` for the full phase flow.
 See `rules.md` for enforceable rules (PLN-001 to PLN-004).
@@ -24,3 +25,9 @@ See `prompt.md` for the sub-agent delegation prompt template.
 2. 生成设计文档（per-component + integration）→ `{spec_dir}/design.md`
 3. 分解为带 DAG 依赖的任务单元 → `{spec_dir}/task-list.md`
 4. 编写测试计划（每层）
+
+## 产出
+
+- `aidlc/openspec/changes/{id}/design.md`
+- `aidlc/openspec/changes/{id}/task-list.md`
+- `aidlc/openspec/changes/{id}/contract-diff.md`（合约变更时）

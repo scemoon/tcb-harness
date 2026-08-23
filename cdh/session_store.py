@@ -116,6 +116,38 @@ class AgentSession:
     def todos(self, value: list[dict]) -> None:
         self._data.todos = value
 
+    @property
+    def mode(self) -> str:
+        return self._data.mode
+
+    @mode.setter
+    def mode(self, value: str) -> None:
+        self._data.mode = value
+
+    @property
+    def project(self) -> str:
+        return self._data.project
+
+    @project.setter
+    def project(self, value: str) -> None:
+        self._data.project = value
+
+    @property
+    def model(self) -> str:
+        return self._data.model
+
+    @model.setter
+    def model(self, value: str) -> None:
+        self._data.model = value
+
+    @property
+    def provider(self) -> str:
+        return self._data.provider
+
+    @provider.setter
+    def provider(self, value: str) -> None:
+        self._data.provider = value
+
     def add_message(self, role: str, content: str) -> None:
         self._data.messages.append({"role": role, "content": content})
         self._touch()

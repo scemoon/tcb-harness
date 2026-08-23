@@ -120,8 +120,8 @@ class TestAgentThoughtMarkdownRendering:
 
         assert asyncio.run(_run()) == "⏳ thinking:"
 
-    def test_mark_completed_removes_widget(self):
-        """After mark_completed, the widget is removed from the DOM."""
+    def test_mark_completed_collapses_widget(self):
+        """After mark_completed, the widget stays in the DOM collapsed with '+ Thought'."""
         from tui.widgets.agent_thought import AgentThought
         from textual.app import App
         from textual.containers import Container
@@ -141,12 +141,56 @@ class TestAgentThoughtMarkdownRendering:
                 assert widget in parent.children
                 widget.mark_completed()
                 await pilot.pause()
-                return widget not in parent.children
+                return (
+                    widget in parent.children,
+                    str(widget.query_one("#thought-header").render()),
+                    widget.query_one("#thought-content").display,
+                    widget._completed,
+                    widget._collapsed,
+                )
 
-        assert asyncio.run(_run())
+        present, header_text, content_display, completed, collapsed = asyncio.run(_run())
+        assert present is True
+        assert header_text == "+ Thought"
+        assert content_display is False
+        assert completed is True
+        assert collapsed is True
+
+    def test_ctrl_x_toggle_after_completion(self):
+        """After completion, Ctrl+X toggles '+ Thought' <-> '- Thought'."""
+        from tui.widgets.agent_thought import AgentThought
+        from textual.app import App
+        from textual.containers import Container
+
+        widget = AgentThought("reasoning…")
+
+        class _ProbeApp(App):
+            def compose(self):
+                with Container():
+                    yield widget
+
+        app = _ProbeApp()
+        async def _run():
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                widget.mark_completed()
+                await pilot.pause()
+                h0 = str(widget.query_one("#thought-header").render())
+                d0 = widget.query_one("#thought-content").display
+                widget.action_toggle()
+                await pilot.pause()
+                h1 = str(widget.query_one("#thought-header").render())
+                d1 = widget.query_one("#thought-content").display
+                return (h0, d0, h1, d1)
+
+        h0, d0, h1, d1 = asyncio.run(_run())
+        assert h0 == "+ Thought"
+        assert d0 is False
+        assert h1 == "- Thought"
+        assert d1 is True
 
     def test_ctrl_x_toggle_before_completion(self):
-        """Ctrl+X only works before completion; after mark_completed widget is removed."""
+        """Ctrl+X collapses content before completion; header stays '⏳ thinking:'."""
         from tui.widgets.agent_thought import AgentThought
         from textual.app import App
         from textual.containers import Container

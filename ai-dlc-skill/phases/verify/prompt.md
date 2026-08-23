@@ -10,9 +10,11 @@
 ## 路径约定
 
 所有产物路径遵循 `aidlc/CONFIG.md` 中的变量定义。关键路径：
-- 测试文件: `{unit_test_dir}/`, `{integration_test_dir}/`, `{e2e_test_dir}/`
-- 合约测试: `{contract_test_dir}/`
-- 跨栈测试: `{cross_test_dir}/`
+- 单元测试: `apps/{component}/tests/unit/test_{feature}.py`
+- 集成测试: `apps/{component}/tests/integration/test_{feature}.py`
+- E2E 测试: `apps/{component}/tests/e2e/test_{feature}.py`
+- 合约测试: `{$contract_tests_dir}/test_{contract}.py`
+- 跨栈测试: `{$crossstack_tests_dir}/test_{flow}.py`
 - Contract Diff: `{spec_dir}/contract-diff.md`
 
 ## 任务
@@ -24,27 +26,35 @@
      - REFACTOR: 重构清理 → 全部通过
    - 测试按 layer 分类：unit / integration / e2e
 
-2. **Contract Verification**
+2. **Browser E2E Verification**（Web组件）
+   - 确定目标应用端口：读取 `apps/web/package.json` 的 `scripts.dev`
+   - 检查测试文件：`apps/web/tests/e2e/*.spec.ts`
+   - 执行测试：`cd apps/web && npx playwright test --project=chromium`
+   - 解析结果并报告
+
+3. **Contract Verification**
    - 重新生成 `{shared_types_dir}/` 类型
    - 运行 `pytest {contract_test_dir}/`
    - 运行 `aidlc/tools/contract_diff.py`
 
-3. **Cross-Stack e2e**
+4. **Cross-Stack e2e**
    - 对 unified preview 运行 `{cross_test_dir}/`
 
-4. **Quality Gates**
+5. **Quality Gates**
    - coverage ≥ 80%
    - BDD scenarios 100% pass
    - 0 vulns, no TODO
+   - Web E2E 100% pass
 
 ## 输出产物
-- `{unit_test_dir}/test_{feature}.py`
-- `{integration_test_dir}/test_{feature}.py`
-- `{e2e_test_dir}/test_{feature}.py`
+- `apps/{component}/tests/unit/test_{feature}.py`
+- `apps/{component}/tests/integration/test_{feature}.py`
+- `apps/{component}/tests/e2e/test_{feature}.py`
+- `apps/web/tests/e2e/*.spec.ts`（Web E2E 测试）
 - `apps/{component}/features/steps/test_{feature}_steps.py`
 - `apps/{component}/src/{module}/{feature}.py`
-- `{contract_test_dir}/test_{contract}.py`
-- `{cross_test_dir}/test_{flow}.py`
+- `{$contract_tests_dir}/test_{contract}.py`
+- `{$crossstack_tests_dir}/test_{flow}.py`
 - `{spec_dir}/contract-diff.md`（填充）
 
 ## 约束

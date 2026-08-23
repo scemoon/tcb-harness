@@ -26,9 +26,10 @@ Usage:
   cdh tui                          Launch TUI (agent store)
   cdh onecode <sub>                onecode CLI surface (config / codebase / skill / mcp / help)
   cdh aidlc [project|phase|gate|sync|update]   AIDLC project management
-   cdh session list|load            Session management
-   cdh trace list|view|dashboard    Trace management (agenttrace)
-   cdh uninstall                    Remove ~/.cdh/ global state
+  cdh session list|load            Session management
+  cdh trace list|view|dashboard    Trace management (agenttrace)
+  cdh cls search                   Search TCB/SCF logs via CLS (requestId tracing)
+  cdh uninstall                    Remove ~/.cdh/ global state
   cdh version                      Show version information
 
 \b
@@ -529,7 +530,7 @@ def project_new(name, path, components, with_ci, with_tests, with_local, provide
     project_file.write_text(yaml.dump(proj_data))
     write_active_project(name, str(ws))
     click.echo(
-        f"Created AIDC project '{name}' at {ws} "
+        f"Created AIDLC project '{name}' at {ws} "
         f"(components: {', '.join(selected_components)})"
     )
 
@@ -578,7 +579,7 @@ def project_init(path, components, with_ci, with_tests, with_local, provider):
         if selected_components
         else ""
     )
-    click.echo(f"Initialized AIDC project in {target}{suffix}")
+    click.echo(f"Initialized AIDLC project in {target}{suffix}")
 
 
 @project.command("check")
@@ -589,7 +590,7 @@ def project_check(path):
     target = Path(path).expanduser().resolve()
     result = check_dlc_project(target)
     if result["valid"]:
-        click.echo(f"\u2713 Valid AIDC project: {result['name']}")
+        click.echo(f"\u2713 Valid AIDLC project: {result['name']}")
         click.echo(f"  Location: {result['path']}")
         if result["components"]:
             click.echo(f"  Components: {', '.join(result['components'])}")
@@ -600,7 +601,7 @@ def project_check(path):
             else "  CDH state: \u2717 not initialized"
         )
     else:
-        click.echo(f"\u2717 Not a valid AIDC project: {target}")
+        click.echo(f"\u2717 Not a valid AIDLC project: {target}")
     for s in result["suggestions"]:
         click.echo(f"  \u2022 {s}")
 
@@ -683,7 +684,7 @@ def sync_cmd(path):
         project_name = target.name
         scaffold_dlc_project(target, project_name)
         CdhProjectLoader.init_project(target, project_name)
-        click.echo("Initialized AIDC project and regenerated AGENTS.md/CLAUDE.md")
+        click.echo("Initialized AIDLC project and regenerated AGENTS.md/CLAUDE.md")
 
 
 @aidlc.command("update")
@@ -2857,6 +2858,131 @@ def version():
     """Show CDH version and build information."""
     from onecode import __version__
     click.echo(f"cdh version {__version__}")
+
+
+# --- cls command ---
+
+@cli.group(short_help="CLS log search for TCB/SCF")
+def cls():
+    """Search SCF function logs via Tencent Cloud CLS (Cloud Log Service).
+
+    \b
+    Commands:
+      search       Search logs by requestId, keyword, or time range
+
+    \b
+    Examples:
+      cdh cls search --request-id req-xxxxx --function hello
+      cdh cls search --function hello --keyword error
+      cdh cls search --function hello --start-time "2026-08-04 10:00:00"
+
+    \b
+    Environment variables:
+      TENCENTCLOUD_SECRETID      Tencent Cloud credential ID
+      TENCENTCLOUD_SECRETKEY     Tencent Cloud credential key
+      TCB_ENV_ID                 TCB environment ID
+
+    \b
+    Note: Requires tencentcloud-sdk-python. Install with:
+      pip install tencentcloud-sdk-python
+    """
+
+
+@cls.command("search", short_help="Search SCF logs by requestId, keyword, or time range")
+@click.option("--request-id", help="SCF RequestId to search for")
+@click.option("--function", help="Function name to search")
+@click.option("--namespace", default="default", help="SCF namespace (default: default)")
+@click.option("--keyword", help="Keyword to search in SCF_Message")
+@click.option("--topic-id", help="CLS topic ID (auto-detected if not provided)")
+@click.option("--region", default="ap-shanghai", help="Tencent Cloud region")
+@click.option("--env", help="TCB environment ID (sets region context)")
+@click.option("--start-time", help="Start time (ISO format or Unix ms)")
+@click.option("--end-time", help="End time (ISO format or Unix ms)")
+@click.option("--limit", type=int, default=100, help="Max results (default: 100)")
+@click.option("--json", is_flag=True, help="JSON output")
+def cls_search(request_id, function, namespace, keyword, topic_id, region, env, start_time, end_time, limit, json):
+    """Search SCF function logs via Tencent Cloud CLS.
+
+    Supports requestId tracing, keyword search, and time-range queries.
+    SCF logs are automatically shipped to CLS since 2021-01-29.
+
+    \b
+    Examples:
+      cdh cls search --request-id req-xxxxx --function hello
+      cdh cls search --function hello --keyword error
+      cdh cls search --function hello --start-time "2026-08-04 10:00:00" --end-time "2026-08-04 12:00:00"
+      cdh cls search --function hello --json
+    """
+    import os
+    import sys
+
+    if env:
+        os.environ.setdefault("TCB_ENV_ID", env)
+
+    try:
+        from cdh.tools.cls_search import CLSLogSearcher
+
+        searcher = CLSLogSearcher(region=region)
+
+        if request_id:
+            results = searcher.search_by_request_id(
+                request_id=request_id,
+                function_name=function,
+                namespace=namespace,
+                topic_id=topic_id,
+                start_time=start_time,
+                end_time=end_time,
+                limit=limit,
+            )
+        else:
+            results = searcher.search_scf_logs(
+                query=keyword or "*",
+                function_name=function,
+                namespace=namespace,
+                topic_id=topic_id,
+                start_time=start_time,
+                end_time=end_time,
+                limit=limit,
+            )
+
+        if json:
+            import json as _json
+            click.echo(_json.dumps(results, indent=2, ensure_ascii=False))
+        else:
+            for log in results:
+                time_str = log.get("time", "")
+                msg = log.get("message", "")
+                func = log.get("function", "")
+                req_id = log.get("request_id", "")
+                level = log.get("level", "INFO")
+                duration = log.get("duration_ms", 0)
+                status = log.get("status_code", 0)
+
+                header = f"[{time_str}]"
+                if req_id:
+                    header += f" {req_id[:16]}..."
+                if func:
+                    header += f" {func}"
+                header += f" [{level}]"
+                if duration:
+                    header += f" {duration}ms"
+                if status:
+                    header += f" {status}"
+
+                click.echo(header)
+                if msg:
+                    click.echo(f"  {msg}")
+                click.echo("")
+
+    except ImportError as e:
+        click.echo(f"Error: {e}", err=True)
+        click.echo("", err=True)
+        click.echo("Install tencentcloud-sdk-python:", err=True)
+        click.echo("  pip install tencentcloud-sdk-python", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
 
 
 # All onecode subcommands are reachable through `cdh onecode <sub>`

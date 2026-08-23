@@ -263,6 +263,26 @@ REFERENCE_MODELS: list[ModelInfo] = [
         capabilities=["local", "coding"],
         description="Local CodeLlama model via Ollama",
     ),
+    ModelInfo(
+        id="qwen3.5-2b",
+        provider="ollama",
+        context_window=32000,
+        max_output=4096,
+        cost_per_1k_input=0.0,
+        cost_per_1k_output=0.0,
+        capabilities=["local", "coding", "reasoning"],
+        description="Qwen3.5 2B - 轻量推荐（需 8GB+ 内存）",
+    ),
+    ModelInfo(
+        id="qwen3.5-4b",
+        provider="ollama",
+        context_window=32000,
+        max_output=4096,
+        cost_per_1k_input=0.0,
+        cost_per_1k_output=0.0,
+        capabilities=["local", "coding", "reasoning"],
+        description="Qwen3.5 4B - 高质量（需 16GB+ 内存）",
+    ),
 ]
 
 

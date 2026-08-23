@@ -338,6 +338,35 @@ class AwaitingUserInputUpdate(SchemaDict, total=False, extra_items=Any):
     promptPreview: str
 
 
+class AskUserUpdate(SchemaDict, total=False, extra_items=Any):
+    """The agent is asking the user a question (AskUser tool or auto-detected).
+
+    The server sends either ``question`` (single question, optional
+    ``options``) or ``questions`` (multi-question form). Missing members
+    are tolerated so every payload shape validates.
+    """
+    sessionUpdate: Required[Literal["ask_user"]]
+    question: str
+    context: str
+    options: list
+    questions: list
+    toolId: str
+
+
+class AskUserRemindUpdate(SchemaDict, total=False, extra_items=Any):
+    """Brief reminder that an AskUser prompt is still waiting for an answer."""
+    sessionUpdate: Required[Literal["ask_user_remind"]]
+    text: str
+    toolId: str
+
+
+class AskUserDefaultUsedUpdate(SchemaDict, total=False, extra_items=Any):
+    """Notify the TUI that the AskUser prompt timed out and a default was used."""
+    sessionUpdate: Required[Literal["ask_user_default_used"]]
+    answer: str
+    toolId: str
+
+
 class UsageUpdate(SchemaDict, total=False, extra_items=object):
     sessionUpdate: Required[Literal["usage_update"]]
     used: Required[int]
@@ -386,6 +415,11 @@ type SessionUpdate = (
     | SubAgentChunk
     | SubAgentThinking
     | SubAgentEnd
+    | AIDLCState
+    | AwaitingUserInputUpdate
+    | AskUserUpdate
+    | AskUserRemindUpdate
+    | AskUserDefaultUsedUpdate
 )
 
 

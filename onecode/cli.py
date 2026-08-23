@@ -157,6 +157,49 @@ def config_provider_set(value):
     click.echo(f"provider = {value}")
 
 
+@config_provider.command("list")
+def config_provider_list():
+    """List registered LLM providers (with the current one marked)."""
+    from onecode.models.provider import ProviderRegistry
+    from onecode.models.registry import ModelRegistry
+
+    # Trigger provider/model registration side-effects.
+    try:
+        from onecode.models import providers as _providers_mod  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        ModelRegistry.initialize()
+    except Exception:
+        pass
+
+    cfg = load_config()
+    current = cfg.default_provider
+    registered = sorted(ProviderRegistry.list())
+    if not registered:
+        click.echo("No providers registered.")
+        return
+
+    click.echo(f"Available providers ({len(registered)}):")
+    for i, name in enumerate(registered, 1):
+        marker = "  ← active" if name == current else ""
+        try:
+            models = ModelRegistry.list_by_provider(name)
+        except Exception:
+            models = []
+        if models:
+            model_names = sorted({m.id for m in models})
+            shown = ", ".join(model_names[:5])
+            if len(model_names) > 5:
+                shown += f", … (+{len(model_names) - 5})"
+            model_hint = f"  models: {shown}"
+        else:
+            model_hint = "  models: (any local)"
+        click.echo(f"  {i}) {name}{marker}{model_hint}")
+    click.echo("")
+    click.echo("Switch with: cdh onecode config provider set <name|n>")
+
+
 # --- config log-level sub-command ---
 
 @config.group("log-level")
@@ -503,6 +546,22 @@ def mcp():
     pass
 
 
+_SECRET_HEADER_HINTS = ("auth", "token", "key", "secret", "password", "cookie")
+
+
+def _is_secret_key(k: str) -> bool:
+    kl = k.lower()
+    return any(s in kl for s in _SECRET_HEADER_HINTS)
+
+
+def _mask_value(v: str) -> str:
+    if not v:
+        return v
+    if len(v) <= 4:
+        return "***"
+    return v[:2] + "***" + v[-2:]
+
+
 def _format_mcp_servers(servers: list[dict]) -> list[str]:
     lines = []
     if not servers:
@@ -524,7 +583,10 @@ def _format_mcp_servers(servers: list[dict]) -> list[str]:
             if url:
                 lines.append(f"         URL: {url}")
             if headers:
-                hdr_str = ", ".join(f"{k}={v}" for k, v in headers.items())
+                hdr_str = ", ".join(
+                    f"{k}={_mask_value(v) if _is_secret_key(k) else v}"
+                    for k, v in headers.items()
+                )
                 lines.append(f"         Headers: {hdr_str}")
         else:
             cmd = s.get("command", "")
@@ -556,36 +618,57 @@ def _parse_kv_pairs(raw: Optional[str]) -> dict[str, str]:
 
 
 def _mcp_add_impl(name, url, transport, command, args, env, headers, explicit_url):
+    """Add an MCP server using either the opencode-style or legacy fields."""
+    from onecode.mcp.config import MCPServerConfig
     from onecode.mcp.manager import MCPManager
 
     mgr = MCPManager()
-    if mgr.get(name):
-        click.echo(f"Error: MCP server '{name}' already exists")
-        return
+    if mgr.get_server(name):
+        raise click.UsageError(f"MCP server '{name}' already exists")
 
-    if transport == "http":
-        final_url = explicit_url or url
-        if not final_url:
-            click.echo("Error: --url required for http transport")
-            return
-        hdrs = _parse_kv_pairs(headers)
-        mgr.add_http(name, final_url, headers=hdrs)
-        click.echo(f"MCP server '{name}' added (HTTP) at {final_url}")
-    elif transport == "stdio":
+    # Normalize transport aliases -> opencode "type"
+    transport_norm = (transport or "").lower()
+    if transport_norm in ("http", "sse"):
+        server_type = "remote"
+    elif transport_norm in ("stdio", "local", ""):
+        server_type = "local"
+    else:
+        raise click.UsageError(
+            f"unknown transport '{transport}' (use stdio|local|http|sse|remote)"
+        )
+
+    cfg = MCPServerConfig(name=name, type=server_type, enabled=True)
+
+    if server_type == "local":
         if not command:
-            click.echo("Error: --command required for stdio transport")
-            return
-        cmd_args = [a.strip() for a in args.split(",")] if args else []
-        env_dict = _parse_kv_pairs(env)
-        mgr.add_stdio(name, command, cmd_args, env=env_dict)
-        click.echo(f"MCP server '{name}' added (stdio)")
+            raise click.UsageError("--command required for stdio/local transport")
+        if "," in command and not args:
+            # Allow `--command npx,-y,pkg` shorthand
+            cmd_list = [c.strip() for c in command.split(",") if c.strip()]
+        else:
+            cmd_list = [command] + ([a.strip() for a in args.split(",")] if args else [])
+        cfg.command = cmd_list
+        cfg.environment = _parse_kv_pairs(env)
     else:
         final_url = explicit_url or url
         if not final_url:
-            click.echo("Error: URL is required for SSE transport")
-            return
-        mgr.add(name, final_url, transport="sse")
-        click.echo(f"MCP server '{name}' added (SSE) at {final_url}")
+            raise click.UsageError("--url required for remote transport")
+        cfg.url = final_url
+        hdrs = _parse_kv_pairs(headers)
+        if hdrs:
+            cfg.headers = hdrs
+
+    errs = cfg.validate()
+    if errs:
+        for e in errs:
+            click.echo(f"Error: {e}")
+        raise click.UsageError("\n".join(errs))
+
+    mgr.add_server(name, cfg)
+    if server_type == "local":
+        click.echo(f"MCP server '{name}' added (local): {' '.join(cfg.command or [])}")
+    else:
+        click.echo(f"MCP server '{name}' added (remote): {cfg.url}")
 
 
 @mcp.command("list")
@@ -755,6 +838,140 @@ def config_mcp_disable(name):
         click.echo(f"MCP server '{name}' disabled.")
 
 
+@mcp.command("auth")
+@click.argument("name")
+def mcp_auth(name):
+    """Authenticate a remote MCP server (OAuth / manual token paste)."""
+    from onecode.mcp.manager import MCPManager
+    from onecode.mcp.oauth import ManualOAuthFlow, OAuthStore
+
+    mgr = MCPManager()
+    sc = mgr.get_server(name)
+    if not sc:
+        raise click.UsageError(f"MCP server '{name}' not found")
+    if sc.type != "remote":
+        raise click.UsageError(
+            f"MCP server '{name}' is type=local (stdio). OAuth is for remote servers."
+        )
+
+    oauth_cfg = sc.oauth
+    if oauth_cfg is False:
+        raise click.UsageError(
+            f"OAuth is explicitly disabled for '{name}' (oauth: false in config)."
+        )
+
+    flow = ManualOAuthFlow(oauth_cfg)
+    bundle = flow.run(server_name=name)
+    if not bundle.access_token:
+        click.echo("No token provided; aborting.")
+        return
+    OAuthStore().save(name, bundle)
+    click.echo(f"OAuth token saved for '{name}'.")
+
+
+@mcp.command("logout")
+@click.argument("name")
+def mcp_logout(name):
+    """Remove stored OAuth credentials for a remote MCP server."""
+    from onecode.mcp.oauth import OAuthStore
+
+    if OAuthStore().remove(name):
+        click.echo(f"OAuth credentials removed for '{name}'.")
+    else:
+        click.echo(f"No OAuth credentials stored for '{name}'.")
+
+
+@mcp.command("debug")
+@click.argument("name")
+def mcp_debug(name):
+    """Diagnose an MCP server: presence, auth status, live probe."""
+    import asyncio as _asyncio
+
+    from onecode.mcp.config import resolve_mapping
+    from onecode.mcp.manager import MCPManager
+    from onecode.mcp.oauth import OAuthStore
+
+    mgr = MCPManager()
+    sc = mgr.get_server(name)
+    if not sc:
+        click.echo(f"MCP server '{name}' is not configured.")
+        return
+
+    click.echo(f"Type:      {sc.type}")
+    click.echo(f"Enabled:   {sc.enabled}")
+    if mgr.is_globally_disabled(name):
+        click.echo("Globally:  disabled by mcp.disabled in onecode.config.yaml")
+    else:
+        click.echo("Globally:  enabled")
+
+    if sc.type == "local":
+        click.echo(f"Command:   {' '.join(sc.command or [])}")
+        env = resolve_mapping(sc.environment)
+        if env:
+            rendered = ", ".join(f"{k}=***" for k in env)
+            click.echo(f"Env:       {rendered}")
+    else:
+        click.echo(f"URL:       {sc.url}")
+        headers = resolve_mapping(sc.headers)
+        if headers:
+            click.echo("Headers:")
+            for k, v in headers.items():
+                is_secret = any(s in k.lower() for s in ("auth", "token", "key", "secret"))
+                click.echo(f"  {k}: ***" if is_secret else f"  {k}: {v}")
+
+    store = OAuthStore()
+    bundle = store.get(name)
+    if bundle and bundle.access_token:
+        if bundle.is_expired():
+            click.echo("OAuth:     token expired — re-run `cdh mcp auth`")
+        else:
+            click.echo("OAuth:     token present")
+    else:
+        click.echo("OAuth:     none")
+
+    click.echo("")
+    click.echo("Live probe:")
+    try:
+        ok = _asyncio.run(mgr.connect(name, auto_reconnect=False))
+    except Exception as e:
+        ok = False
+        click.echo(f"  connect raised: {e}")
+    if ok:
+        try:
+            tools = _asyncio.run(mgr.list_tools(name))
+            click.echo(f"  connected; {len(tools)} tool(s) available")
+        finally:
+            _asyncio.run(mgr.disconnect(name))
+    else:
+        click.echo("  could not connect (check the env / headers above).")
+
+
+@mcp.command("migrate")
+@click.option("--dry-run", is_flag=True, help="Show what would change without modifying anything")
+def mcp_migrate(dry_run):
+    """Migrate legacy ``mcps.yaml`` to the new ``mcp.json`` format."""
+    from onecode.mcp.config import MCPConfigFile
+
+    cfg = MCPConfigFile()
+    if not cfg.legacy_path.exists():
+        click.echo(f"No legacy file at {cfg.legacy_path}; nothing to migrate.")
+        return
+    if cfg.path.exists():
+        click.echo(f"{cfg.path} already exists; refusing to overwrite.")
+        click.echo("Remove it first if you want to re-migrate.")
+        return
+    if dry_run:
+        servers = cfg._load_legacy()
+        click.echo(f"Would migrate {len(servers)} server(s) from {cfg.legacy_path} to {cfg.path}:")
+        for n, sc in servers.items():
+            click.echo(f"  - {n}: type={sc.type}")
+        return
+    if cfg.migrate_from_legacy():
+        click.echo(f"Migrated to {cfg.path}. Legacy file backed up as {cfg.legacy_path}.bak")
+    else:
+        click.echo("Migration skipped.")
+
+
 @cli.group(invoke_without_command=True)
 def cloudbase():
     """Manage Tencent CloudBase (TCB) MCP integration.
@@ -775,6 +992,10 @@ def cloudbase_init(secret_id, secret_key, env_id):
     """Initialize CloudBase MCP server with credentials.
 
     \b
+    Writes the opencode-style ``mcp.json`` entry for ``cloudbase`` and
+    persists the credentials in ``~/.cloud-harness-tokens.json`` so
+    other CDH tools can re-use them.
+
     Examples:
       cdh cloudbase init
       cdh cloudbase init --secret-id xxx --secret-key xxx
@@ -784,36 +1005,50 @@ def cloudbase_init(secret_id, secret_key, env_id):
     if not secret_key:
         secret_key = click.prompt("Tencent Cloud Secret Key", hide_input=True)
 
+    from onecode.mcp.cloudbase import MCP_SERVER_NAME, write_tokens
+    from onecode.mcp.config import MCPServerConfig
     from onecode.mcp.manager import MCPManager
+
     mgr = MCPManager()
 
-    env = {"TENCENTCLOUD_SECRETID": secret_id, "TENCENTCLOUD_SECRETKEY": secret_key}
+    env = {
+        "TENCENTCLOUD_SECRETID": secret_id,
+        "TENCENTCLOUD_SECRETKEY": secret_key,
+    }
     if env_id:
+        env["CLOUDBASE_ENV_ID"] = env_id
         env["TCB_ENV_ID"] = env_id
 
-    if mgr.get("cloudbase"):
+    if mgr.get_server(MCP_SERVER_NAME):
         click.echo("CloudBase MCP server already configured. Updating credentials...")
-        mgr.remove("cloudbase")
+        mgr.remove(MCP_SERVER_NAME)
 
-    mgr.add_stdio(
-        "cloudbase",
-        command="npx",
-        args=["@cloudbase/cloudbase-mcp@latest"],
-        env=env,
+    cfg = MCPServerConfig(
+        name=MCP_SERVER_NAME,
+        type="local",
+        command=["npx", "-y", "@cloudbase/cloudbase-mcp@latest"],
+        environment=env,
+        enabled=True,
     )
-    mgr.enable("cloudbase", True)
-    click.echo("CloudBase MCP server configured (stdio).")
+    mgr.add_server(MCP_SERVER_NAME, cfg)
+    click.echo("CloudBase MCP server configured (local) in mcp.json.")
 
-    from pathlib import Path
-    tokens_path = Path.home() / ".cloud-harness-tokens.json"
-    tokens = {}
-    if tokens_path.exists():
-        import json
-        tokens = json.loads(tokens_path.read_text())
-    tokens["TENCENTCLOUD_SECRETID"] = secret_id
-    tokens["TENCENTCLOUD_SECRETKEY"] = secret_key
-    tokens_path.write_text(__import__("json").dumps(tokens, indent=2))
-    click.echo(f"Credentials saved to {tokens_path}")
+    try:
+        path = write_tokens(secret_id, secret_key, env_id or "")
+        click.echo(f"Credentials saved to {path}")
+    except OSError as e:
+        click.echo(f"Warning: could not save credentials: {e}", err=True)
+
+
+@cloudbase.command("logout")
+def cloudbase_logout():
+    """Remove CloudBase credentials from the tokens file (keeps mcp.json)."""
+    from onecode.mcp.cloudbase import clear_tokens
+
+    if clear_tokens():
+        click.echo("CloudBase credentials removed from tokens file.")
+    else:
+        click.echo("No CloudBase credentials to remove.")
 
 
 @cloudbase.command("status")
@@ -832,15 +1067,45 @@ def cloudbase_status():
     transport = cfg.get("transport", "stdio")
     click.echo(f"CloudBase MCP server: {'[enabled]' if enabled else '[disabled]'} ({transport})")
 
-    if enabled:
-        connected = mgr.is_connected("cloudbase")
-        click.echo(f"Connection: {'connected' if connected else 'not connected'}")
-        if connected:
-            import asyncio
-            tools = asyncio.run(mgr.list_tools("cloudbase"))
-            click.echo(f"Available tools: {len(tools)}")
-            for t in tools[:5]:
-                click.echo(f"  - {t.name}: {t.description}")
+    if not enabled:
+        return
+
+    connected = mgr.is_connected("cloudbase")
+    if connected:
+        click.echo("Connection: connected")
+        import asyncio
+        tools = asyncio.run(mgr.list_tools("cloudbase"))
+        click.echo(f"Available tools: {len(tools)}")
+        for t in tools[:5]:
+            click.echo(f"  - {t.name}: {t.description}")
+        return
+
+    click.echo("No active connection — running a live probe...")
+
+    async def _probe():
+        ok = await mgr.connect("cloudbase", auto_reconnect=False)
+        if not ok:
+            return False, []
+        try:
+            tools = await mgr.list_tools("cloudbase")
+            return True, tools
+        finally:
+            await mgr.disconnect("cloudbase")
+
+    try:
+        import asyncio
+        ok, tools = asyncio.run(_probe())
+    except Exception as e:
+        click.echo(f"Connection: probe failed ({e})")
+        return
+
+    if ok:
+        click.echo(f"Connection: connected (probe) — {len(tools)} tools")
+        for t in tools[:5]:
+            click.echo(f"  - {t.name}: {t.description}")
+    else:
+        click.echo("Connection: not connected (probe failed)")
+        click.echo("Hint: run `cdh cloudbase init` to configure credentials.")
 
 
 @cli.group(invoke_without_command=True)

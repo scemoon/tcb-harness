@@ -3,15 +3,22 @@
 
 set -euo pipefail
 
-SKILL_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+CANONICAL_SKILL_DIR="${HOME}/.cdh/skills/ai-dlc-skill"
+DEV_SKILL_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+
+if [ -d "$CANONICAL_SKILL_DIR" ]; then
+    SKILL_DIR="$CANONICAL_SKILL_DIR"
+else
+    SKILL_DIR="$DEV_SKILL_DIR"
+fi
+
 SKILL_FILE="$SKILL_DIR/SKILL.md"
-PROJECT_ROOT="$(cd "$SKILL_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$DEV_SKILL_DIR/.." && pwd)"
 OUTPUT_DIR="$PROJECT_ROOT/.github"
 OUTPUT_FILE="$OUTPUT_DIR/copilot-instructions.md"
 
 mkdir -p "$OUTPUT_DIR"
 
-# Extract body from SKILL.md (skip YAML frontmatter)
 awk '
   BEGIN { count=0; }
   /^---$/ { count++; next; }
@@ -31,4 +38,4 @@ cat >> "$OUTPUT_FILE" << 'RULES'
 7. Chinese for user communication, English for code
 RULES
 
-echo "✅ Generated $OUTPUT_FILE from SKILL.md"
+echo "Generated $OUTPUT_FILE from $SKILL_DIR/SKILL.md"

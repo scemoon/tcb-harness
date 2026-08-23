@@ -186,7 +186,32 @@ pytest aidlc/tests/cross-stack/ --stack-url $STACK_URL
 
 **Before advancing to Deliver phase:**
 - [ ] Per-component: All BDD scenarios pass (100%), coverage ≥80%, 0 vulns, no TODO
+- [ ] **Web E2E**: `apps/web/tests/e2e/*.spec.ts` 100% pass via Playwright
 - [ ] Contracts: `aidlc/tools/contract_diff.py` exits 0; `aidlc/tests/contract/` 100% pass; `aidlc/packages/shared/` regenerated and in sync
 - [ ] Cross-stack: `aidlc/tests/cross-stack/` 100% pass against stack preview
 - [ ] `aidlc/openspec/changes/{id}/contract-diff.md` is filled and reviewed
 - [ ] All existing tests still pass
+
+## Web E2E (Browser E2E Gate)
+
+For WEB component, execute Playwright E2E tests:
+
+```bash
+# 1. Determine port from package.json
+cat apps/web/package.json | grep -A5 '"dev"'
+
+# 2. Check test files exist
+ls apps/web/tests/e2e/*.spec.ts
+
+# 3. Execute Playwright tests
+cd apps/web
+npx playwright test --project=chromium --reporter=json
+
+# 4. Parse results
+# Exit code 0 = all passed
+# Exit code 1 = some failed
+```
+
+**Rule WEB-E2E-001:** E2E test files must exist.
+**Rule WEB-E2E-002:** All E2E tests must pass.
+**Rule WEB-E2E-003:** Base URL must be reachable.

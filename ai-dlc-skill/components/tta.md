@@ -192,3 +192,44 @@ tt.cloud.callFunction({
 - **共享类型**：`aidlc/packages/shared/` 中的 OpenAPI 类型通过构建时生成注入
 - **Native/Desktop/Web**：各端独立构建，不共享 TTA 代码
 - **视频/直播专注意事项**：抖音小程序视频类内容有额外审核规则，需在 plan 阶段明确是否涉及并提前准备资质
+
+## Design System 规范
+
+### 必读规范
+| 规范 | 路径 |
+|------|------|
+| Design Tokens | `phases/plan/design_system/design_tokens.md` |
+| Atomic Design | `phases/plan/design_system/atomic_design.md` |
+| Component Spec | `phases/plan/design_system/component_spec.md` |
+| Accessibility | `phases/plan/design_system/accessibility.md` |
+| Theme System | `phases/plan/design_system/theme_system.md` |
+| TTA UI | `phases/plan/design_system/platform_ui/tta.md` |
+| Iconography | `phases/plan/design_system/iconography.md` |
+
+### UI 组件库
+- **默认**: 字节跳动官方组件库
+- **备选**: Vant (轻量)
+- **主题定制**: 通过 CSS 变量覆盖
+
+### 主题色
+```css
+page {
+  --color-primary: #333333;
+  --color-success: #07c160;
+  --color-warning: #ff9500;
+  --color-danger: #fc5531;
+}
+```
+
+### 组件分层
+- Atom: Button, Cell, Field, Icon
+- Molecule: CellGroup, SearchBar, Card
+- Organism: NavBar, TabBar, List
+- Template: 页面布局模板
+- Page: 业务页面
+
+### 视频/直播组件
+- 使用 `<video>` 组件
+- 使用 `<live-player>` 直播拉流组件
+- 视频封面使用 `<image mode="aspectFill">`
+- 需申请相关类目资质

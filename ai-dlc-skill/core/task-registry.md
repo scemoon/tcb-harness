@@ -12,55 +12,72 @@ Registry 作为 `task_registry` 数组存储在 `.cdh/state.json` 中。
 ```json
 {
   "current_phase": "understand",
-  "completed_phases": [],
+  "completed_phases": ["understand", "plan"],
   "gate_results": {},
+  "fingerprint": "abc123...",
   "task_registry": [
     {
-      "id": "task-{hash}",
+      "fingerprint": "24-char-hash",
       "intent": "用户输入意图摘要",
-      "level": "L2",
       "status": "completed",
-      "phases": [
-        {
-          "name": "understand",
-          "status": "completed",
-          "artifacts": ["aidlc/openspec/changes/{id}/spec-delta.md"],
-          "gatePassed": true
-        },
-        {
-          "name": "verify",
-          "status": "completed",
-          "artifacts": ["apps/web/src/..."],
-          "gatePassed": true
-        }
-      ]
+      "created_at": "2024-01-01T12:00:00Z",
+      "updated_at": "2024-01-01T12:30:00Z",
+      "result": "任务完成描述"
     }
   ]
 }
 ```
 
+**Schema 字段说明：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `fingerprint` | string (24 chars) | 是 | 任务唯一标识，基于 intent 生成 |
+| `intent` | string | 是 | 用户意图摘要 |
+| `status` | enum | 是 | `pending`/`in_progress`/`completed`/`failed` |
+| `created_at` | date-time | 是 | 任务创建时间 |
+| `updated_at` | date-time | 是 | 任务最后更新时间 |
+| `result` | string | 否 | 任务执行结果描述 |
+
+**顶层字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `current_phase` | 当前正在执行的 phase |
+| `completed_phases` | 已完成的 phases 列表 |
+| `gate_results` | 各 gate 的执行结果 |
+
 ## 操作方式
 
-Master Agent 通过 bash 命令直接读写 `.cdh/state.json`：
+**注意：使用 CDH 的 `save_state_atomic()` API 以避免竞态条件。**
+
+Master Agent 应通过 CDH API 操作状态，而不是直接 bash 读写：
+
+```python
+# 读取
+from cdh.project_loader import CdhProjectLoader
+state = CdhProjectLoader.load_project_state(cdh_dir)
+
+# 写入（原子操作，防止竞态）
+success = CdhProjectLoader.save_state_atomic(cdh_dir, state)
+```
+
+如果必须使用 bash：
 
 ```bash
 # 读取
 cat .cdh/state.json
 
-# 写入（用 python 保持 JSON 格式）
+# 写入（使用临时文件 + 原子替换）
 python -c "
-import json
-s = json.load(open('.cdh/state.json'))
-s['current_phase'] = 'verify'
-s['completed_phases'].append('understand')
-s['task_registry'].append({
-  'id': 'task-xxx',
-  'intent': '用户意图',
-  'level': 'L2',
-  'status': 'running',
-  'phases': [{'name': 'understand', 'status': 'completed', 'artifacts': [...], 'gatePassed': True}]
-})
-json.dump(s, open('.cdh/state.json','w'), ensure_ascii=False, indent=2)
+import json, tempfile, os
+state = json.load(open('.cdh/state.json'))
+# ... 修改 state ...
+# 原子写入
+tmp = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json')
+json.dump(state, tmp, ensure_ascii=False, indent=2)
+tmp.close()
+os.replace(tmp.name, '.cdh/state.json')
 "
 ```
 
@@ -70,8 +87,8 @@ json.dump(s, open('.cdh/state.json','w'), ensure_ascii=False, indent=2)
 Intent 输入
   │
   ├─ 读 .cdh/state.json → 检查 task_registry 匹配
-  │   ├─ found + all phases completed → SKIP
-  │   ├─ found + partially completed → 续跑
+  │   ├─ found + status=completed → SKIP
+  │   ├─ found + status=in_progress → 续跑
   │   └─ not found → 创建新 task 条目
   │
   ├─ 复杂度评估 → 选择 phases
@@ -90,33 +107,47 @@ Intent 输入
 
 ```
                   ┌─────────┐
-                  │ 新建     │
+                  │ pending │
                   └────┬────┘
+                       │ 开始执行
                        ▼
                   ┌─────────┐
-                  │ running │
+                  │in_progress │
                   └────┬────┘
-                       │ 每个 phase 完成
+                       │ 所有 phases 完成
                        ▼
-          ┌────────────────────────┐
-          │ phase[0..n] completed │
-          └────────┬───────────────┘
-                   │ 全部完成
-                   ▼
-              ┌───────────┐
-              │ completed │
-              └───────────┘
-                   │
-              ┌───────────┐
-              │  failed   │
-              └───────────┘
+           ┌────────────────────────┐
+           │      completed        │
+           └────────────────────────┘
+                       │
+                       │ 失败
+                       ▼
+                  ┌─────────┐
+                  │ failed  │
+                  └─────────┘
 ```
 
-## Phase 执行状态
+## Task Status
 
 | Status | 含义 | 下一步 |
 |--------|------|--------|
-| `pending` | 未开始 | 执行 |
-| `running` | 执行中 | 等待完成 |
-| `completed` | 已完成且 gate 通过 | 跳过 |
-| `failed` | gate 未通过 | 重试或 abort |
+| `pending` | 未开始 | 开始执行 |
+| `in_progress` | 执行中 | 等待完成 |
+| `completed` | 已完成 | 跳过 |
+| `failed` | 失败 | 重试或 abort |
+
+## Phase 完成追踪
+
+Phase 级别的完成状态通过顶层 `completed_phases` 数组追踪：
+
+```json
+{
+  "current_phase": "verify",
+  "completed_phases": ["understand", "plan"]
+}
+```
+
+这意味着：
+- `completed_phases` 包含已完成的 phases
+- `current_phase` 是当前正在执行的 phase
+- 不在 `completed_phases` 中且不等于 `current_phase` 的 phase 为 pending

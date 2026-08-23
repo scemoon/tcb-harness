@@ -9,8 +9,24 @@ import yaml
 logger = logging.getLogger("onecode.config")
 
 
+# NOTE: ``ONECODE_DIR`` and ``GLOBAL_CONFIG_PATH`` are resolved at
+# *import time* using ``Path.home()``. They are kept as module-level
+# constants for backward compatibility, but code that runs inside tests
+# with a patched ``$HOME`` should prefer the ``onecode_dir()`` and
+# ``global_config_path()`` helpers below so the values are re-evaluated
+# at call time.
 ONECODE_DIR = Path.home() / ".onecode"
 GLOBAL_CONFIG_PATH = ONECODE_DIR / "onecode.config.yaml"
+
+
+def onecode_dir() -> Path:
+    """Return ``~/.onecode`` resolved at call time (test-friendly)."""
+    return Path.home() / ".onecode"
+
+
+def global_config_path() -> Path:
+    """Return the path to the onecode global config at call time."""
+    return Path.home() / ".onecode" / "onecode.config.yaml"
 
 
 @dataclass
@@ -18,6 +34,8 @@ class ProviderConfig:
     api_key: Optional[str] = None
     endpoint: Optional[str] = None
     models: list[str] = field(default_factory=list)
+    auto_download: bool = True
+    auto_select: bool = True
 
 
 @dataclass
@@ -46,12 +64,14 @@ class AttachmentsConfig:
 
 @dataclass
 class AgentConfig:
-    max_iterations: int = 100
+    max_iterations: int = 500
     timeout_seconds: int = 600
     allow_shell_commands: bool = True
     shell_command_whitelist: list[str] = field(default_factory=list)
     temperature: float = 0.7
     max_subagent_depth: int = 1
+    max_subagent_timeout: int = 600
+    max_empty_turns: int = 10
 
 
 @dataclass
@@ -132,6 +152,7 @@ class MCPConfig:
     timeout: float = 60.0
     heartbeat_interval: float = 15.0
     reconnect_enabled: bool = True
+    disabled: list[str] = field(default_factory=list)  # glob patterns of MCP server names to skip
 
 
 @dataclass
@@ -145,6 +166,13 @@ class RetryConfig:
 class HillclimbConfig:
     enabled: bool = False
     min_sessions: int = 10
+
+
+@dataclass
+class AskUserConfig:
+    timeout_seconds: int = 10
+    timeout_behavior: str = "use_default"
+    unsupported_behavior: str = "use_default"
 
 
 @dataclass
@@ -172,6 +200,7 @@ class GlobalConfig:
     codebase: CodebaseConfig = field(default_factory=CodebaseConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     loops: LoopConfig = field(default_factory=LoopConfig)
+    ask_user: AskUserConfig = field(default_factory=AskUserConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     retry: RetryConfig = field(default_factory=RetryConfig)
 
@@ -204,16 +233,17 @@ def _dict_to_dataclass(cls, data: dict):
 
 
 def ensure_dirs():
+    base = onecode_dir()
     dirs = [
-        ONECODE_DIR,
-        ONECODE_DIR / "sessions",
-        ONECODE_DIR / "skills",
-        ONECODE_DIR / "mcps",
-        ONECODE_DIR / "traces",
-        ONECODE_DIR / "logs",
-        ONECODE_DIR / "models",
-        ONECODE_DIR / "codebase" / "indexes",
-        ONECODE_DIR / "memory",
+        base,
+        base / "sessions",
+        base / "skills",
+        base / "mcps",
+        base / "traces",
+        base / "logs",
+        base / "models",
+        base / "codebase" / "indexes",
+        base / "memory",
     ]
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
@@ -230,15 +260,116 @@ def ensure_dirs():
 
 def load_config() -> GlobalConfig:
     ensure_dirs()
-    if not GLOBAL_CONFIG_PATH.exists():
+    config_path = global_config_path()
+    if not config_path.exists():
         _write_default_config()
     try:
         from onecode.skills.bootstrap import ensure_onecode_default_skills
         ensure_onecode_default_skills()
     except Exception:
         pass
-    raw = yaml.safe_load(GLOBAL_CONFIG_PATH.read_text()) or {}
-    return _dict_to_dataclass(GlobalConfig, raw)
+    raw = yaml.safe_load(config_path.read_text()) or {}
+    cfg = _dict_to_dataclass(GlobalConfig, raw)
+    # If the on-disk config has no provider entries (e.g. an older
+    # install or a hand-edited file with ``providers: {}``), populate
+    # the dict from the registered provider classes plus the built-in
+    # default templates so the config editor can show and edit them.
+    if not cfg.providers:
+        cfg.providers = _default_providers()
+    # Make sure every provider entry is a proper ``ProviderConfig``
+    # instance — the on-disk YAML may have been hand-edited or
+    # produced by a version that skipped dataclass conversion for
+    # nested dicts, and the UI relies on attribute access.
+    cfg.providers = {
+        name: pcfg if isinstance(pcfg, ProviderConfig) else _dict_to_dataclass(ProviderConfig, pcfg)
+        for name, pcfg in cfg.providers.items()
+    }
+    return cfg
+
+
+def _default_providers() -> dict:
+    """Return the default provider config templates.
+
+    Combines the default YAML block (kept for backwards-compat) with
+    any providers that the ``ProviderRegistry`` knows about but that
+    are missing from the default block.
+    """
+    from onecode.models.provider import ProviderRegistry
+
+    # Trigger provider registration side-effects.
+    try:
+        from onecode.models import providers as _providers_mod  # noqa: F401
+    except ImportError:
+        pass
+
+    # Pull the default block out of _write_default_config's literal so
+    # we keep a single source of truth.
+    default: dict = {}
+    try:
+        # We re-derive the default dict by inlining the same templates
+        # used in _write_default_config; this keeps both paths aligned
+        # without exposing the literal as a module attribute.
+        from onecode.config import _PROVIDER_DEFAULT_TEMPLATES  # type: ignore
+        import copy as _copy
+        default = {k: _copy.deepcopy(v) for k, v in _PROVIDER_DEFAULT_TEMPLATES.items()}
+    except ImportError:
+        # Fall back to an empty seed; the registry merge below will
+        # still produce a useful result.
+        default = {}
+
+    # Merge in any registered provider that isn't in the default block,
+    # so newly added providers (e.g. aliyun) show up automatically.
+    for name in ProviderRegistry.list():
+        if name not in default:
+            default[name] = {
+                "api_key": "${" + name.upper() + "_API_KEY}",
+                "endpoint": "",
+                "models": [],
+            }
+    return default
+
+
+_PROVIDER_DEFAULT_TEMPLATES: dict = {
+    "anthropic": {
+        "api_key": "${ANTHROPIC_API_KEY}",
+        "endpoint": "https://api.anthropic.com/v1",
+        "models": [
+            "claude-opus-4.7",
+            "claude-opus-4.7-fast"
+        ],
+    },
+    "openai": {
+        "api_key": "${OPENAI_API_KEY}",
+        "endpoint": "https://api.openai.com/v1",
+        "models": ["gpt-5.5-pro", "gpt-5.5"],
+    },
+    "ollama": {
+        "endpoint": "http://localhost:11434",
+        "models": ["llama2", "codellama", "qwen3.5-2b", "qwen3.5-4b"],
+        "auto_download": True,
+        "auto_select": True,
+    },
+    "deepseek": {
+        "api_key": "${DEEPSEEK_API_KEY}",
+        "endpoint": "https://api.deepseek.com/v1",
+        "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
+    },
+    "minimax": {
+        "api_key": "${MINIMAX_API_KEY}",
+        "endpoint": "https://api.minimax.com/v1",
+        "models": ["MiniMax-M2.7", "MiniMax-M2.5"],
+    },
+    "minimaxi": {
+        "api_key": "${MINMAXI_API_KEY}",
+        "endpoint": "https://api.minimaxi.com/v1",
+        "models": ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
+    },
+    "glm": {
+        "api_key": "${GLM_API_KEY}",
+        "endpoint": "https://open.bigmodel.cn/api/paas/v4",
+        "models": ["glm-5.1", "glm-5"],
+    },
+}
 
 
 def _write_default_config():
@@ -246,45 +377,7 @@ def _write_default_config():
         "default_mode": "build",
         "default_provider": "minimaxi",
         "default_model": "MiniMax-M2.7",
-        "providers": {
-            "anthropic": {
-                "api_key": "${ANTHROPIC_API_KEY}",
-                "endpoint": "https://api.anthropic.com/v1",
-                "models": [
-                    "claude-opus-4.7",
-                    "claude-opus-4.7-fast"
-                ],
-            },
-            "openai": {
-                "api_key": "${OPENAI_API_KEY}",
-                "endpoint": "https://api.openai.com/v1",
-                "models": ["gpt-5.5-pro", "gpt-5.5"],
-            },
-            "ollama": {
-                "endpoint": "http://localhost:11434",
-                "models": ["llama2", "codellama"],
-            },
-            "deepseek": {
-                "api_key": "${DEEPSEEK_API_KEY}",
-                "endpoint": "https://api.deepseek.com/v1",
-                "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
-            },
-            "minimax": {
-                "api_key": "${MINIMAX_API_KEY}",
-                "endpoint": "https://api.minimax.com/v1",
-                "models": ["MiniMax-M2.7", "MiniMax-M2.5"],
-            },
-            "minimaxi": {
-                "api_key": "${MINMAXI_API_KEY}",
-                "endpoint": "https://api.minimaxi.com/v1",
-                "models": ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
-            },
-            "glm": {
-                "api_key": "${GLM_API_KEY}",
-                "endpoint": "https://open.bigmodel.cn/api/paas/v4",
-                "models": ["glm-5.1", "glm-5"],
-            },
-        },
+        "providers": _PROVIDER_DEFAULT_TEMPLATES,
         "observability": {
             "trace_enabled": True,
             "trace_exporter": "file",
@@ -341,6 +434,7 @@ def _write_default_config():
             "timeout": 60.0,
             "heartbeat_interval": 15.0,
             "reconnect_enabled": True,
+            "disabled": [],
         },
         "retry": {
             "max_attempts": 5,
@@ -348,13 +442,14 @@ def _write_default_config():
             "backoff_jitter": 0.5,
         },
     }
-    GLOBAL_CONFIG_PATH.write_text(yaml.dump(default, default_flow_style=False))
+    global_config_path().write_text(yaml.dump(default, default_flow_style=False))
 
 
 def save_config(cfg: GlobalConfig):
-    GLOBAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    path = global_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     raw = _dataclass_to_dict(cfg)
-    GLOBAL_CONFIG_PATH.write_text(yaml.dump(raw, default_flow_style=False))
+    path.write_text(yaml.dump(raw, default_flow_style=False))
 
 
 def _dataclass_to_dict(obj):

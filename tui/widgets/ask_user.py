@@ -1,15 +1,28 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from typing import Any, Callable, NamedTuple
 
-from textual.app import ComposeResult
 from textual import on
+from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, VerticalGroup
-from textual.message import Message
-from textual.widgets import (
-    Button, Checkbox, Input, RadioButton, RadioSet, TabbedContent, TabPane,
-)
 from textual.css.query import NoMatches
+from textual.events import Key
+from textual.message import Message
+from textual.reactive import var
+from textual.widget import Widget
+from textual.widgets import (
+    Button,
+    Checkbox,
+    Input,
+    RadioButton,
+    RadioSet,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
 
 class AskUserSubmitted(Message):
@@ -22,8 +35,35 @@ class AskUserSubmitted(Message):
 CUSTOM_VALUE = "__custom__"
 
 
+class AskUserAnswer(NamedTuple):
+    value: str
+    label: str
+    kind: str | None = None
+    option_id: str = ""
+
+
+def _to_answer(opt: dict) -> AskUserAnswer:
+    return AskUserAnswer(
+        value=str(opt.get("value", "")),
+        label=str(opt.get("label", "")),
+        kind=opt.get("kind"),
+        option_id=str(opt.get("optionId", opt.get("value", ""))),
+    )
+
+
+@dataclass
+class AskRequest:
+    tool_id: str
+    question: str
+    options: list[AskUserAnswer]
+    questions: list[dict]
+    checkpoint_id: str
+    callback: Callable[[str], Any] | None = None
+
+
 class AskUserWidget(VerticalGroup):
     DEFAULT_CLASSES = "block"
+
     DEFAULT_CSS = """
     AskUserWidget {
         height: auto;
@@ -39,6 +79,10 @@ class AskUserWidget(VerticalGroup):
     AskUserWidget RadioButton {
         margin-bottom: 0;
     }
+    AskUserWidget #ask-question {
+        margin-bottom: 1;
+        color: $text-primary;
+    }
     AskUserWidget #ask-custom-input-row {
         height: auto;
         margin-bottom: 1;
@@ -50,16 +94,7 @@ class AskUserWidget(VerticalGroup):
     AskUserWidget #ask-rollback-row {
         height: auto;
     }
-    AskUserWidget .ask-q-section {
-        height: auto;
-        margin-bottom: 1;
-        padding: 0;
-    }
     AskUserWidget .ask-q-options {
-        height: auto;
-        margin-bottom: 1;
-    }
-    AskUserWidget #ask-tabs {
         height: auto;
         margin-bottom: 1;
     }
@@ -81,8 +116,17 @@ class AskUserWidget(VerticalGroup):
     }
     """
 
+    BINDINGS = [
+        Binding("up", "cursor_up", "Up", show=False, priority=True),
+        Binding("down", "cursor_down", "Down", show=False, priority=True),
+    ]
+
+    cursor_offset: var[int] = var(-1)
+
     def __init__(
-        self, tool_id: str, question: str = "",
+        self,
+        tool_id: str,
+        question: str = "",
         options: list[dict] | None = None,
         questions: list[dict] | None = None,
         checkpoint_id: str = "",
@@ -90,7 +134,7 @@ class AskUserWidget(VerticalGroup):
         super().__init__()
         self._tool_id = tool_id
         self._question = question
-        self._options = options or []
+        self._options = [_to_answer(o) for o in (options or [])]
         self._questions = questions or []
         self._is_multi = bool(self._questions)
         self._answer = ""
@@ -102,12 +146,12 @@ class AskUserWidget(VerticalGroup):
         self._q_selections: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
+        if self._question:
+            yield Static(self._question, id="ask-question", markup=False)
         if self._is_multi:
             yield from self._compose_multi()
         else:
             yield from self._compose_single()
-
-    # ── Single question (no Tab) ─────────────────────────────────────────────
 
     def _compose_single(self) -> ComposeResult:
         if self._options:
@@ -123,95 +167,116 @@ class AskUserWidget(VerticalGroup):
             if not self._options:
                 yield Button("Submit", variant="primary", id="ask-submit-all")
 
-    # ── Multi question (Tabbed) ─────────────────────────────────────────────
+    async def _build_single_options(self) -> None:
+        if not self._options:
+            return
+        rs = self.query_one("#ask-radio-set", RadioSet)
+        for i, opt in enumerate(self._options):
+            btn_id = f"_ask_opt_0_{i}"
+            await rs.mount(RadioButton(opt.label, id=btn_id))
+            self._option_values[btn_id] = opt.value
+        custom_btn_id = "_ask_opt_0_custom"
+        await rs.mount(RadioButton("其他", id=custom_btn_id))
+        self._option_values[custom_btn_id] = CUSTOM_VALUE
 
     def _compose_multi(self) -> ComposeResult:
         yield TabbedContent(id="ask-tab-content")
+        with Horizontal(id="ask-rollback-row"):
+            if self._checkpoint_id:
+                yield Button("Rollback", id="ask-rollback", variant="warning")
+            yield Button("Submit All", variant="primary", id="ask-submit-all")
 
     async def _build_multi_panes(self) -> None:
         tc = self.query_one("#ask-tab-content", TabbedContent)
         for qi, q in enumerate(self._questions):
             pane_id = f"_ask_pane_{qi}"
-            pane, to_mount = self._make_tab_pane(qi, q, pane_id)
+            qid = f"_ask_q_{qi}"
+            header = q.get("header", f"Q{qi + 1}")
+            qtype = q.get("type", "single")
+            qopts = q.get("options", [])
+
+            pane = TabPane(header, id=pane_id)
             await tc.add_pane(pane)
-            for item in to_mount:
-                widget_or_wrap, children = item
-                if children is not None:
-                    await pane.mount(widget_or_wrap)
-                    for child in children:
-                        await widget_or_wrap.mount(child)
-                else:
-                    await pane.mount(widget_or_wrap)
 
-        rollback_row = Horizontal(id="ask-rollback-row")
-        await self.mount(rollback_row)
-        if self._checkpoint_id:
-            await rollback_row.mount(Button("Rollback", id="ask-rollback", variant="warning"))
-        await rollback_row.mount(Button("Submit All", variant="primary", id="ask-submit-all"))
-
-    def _make_tab_pane(self, qi: int, q: dict, pane_id: str) -> tuple[TabPane, list]:
-        qtype = q.get("type", "single")
-        qopts = q.get("options", [])
-        qid = f"_ask_q_{qi}"
-        header = q.get("header", f"Q{qi + 1}")
-
-        pane = TabPane(header, id=pane_id)
-        to_mount: list = []
-
-        if qtype == "multiple" and qopts:
-            for oi, opt in enumerate(qopts):
-                to_mount.append((
-                    Checkbox(f" {opt.get('label', '')}", id=f"{qid}_chk_{oi}"),
-                    None,
-                ))
+            if qtype == "multiple" and qopts:
+                for oi, opt in enumerate(qopts):
+                    cb = Checkbox(
+                        f" {opt.get('label', '')}", id=f"{qid}_chk_{oi}"
+                    )
+                    await pane.mount(cb)
                 self._multi_selections.setdefault(qid, set())
-        elif qtype == "confirm":
-            to_mount.append((
-                VerticalGroup(
-                    Button("Yes", id=f"{qid}_yes", variant="primary", classes="ask-opt-btn"),
-                    Button("No", id=f"{qid}_no", classes="ask-opt-btn"),
-                ),
-                None,
-            ))
-            self._q_btn_map[f"{qid}_yes"] = (qi, "yes")
-            self._q_btn_map[f"{qid}_no"] = (qi, "no")
-        elif qopts:
-            rs = RadioSet(id=f"{qid}_radios")
-            btns = []
-            for oi, opt in enumerate(qopts):
-                label = opt.get("label", "")
-                value = opt.get("value", "")
-                btn_id = f"{qid}_opt_{oi}"
-                self._option_values[btn_id] = value
-                self._q_btn_map[btn_id] = (qi, value)
-                btns.append(RadioButton(label, id=btn_id, value=value))  # type: ignore[arg-type]
-            # Add "其他" as last option
-            custom_btn_id = f"{qid}_opt_custom"
-            self._q_btn_map[custom_btn_id] = (qi, CUSTOM_VALUE)
-            btns.append(RadioButton("其他", id=custom_btn_id, value=CUSTOM_VALUE))  # type: ignore[arg-type]
-            to_mount.append((rs, btns))
-            # Hidden custom input for this pane
-            wrap = Horizontal(id=f"{qid}_custom-row", classes="-hidden")
-            to_mount.append((wrap, [
-                Input(placeholder="✍ 输入自定义方案\u2026", id=f"{qid}_input", classes="ask-q-input"),
-                Button("发送", variant="primary", id=f"{qid}_send", classes="ask-send-btn"),
-            ]))
-        else:
-            # No options: show input directly (not hidden)
-            wrap = Horizontal(id=f"{qid}_custom-row")
-            to_mount.append((wrap, [
-                Input(placeholder="✍ 输入自定义方案\u2026", id=f"{qid}_input", classes="ask-q-input"),
-                Button("发送", variant="primary", id=f"{qid}_send", classes="ask-send-btn"),
-            ]))
+            elif qtype == "confirm":
+                await pane.mount(
+                    Button(
+                        "Yes",
+                        id=f"{qid}_yes",
+                        variant="primary",
+                        classes="ask-opt-btn",
+                    )
+                )
+                await pane.mount(
+                    Button("No", id=f"{qid}_no", classes="ask-opt-btn")
+                )
+                self._q_btn_map[f"{qid}_yes"] = (qi, "yes")
+                self._q_btn_map[f"{qid}_no"] = (qi, "no")
+            elif qopts:
+                rs = RadioSet(id=f"{qid}_radios")
+                await pane.mount(rs)
+                for oi, opt in enumerate(qopts):
+                    btn_id = f"{qid}_opt_{oi}"
+                    value = opt.get("value", "")
+                    await rs.mount(
+                        RadioButton(opt.get("label", ""), id=btn_id)
+                    )
+                    self._option_values[btn_id] = value
+                    self._q_btn_map[btn_id] = (qi, value)
+                custom_btn_id = f"{qid}_opt_custom"
+                await rs.mount(
+                    RadioButton("其他", id=custom_btn_id)
+                )
+                self._q_btn_map[custom_btn_id] = (qi, CUSTOM_VALUE)
+                self._option_values[custom_btn_id] = CUSTOM_VALUE
+                wrap = Horizontal(id=f"{qid}_custom-row", classes="-hidden")
+                await pane.mount(wrap)
+                await wrap.mount(
+                    Input(
+                        placeholder="✍ 输入自定义方案\u2026",
+                        id=f"{qid}_input",
+                        classes="ask-q-input",
+                    )
+                )
+                await wrap.mount(
+                    Button(
+                        "发送",
+                        variant="primary",
+                        id=f"{qid}_send",
+                        classes="ask-send-btn",
+                    )
+                )
+            else:
+                wrap = Horizontal(id=f"{qid}_custom-row")
+                await pane.mount(wrap)
+                await wrap.mount(
+                    Input(
+                        placeholder="✍ 输入自定义方案\u2026",
+                        id=f"{qid}_input",
+                        classes="ask-q-input",
+                    )
+                )
+                await wrap.mount(
+                    Button(
+                        "发送",
+                        variant="primary",
+                        id=f"{qid}_send",
+                        classes="ask-send-btn",
+                    )
+                )
 
-        return pane, to_mount
-
-    # ── Mount / Focus ───────────────────────────────────────────────────────
+        tc.active = "_ask_pane_0"
 
     async def on_mount(self) -> None:
         if self._is_multi:
             await self._build_multi_panes()
-            self.query_one("#ask-tab-content", TabbedContent).active = "_ask_pane_0"
             try:
                 self.query_one("RadioButton", RadioButton).focus()
                 return
@@ -224,23 +289,12 @@ class AskUserWidget(VerticalGroup):
                 pass
             try:
                 self.query_one(".ask-q-input", Input).focus()
+                return
             except NoMatches:
                 self.focus()
         else:
             if self._options:
-                rs = self.query_one("#ask-radio-set", RadioSet)
-                for i, opt in enumerate(self._options):
-                    label = opt.get("label", "")
-                    value = opt.get("value", "")
-                    key = opt.get("key")
-                    display = f"[{key.upper()}] {label}" if key else label
-                    btn_id = f"_ask_opt_0_{i}"
-                    self._option_values[btn_id] = value
-                    await rs.mount(RadioButton(display, id=btn_id, value=value))  # type: ignore[arg-type]
-                # Add "其他" as last option
-                custom_btn_id = "_ask_opt_0_custom"
-                self._option_values[custom_btn_id] = CUSTOM_VALUE
-                await rs.mount(RadioButton("其他", id=custom_btn_id, value=CUSTOM_VALUE))  # type: ignore[arg-type]
+                await self._build_single_options()
                 try:
                     self.query_one("RadioButton", RadioButton).focus()
                 except NoMatches:
@@ -251,10 +305,175 @@ class AskUserWidget(VerticalGroup):
                 except NoMatches:
                     self.focus()
 
-    # ── Single question handlers ─────────────────────────────────────────────
+    def _cursor_children(self) -> list[Widget]:
+        return list(self.query("RadioButton, Input, Button"))
+
+    def block_cursor_clear(self) -> None:
+        self.cursor_offset = -1
+
+    def block_cursor_up(self) -> Widget | None:
+        kids = self._cursor_children()
+        if not kids:
+            return None
+        if self.cursor_offset == -1:
+            self.cursor_offset = len(kids) - 1
+        else:
+            self.cursor_offset -= 1
+        if self.cursor_offset < 0:
+            self.cursor_offset = -1
+            return None
+        try:
+            return kids[self.cursor_offset]
+        except IndexError:
+            return None
+
+    def block_cursor_down(self) -> Widget | None:
+        kids = self._cursor_children()
+        if not kids:
+            return None
+        if self.cursor_offset == -1:
+            self.cursor_offset = 0
+        else:
+            self.cursor_offset += 1
+        if self.cursor_offset >= len(kids):
+            self.cursor_offset = -1
+            return None
+        try:
+            return kids[self.cursor_offset]
+        except IndexError:
+            return None
+
+    def get_cursor_block(self) -> Widget | None:
+        if self.cursor_offset == -1:
+            return None
+        try:
+            return self._cursor_children()[self.cursor_offset]
+        except IndexError:
+            return None
+
+    def block_select(self, widget: Widget) -> None:
+        try:
+            self.cursor_offset = self._cursor_children().index(widget)
+        except ValueError:
+            pass
+
+    def action_cursor_up(self) -> None:
+        """Internal keyboard handler — advances focus within the widget.
+
+        Tracks an internal cursor (separate from ``cursor_offset``) so the
+        ``BlockProtocol`` contract remains predictable when the host
+        enters the block via ``block_cursor_down``.
+
+        When the focus moves away from the "其他" RadioButton (e.g. user
+        navigates UP to a regular option), the inline custom-input row is
+        hidden and "其他" is deselected so the user can pick a normal
+        option without first cancelling the inline input.
+        """
+        kids = self._cursor_children()
+        if not kids:
+            return
+        focused = self.app.focused
+        try:
+            current = kids.index(focused) if focused in kids else -1
+        except ValueError:
+            current = -1
+        if current < 0:
+            new_idx = len(kids) - 1
+        else:
+            new_idx = max(0, current - 1)
+        self._dismiss_custom_row_if_leaving_other(
+            current_idx=current, new_idx=new_idx, kids=kids
+        )
+        kids[new_idx].focus()
+
+    def action_cursor_down(self) -> None:
+        """Internal keyboard handler — advances focus within the widget."""
+        kids = self._cursor_children()
+        if not kids:
+            return
+        focused = self.app.focused
+        try:
+            current = kids.index(focused) if focused in kids else -1
+        except ValueError:
+            current = -1
+        if current < 0:
+            new_idx = 0
+        else:
+            new_idx = min(len(kids) - 1, current + 1)
+        self._dismiss_custom_row_if_leaving_other(
+            current_idx=current, new_idx=new_idx, kids=kids
+        )
+        kids[new_idx].focus()
+
+    def _dismiss_custom_row_if_leaving_other(
+        self, current_idx: int, new_idx: int, kids: list[Widget]
+    ) -> None:
+        """If focus is leaving the '其他' RadioButton for a *different*
+        option, hide the inline custom-input row and select the new option.
+
+        RadioSet's contract is "exactly one button selected at any time".
+        To deselect '其他' we must select the destination button — this
+        also has the side effect of pre-selecting it, which matches the
+        user's intent: they navigated to a regular option to pick it.
+
+        Single-question mode only (multi-question tabs hide their own
+        rows independently).
+        """
+        if self._is_multi:
+            return
+        if current_idx < 0:
+            return
+        if not (0 <= current_idx < len(kids)):
+            return
+        current_widget = kids[current_idx]
+        if not (
+            isinstance(current_widget, RadioButton)
+            and current_widget.id == "_ask_opt_0_custom"
+        ):
+            return
+        if new_idx == current_idx:
+            return
+        # Selecting a different RadioButton triggers RadioSet's
+        # _on_radio_button_changed which deselects '其他' atomically.
+        new_widget = kids[new_idx]
+        if isinstance(new_widget, RadioButton):
+            new_widget.value = True
+        try:
+            row = self.query_one("#ask-custom-input-row")
+            row.display = False
+        except NoMatches:
+            pass
+
+    def on_key(self, event: Key) -> None:
+        """ESC dismisses the visible custom-input row before bubbling to the
+        host's cancel handler.
+
+        Without this, ``Conversation.action_cancel`` would tear down the
+        entire AskUserWidget when the user merely wanted to back out of
+        the inline "其他" custom input.
+        """
+        if event.key != "escape":
+            return
+        try:
+            row = self.query_one("#ask-custom-input-row")
+        except NoMatches:
+            return
+        if not row.display:
+            return
+        row.display = False
+        event.stop()
+        event.prevent_default()
+        # Selecting any other radio would deselect "其他" via the
+        # RadioSet contract, but if the user has no other radio to pick
+        # the row stays open. Force-close by hiding and refocusing.
+        try:
+            custom_btn = self.query_one("#_ask_opt_0_custom", RadioButton)
+            custom_btn.focus()
+        except NoMatches:
+            pass
 
     @on(RadioSet.Changed, "#ask-radio-set")
-    def handle_radio_changed(self, event: RadioSet.Changed) -> None:
+    async def handle_radio_changed(self, event: RadioSet.Changed) -> None:
         if self._is_multi:
             return
         btn_id = event.pressed.id or ""
@@ -263,41 +482,34 @@ class AskUserWidget(VerticalGroup):
             self.query_one("#ask-custom-input-row", Horizontal).display = True
             self.query_one("#ask-custom-input", Input).focus()
         elif value:
-            self._finish(value)
+            await self._finish(value)
 
     @on(Button.Pressed, "#ask-rollback")
     def handle_rollback(self) -> None:
         self.post_message(AskUserSubmitted("__rollback__", self._tool_id))
 
-    @on(Button.Pressed, "#ask-submit-all")
-    def handle_submit(self) -> None:
-        if self._is_multi:
-            return
-
     @on(Button.Pressed, "#ask-send-custom")
-    def handle_send_custom(self) -> None:
+    async def handle_send_custom(self) -> None:
         value = self.query_one("#ask-custom-input", Input).value.strip()
         if value:
-            self._finish(value)
+            await self._finish(value)
 
     @on(Input.Submitted, "#ask-custom-input")
-    def handle_custom_input_submitted(self) -> None:
+    async def handle_custom_input_submitted(self) -> None:
         value = self.query_one("#ask-custom-input", Input).value.strip()
         if value:
-            self._finish(value)
-
-    # ── Multi-question handlers ─────────────────────────────────────────────
+            await self._finish(value)
 
     @on(Button.Pressed, "#ask-submit-all")
-    def handle_submit_all(self) -> None:
+    async def handle_submit_all(self) -> None:
         if not self._is_multi:
             return
-        answers = {}
+        answers: dict[str, Any] = {}
         for qi, q in enumerate(self._questions):
             qtype = q.get("type", "single")
             qid = f"_ask_q_{qi}"
             if qtype == "multiple":
-                selected = []
+                selected: list[str] = []
                 for chk in self.query(f"#{qid}_chk_"):
                     if isinstance(chk, Checkbox) and chk.value:
                         label = chk.label.plain if hasattr(chk, "label") else ""
@@ -328,11 +540,12 @@ class AskUserWidget(VerticalGroup):
         ]
         if unanswered:
             return
-        self._finish(json.dumps(answers))
+        await self._finish(json.dumps(answers))
 
     @on(Button.Pressed, ".ask-opt-btn")
     def handle_q_option(self, event: Button.Pressed) -> None:
-        entry = self._q_btn_map.get(event.button.id or "")
+        btn_id = event.button.id or ""
+        entry = self._q_btn_map.get(btn_id)
         if entry:
             q_idx, value = entry
             qid = f"_ask_q_{q_idx}"
@@ -341,15 +554,18 @@ class AskUserWidget(VerticalGroup):
     @on(RadioSet.Changed)
     def handle_q_radio_changed(self, event: RadioSet.Changed) -> None:
         btn_id = event.pressed.id or ""
+        if not btn_id.startswith("_ask_q_"):
+            return
         entry = self._q_btn_map.get(btn_id)
-        if entry:
-            q_idx, value = entry
-            qid = f"_ask_q_{q_idx}"
-            if value == CUSTOM_VALUE:
-                self.query_one(f"#{qid}_custom-row", Horizontal).display = True
-                self.query_one(f"#{qid}_input", Input).focus()
-            else:
-                self._q_selections[qid] = str(event.pressed.value) if event.pressed.value else ""
+        if not entry:
+            return
+        q_idx, value = entry
+        qid = f"_ask_q_{q_idx}"
+        if value == CUSTOM_VALUE:
+            self.query_one(f"#{qid}_custom-row", Horizontal).display = True
+            self.query_one(f"#{qid}_input", Input).focus()
+        else:
+            self._q_selections[qid] = value
 
     @on(Button.Pressed, ".ask-send-btn")
     def handle_q_send(self, event: Button.Pressed) -> None:
@@ -372,10 +588,17 @@ class AskUserWidget(VerticalGroup):
             if val:
                 self._q_selections[qid] = val
 
-    # ── Finish ─────────────────────────────────────────────────────────────
-
-    def _finish(self, value: str) -> None:
+    async def _finish(self, value: str) -> None:
         self._answer = value
         self._done = True
         self.post_message(AskUserSubmitted(value, self._tool_id))
-        self.remove()
+        await self.remove()
+
+
+__all__ = [
+    "AskUserSubmitted",
+    "AskUserAnswer",
+    "AskRequest",
+    "AskUserWidget",
+    "CUSTOM_VALUE",
+]

@@ -21,3 +21,10 @@ Feature: {{feature_name}}
     Given {{precondition}}
     When {{action_with_boundary_input}}
     Then {{expected_outcome}}
+
+  @FR-{{fr_id}} @logic
+  Scenario: {{logic_scenario_name}}
+    Given {{precondition_with_state}}
+    When {{action}} is repeated multiple times
+    Then {{outcome}} remains consistent
+    And {{side_effects}} do not accumulate

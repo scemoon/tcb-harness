@@ -178,14 +178,33 @@ cdh cloudbase status
 ### MCP Debugging
 
 ```bash
-# Check MCP status
+# Check MCP status (live probe + tool count)
 cdh cloudbase status
+
+# Full diagnostic (config dump + auth state + live probe)
+cdh mcp debug cloudbase
 
 # Reconfigure MCP
 cdh cloudbase init --secret-id xxx --secret-key xxx
 
+# Clear credentials (logout)
+cdh cloudbase logout
+
 # Manual MCP test
 echo '{"jsonrpc":"2.0","method":"tools/list","id":1}' | npx @cloudbase/cloudbase-mcp
+```
+
+### Inspecting / Migrating the config
+
+```bash
+# Show current config (secret values masked)
+cdh mcp list
+
+# Inspect the raw JSON
+cat ~/.onecode/mcp.json
+
+# One-shot: migrate legacy mcps.yaml -> mcp.json (auto-backs up)
+cdh mcp migrate
 ```
 
 ## Environment Issues
@@ -331,3 +350,113 @@ tcb storage list --path / --env $TCB_ENV_ID
 # MCP debugging
 cdh cloudbase status
 ```
+
+## CLS 日志服务集成 (requestId 追踪)
+
+腾讯云 SCF 自2021年1月29日起自动将函数日志投递至日志服务 CLS，支持通过 `requestId` 进行调用链追踪。
+
+### CLS 日志字段
+
+| 字段名 | 类型 | 含义 |
+|--------|------|------|
+| `SCF_RequestId` | text | 请求 ID（调用链追踪键） |
+| `SCF_FunctionName` | text | 函数名称 |
+| `SCF_Namespace` | text | 命名空间 |
+| `SCF_Message` | text | 日志内容 |
+| `SCF_StartTime` | long | 调用开始时间 (Unix ms) |
+| `SCF_Duration` | long | 运行时间 (ms) |
+| `SCF_StatusCode` | long | HTTP 状态码 |
+| `SCF_Level` | text | 日志级别 (INFO/WARN/ERROR) |
+| `SCF_MemUsage` | double | 内存使用 (bytes) |
+
+### 通过 requestId 查询日志
+
+#### 方法1: CLS 控制台 (推荐手动排查)
+
+1. 登录 [腾讯云日志服务控制台](https://console.cloud.tencent.com/cls)
+2. 选择与 SCF 函数相同的地域
+3. 进入 `SCF_logset` 日志集
+4. 选择日志主题：`SCF_logtopic_{函数名}_{命名空间}`
+5. 检索条件：`SCF_RequestId:<requestId>`
+
+#### 方法2: SCF 控制台
+
+1. 进入 [SCF 控制台](https://console.cloud.tencent.com/scf)
+2. 选择函数 → 日志页签 → **高级检索**
+3. 检索条件：`SCF_RequestId:<requestId>`
+
+#### 方法3: cdh cls CLI (自动化)
+
+```bash
+# 安装/更新
+pip install -U cdh
+
+# 通过 requestId 查询
+cdh cls search --request-id req-xxxxx --function hello --env $TCB_ENV_ID
+
+# 关键词查询
+cdh cls search --function hello --keyword error --limit 100 --env $TCB_ENV_ID
+
+# 时间范围查询
+cdh cls search --function hello --start-time "2026-08-04 10:00:00" --end-time "2026-08-04 12:00:00"
+```
+
+#### 方法4: Python API
+
+```python
+from cdh.tools.cls_search import CLSLogSearcher
+
+searcher = CLSLogSearcher(region="ap-shanghai")
+
+# 通过 requestId 查询
+logs = searcher.search_by_request_id(
+    request_id="req-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    function_name="hello",
+    namespace="default"
+)
+
+for log in logs:
+    print(f"[{log['time']}] {log['message']}")
+```
+
+### 常见检索模式
+
+| 场景 | 检索条件 |
+|------|----------|
+| 特定请求追踪 | `SCF_RequestId:<requestId>` |
+| 错误日志 | `SCF_Message:error OR SCF_Level:ERROR` |
+| 超时请求 (>60s) | `SCF_Duration:>60000` |
+| 内存超限 (>1.5GB) | `SCF_MemUsage:>1610612736` |
+| HTTP 5xx | `SCF_StatusCode:>=500` |
+| 特定函数 | `SCF_FunctionName:hello` |
+| 特定命名空间 | `SCF_Namespace:default` |
+| 时间范围 | `SCF_StartTime:>1722756000000 AND SCF_StartTime:<1722763200000` |
+
+### 权限要求
+
+| 操作 | 所需权限 |
+|------|----------|
+| 查看 CLS 日志 (控制台) | `QcloudCLSReadOnlyAccess` |
+| 调用 CLS API | `QcloudCLSReadOnlyAccess` |
+| SCF 默认日志 | 已自动配置（无需额外设置）|
+
+### 计费说明
+
+- CLS 有免费额度（10U/月，约10元）
+- SCF 专用日志主题会占用 CLS 免费额度
+- 日志默认保留7天
+
+### CLS 日志集/主题命名
+
+| 类型 | 命名规则 |
+|------|----------|
+| 日志集 | `SCF_logset` (SCF 专用) |
+| 日志主题 | `SCF_logtopic_{函数名}_{命名空间}` |
+
+### 注意事项
+
+1. **requestId 获取**：通常在函数响应、错误信息或客户端日志中可以找到
+2. **时间范围**：建议结合 `SCF_StartTime` 缩小查询范围
+3. **跨地域**：CLS 日志集地域需与 SCF 函数地域一致
+4. **索引配置**：新建 SCF 函数时会自动配置索引，无需手动开启
+

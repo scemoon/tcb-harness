@@ -3,7 +3,7 @@ from pathlib import Path
 
 _FR_TAG_RE = re.compile(r"@(?P<prefix>[A-Z]+)-FR-(?P<number>\d+)")
 _SCENARIO_RE = re.compile(r"^\s*(Scenario|Scenario Outline|Scenario Template)\s*:")
-_TAG_CATEGORY_RE = re.compile(r"@(?P<cat>positive|negative|edge)")
+_TAG_CATEGORY_RE = re.compile(r"@(?P<cat>positive|negative|edge|logic)")
 
 
 def _find_feature_files(root: Path) -> list[Path]:
@@ -90,7 +90,8 @@ def run_bdd_check(root: Path) -> dict:
         positive = sum(1 for s in scenarios if "positive" in s["tags"])
         negative = sum(1 for s in scenarios if "negative" in s["tags"])
         edge = sum(1 for s in scenarios if "edge" in s["tags"])
-        categories = {"positive": positive, "negative": negative, "edge": edge}
+        logic = sum(1 for s in scenarios if "logic" in s["tags"])
+        categories = {"positive": positive, "negative": negative, "edge": edge, "logic": logic}
 
         missing = [cat for cat, count in categories.items() if count == 0]
         if missing:
@@ -102,7 +103,7 @@ def run_bdd_check(root: Path) -> dict:
         checks.append({
             "name": "bdd-fr-coverage",
             "status": "pass",
-            "message": f"FRs with complete coverage (positive+negative+edge): {', '.join(frs_ok)}",
+            "message": f"FRs with complete coverage (positive+negative+edge+logic): {', '.join(frs_ok)}",
         })
 
     for fr, missing, categories in frs_with_issues:

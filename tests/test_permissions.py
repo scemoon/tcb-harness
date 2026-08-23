@@ -96,6 +96,28 @@ class TestPermissionStore:
         store.apply_to(agent2)
         assert agent2.permission_edit == AgentPermission.DENY  # DENY preserved!
 
+    def test_apply_to_skips_permissions_locked_agent(self):
+        """PlanAgent is permissions_locked: PermissionStore overrides must
+        never touch it, even to ALLOW."""
+        store = PermissionStore()
+        store.set_override("edit", AgentPermission.ALLOW)
+        store.set_override("bash", AgentPermission.ALLOW)
+
+        plan = PlanAgent()
+        assert plan.permissions_locked is True
+        store.apply_to(plan)
+        assert plan.permission_edit == AgentPermission.DENY
+        assert plan.permission_bash == AgentPermission.DENY
+
+    def test_solo_agent_not_locked(self):
+        """SoloAgent stays overridable by the permission store."""
+        store = PermissionStore()
+        store.set_override("bash", AgentPermission.ALLOW)
+        solo = SoloAgent()
+        assert solo.permissions_locked is False
+        store.apply_to(solo)
+        assert solo.permission_bash == AgentPermission.ALLOW
+
 
 # ── _check_tool_permission integration tests ───────────────────────────────
 
@@ -407,3 +429,69 @@ class TestContextStatsPersistence:
         assert usage["total_tokens"] == 999
         assert usage["input_tokens"] == 0
         assert usage["output_tokens"] == 0
+
+
+# ── Agent instruction templates (set_agent assembly) ───────────────────────
+
+
+class TestAgentInstructionTemplates:
+    """set_agent() must assemble self-contained templates for plan/solo and
+    skip the generic gate + response-style assembly for them."""
+
+    def _make_engine(self):
+        from onecode.agent.engine import AgentEngine
+
+        class FakeApp:
+            config = type("cfg", (), {
+                "default_provider": "minimaxi",
+                "default_model": "minimax-m1-671b",
+                "max_tokens": 4096,
+                "providers": {},
+            })()
+
+        return AgentEngine(FakeApp(), project_dir=Path.cwd())
+
+    def _system_text(self, engine) -> str:
+        return "\n".join(
+            m.content for m in engine.context.messages
+            if m.role == "system" and isinstance(m.content, str)
+        )
+
+    def test_set_agent_solo_uses_solo_template(self):
+        engine = self._make_engine()
+        engine.set_agent("solo")
+        prompt = self._system_text(engine)
+        assert "Solo Agent (Execution)" in prompt
+        assert "APPROVED_PLAN" in prompt
+        assert "Verification before done" in prompt
+        assert "Output a plan as Markdown first" not in prompt  # no PLAN_GATE_SOFT
+        assert "File edits require user approval" not in prompt  # restrictions already in template
+
+    def test_set_agent_plan_uses_plan_template(self):
+        engine = self._make_engine()
+        engine.set_agent("plan")
+        prompt = self._system_text(engine)
+        assert "Plan Agent" in prompt
+        assert "Output a plan as Markdown first" not in prompt  # no PLAN_GATE_SOFT
+
+    def test_set_agent_build_uses_build_template(self):
+        engine = self._make_engine()
+        engine.set_agent("build")
+        prompt = self._system_text(engine)
+        assert "Build Agent (Development)" in prompt
+        assert "Verification before done" in prompt  # verification discipline embedded
+        assert "Output a brief inline plan as Markdown" in prompt  # soft-gate semantics moved into template
+        assert "Output a plan as Markdown first" not in prompt  # no static PLAN_GATE_SOFT
+        assert "File edits require user approval" not in prompt  # restrictions section skipped
+        assert prompt.count("require user approval") == 1  # no duplication with description
+
+    def test_plan_handoff_switches_to_solo_and_injects_approved_plan(self):
+        engine = self._make_engine()
+        engine.set_agent("plan")
+        engine._todo_manager.create_todo("Fix the widget", "Test agent handoff")
+        engine._plan_handoff(plan_path=None)
+        assert engine.current_agent.name == "solo"
+        prompt = self._system_text(engine)
+        assert "<!-- APPROVED_PLAN -->" in prompt
+        assert "Fix the widget" in prompt
+        assert engine._todo_manager.list_todos()  # todos preserved across handoff

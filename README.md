@@ -125,9 +125,11 @@ Logs live at `~/.cdh/logs/cdh.log` (daily-rotated) and can be inspected with
 | `/onecode:skill list` | List installed skills with status |
 | `/onecode:skill enable\|disable <name\|n>` | Toggle a skill (number from the list) |
 | `/onecode:skill add\|remove <name>` | Scaffold or delete a skill |
-| `/onecode:mcp list` | List configured MCP servers |
+| `/onecode:mcp list` | List configured MCP servers (opencode-style `~/.onecode/mcp.json`) |
 | `/onecode:mcp enable\|disable\|remove <name\|n>` | Manage a server |
-| `/onecode:mcp add <name> <url>` | Add an SSE MCP server |
+| `/onecode:mcp add <name> [URL]` | Smart add (local/remote) with `{env:VAR}` and `{file:PATH:KEY}` templates |
+| `/onecode:mcp auth\|logout\|debug\|migrate <name>` | OAuth, diagnostics, and `mcps.yaml` -> `mcp.json` migration |
+| `/onecode:cloudbase init\|status\|logout` | Tencent CloudBase MCP shortcut |
 | `/clear` | Clear chat log |
 | `/theme` | Toggle dark/light theme |
 

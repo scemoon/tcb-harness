@@ -14,29 +14,57 @@ tcb login
 
 ## MCP Server (Auto-Configured)
 
-The `@cloudbase/cloudbase-mcp` package provides structured tool access. When this skill is enabled, onecode automatically configures and connects the CloudBase MCP server using credentials from environment variables or `~/.cloud-harness-tokens.json`.
+The `@cloudbase/cloudbase-mcp` package provides structured tool access. When this skill is enabled, onecode automatically registers a CloudBase MCP entry in `~/.onecode/mcp.json` (opencode-style declarative config) and connects it using credentials from environment variables or `~/.cloud-harness-tokens.json`.
 
-**Quick setup:**
+**Quick setup (recommended):**
 ```
-cdh cloudbase init --secret-id xxx --secret-key xxx
-```
-
-**Check status:**
-```
-cdh cloudbase status
+cdh cloudbase init --secret-id xxx --secret-key xxx --env-id xxx
 ```
 
-**Manual config** (alternative to auto-config):
+The opencode-style entry written to `~/.onecode/mcp.json`:
+
+```json
+{
+  "mcp": {
+    "cloudbase": {
+      "type": "local",
+      "command": ["npx", "-y", "@cloudbase/cloudbase-mcp@latest"],
+      "environment": {
+        "TENCENTCLOUD_SECRETID": "{env:TENCENTCLOUD_SECRETID}",
+        "TENCENTCLOUD_SECRETKEY": "{env:TENCENTCLOUD_SECRETKEY}",
+        "CLOUDBASE_ENV_ID": "{env:CLOUDBASE_ENV_ID}"
+      },
+      "enabled": true
+    }
+  }
+}
+```
+
+`{env:VAR}` references are resolved at connect time, so the same config works whether credentials are exported in the environment or stored in the tokens file (which is consulted automatically by `_discover_credentials()`).
+
+**Status / diagnostics:**
+```
+cdh cloudbase status          # probe + tool count
+cdh mcp debug cloudbase       # full config dump + auth state + live probe
+```
+
+**Manual config (alternative to auto-config):**
 
 stdio:
 ```
-/onecode:mcp add cloudbase --type stdio --command npx --args @cloudbase/cloudbase-mcp@latest --env TENCENTCLOUD_SECRETID=xxx,TENCENTCLOUD_SECRETKEY=xxx
+cdh mcp add cloudbase --type stdio \
+  --command npx,-y,@cloudbase/cloudbase-mcp@latest \
+  --env TENCENTCLOUD_SECRETID={env:TENCENTCLOUD_SECRETID},TENCENTCLOUD_SECRETKEY={env:TENCENTCLOUD_SECRETKEY}
 ```
 
-HTTP:
+HTTP (hosted mode):
 ```
-/onecode:mcp add cloudbase --type http --url https://tcb-api.cloud.tencent.com/mcp/v1?env_id=xxx --headers X-TencentCloud-SecretId=xxx
+cdh mcp add cloudbase --type http \
+  --url https://tcb-api.cloud.tencent.com/mcp/v1?env_id=xxx \
+  --headers X-TencentCloud-SecretId={env:TENCENTCLOUD_SECRETID}
 ```
+
+**OAuth (for future remote servers):** `cdh mcp auth <name>` opens a flow and stores the token in `~/.onecode/mcp-auth.json`; `cdh mcp logout <name>` clears it.
 
 ### Agent Tools (MCP)
 

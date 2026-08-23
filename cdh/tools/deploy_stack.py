@@ -228,7 +228,7 @@ def deploy_preview(
 
         if provider == "tcb" and available:
             # Real TCB function deploy
-            fn_cmd: list[str] = ["tcb", "fn", "deploy", "--json"]
+            fn_cmd: list[str] = ["tcb", "fn", "deploy", "--json", "--yes"]
             if region:
                 fn_cmd += ["-r", region]
             if tags:
@@ -282,7 +282,7 @@ def deploy_preview(
 
         if provider == "tcb" and available and comp in ("web",):
             # Use tcb deploy for web frontend
-            deploy_cmd = ["tcb", "deploy", f"--cwd={comp_dir}", "--json"]
+            deploy_cmd = ["tcb", "deploy", f"--cwd={comp_dir}", "--json", "--yes"]
             if region:
                 deploy_cmd += ["-r", region]
             rc, out, err = _run_step(f"{comp}-tcb-deploy", deploy_cmd, cwd=project_root, dry_run=dry_run)

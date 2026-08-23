@@ -154,6 +154,8 @@ class Agent(AgentBase):
     def command(self) -> str | None:
         """The command used to launch the agent, or `None` if there isn't one."""
         acp_command = tui.get_os_matrix(self._agent_data["run_command"])
+        if acp_command and acp_command.startswith("python3 "):
+            acp_command = f"{sys.executable} {acp_command[7:]}"
         return acp_command
 
     @property
@@ -328,6 +330,7 @@ class Agent(AgentBase):
                     options=update.get("options", []),
                     questions=update.get("questions", []),
                     tool_id=update.get("toolId", ""),
+                    checkpoint_id=update.get("checkpointId", ""),
                 ))
 
             case {
@@ -338,6 +341,7 @@ class Agent(AgentBase):
                     questions=questions,
                     context=update.get("context", ""),
                     tool_id=update.get("toolId", ""),
+                    checkpoint_id=update.get("checkpointId", ""),
                 ))
 
             case {
@@ -529,14 +533,14 @@ class Agent(AgentBase):
         }
         return result
 
-    def send_ask_user_answer(self, answer: str, cancelled: bool) -> None:
+    def send_ask_user_answer(self, answer: str, cancelled: bool, rollback: bool = False) -> None:
         """Send the user's answer back to the CDHA agent."""
         import uuid
 
         request = {
             "jsonrpc": "2.0",
             "method": "session/ask_user_answer",
-            "params": {"answer": answer, "cancelled": cancelled},
+            "params": {"answer": answer, "cancelled": cancelled, "rollback": rollback},
             "id": str(uuid.uuid4()),
         }
         if self._process is not None and self._process.stdin is not None:
@@ -794,6 +798,14 @@ class Agent(AgentBase):
         if self._process is not None:
             try:
                 self._process.terminate()
+                try:
+                    await asyncio.wait_for(self._process.wait(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    try:
+                        self._process.kill()
+                        await asyncio.wait_for(self._process.wait(), timeout=2.0)
+                    except (OSError, asyncio.TimeoutError):
+                        pass
             except OSError:
                 pass
 
@@ -829,7 +841,7 @@ class Agent(AgentBase):
                     )
                 else:
                     reason = "Failed to initialize agent"
-                    details = ""
+                    details = str(error)
                 self.post_message(AgentFail(reason, details))
         elif self.session_id is None:
             await self.acp_new_session()
@@ -932,6 +944,7 @@ class Agent(AgentBase):
             )
         response = await session_new_response.wait()
         assert response is not None
+        print(f"[DEBUG acp_new_session] response keys={list(response.keys())!r}, modes={response.get('modes')!r}", flush=True)
         self.session_id = response["sessionId"]
 
         if self.supports_load_session:
@@ -1142,6 +1155,15 @@ class Agent(AgentBase):
             response = api.session_clear_todos(self.session_id)
         result = await response.wait()
         return result or {"cleared": False}
+
+    async def compact(self) -> dict | None:
+        """Compact the context via the session/compact RPC."""
+        if self.session_id is None:
+            return None
+        with self.request():
+            response = api.session_compact(self.session_id)
+        result = await response.wait()
+        return result
 
     async def set_session_name(self, name: str) -> None:
         if self.session_pk is None:

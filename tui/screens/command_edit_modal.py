@@ -9,7 +9,7 @@ from textual import getters
 class CommandEditModal(ModalScreen[str | None]):
     BINDINGS = [
         ("ctrl+c", "copy", "Copy"),
-        ("escape", "dismiss", "Dismiss", False),
+        ("escape", "dismiss", "Dismiss"),
     ]
     AUTO_FOCUS = "Button"
 

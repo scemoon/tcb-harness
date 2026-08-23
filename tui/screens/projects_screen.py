@@ -14,7 +14,6 @@ from tui.app import A2TUIApp
 from tui.widgets.grid_select import GridSelect
 from tui.widgets.project_grid_select import ProjectGridSelect
 from tui.widgets.project_summary import ProjectSummary
-from tui.screens.component_picker import ComponentPickerScreen
 
 
 CONFIRM_TIMEOUT = 5.0
@@ -50,7 +49,11 @@ class ProjectsScreen(ModalScreen[str]):
     def compose(self) -> ComposeResult:
         with containers.Center(id="title-container"):
             yield widgets.Label("Projects")
-        yield widgets.Static(INSTRUCTIONS_NO_PROJECTS, classes="instructions")
+        yield widgets.Static(
+            INSTRUCTIONS_NO_PROJECTS,
+            classes="instructions",
+            id="instructions-label",
+        )
         yield ProjectGridSelect()
         with containers.Horizontal(id="actions"):
             yield widgets.Button("+ New Project", id="new-project", variant="primary")
@@ -101,7 +104,21 @@ class ProjectsScreen(ModalScreen[str]):
             self.notify("Project file not found", severity="error")
             return
         widget.remove()
+        if not self.project_grid_select.children:
+            self._show_instructions()
         self.notify(f"Deleted project: {project_name}")
+
+    def _hide_instructions(self) -> None:
+        try:
+            self.query_one("#instructions-label", widgets.Static).add_class("-hidden")
+        except Exception:
+            pass
+
+    def _show_instructions(self) -> None:
+        try:
+            self.query_one("#instructions-label", widgets.Static).remove_class("-hidden")
+        except Exception:
+            pass
 
     def action_new_project(self) -> None:
         from pathlib import Path
@@ -113,7 +130,7 @@ class ProjectsScreen(ModalScreen[str]):
             self._on_new_project_path,
         )
 
-    def _on_new_project_path(self, path_str: str | None) -> None:
+    async def _on_new_project_path(self, path_str: str | None) -> None:
         from pathlib import Path
 
         if not path_str:
@@ -129,29 +146,7 @@ class ProjectsScreen(ModalScreen[str]):
                 severity="warning",
             )
             return
-        self.app.push_screen(
-            ComponentPickerScreen(
-                title="New Project — Select Components",
-                subtitle=(
-                    f"Project path: {target}\n"
-                    "Cross-cutting items (contracts, shared types, etc.) are created automatically."
-                ),
-                allow_empty=False,
-            ),
-            lambda picked: self._on_new_project_components(target, picked),
-        )
-
-    async def _on_new_project_components(
-        self,
-        target: "Path",
-        picked: list[str] | None,
-    ) -> None:
-        if picked is None:
-            self.notify("New project cancelled", severity="warning")
-            return
-        if not picked:
-            return
-        await self._do_new_project(target, picked)
+        await self._do_new_project(target, [])
 
     async def _do_new_project(
         self,
@@ -182,9 +177,9 @@ class ProjectsScreen(ModalScreen[str]):
         import yaml
         proj_data = {"name": name, "path": str(target), "description": ""}
         proj_file.write_text(yaml.dump(proj_data))
-        summary = ProjectSummary(name, str(target), id=name)
-        await self.project_grid_select.mount(summary)
+        await self.project_grid_select.reload()
         self.project_grid_select.highlighted = len(self.project_grid_select.children) - 1
+        self._hide_instructions()
         self.notify(
             f"Created project '{name}' at {target} "
             f"(components: {', '.join(components)})"
@@ -256,9 +251,9 @@ class ProjectsScreen(ModalScreen[str]):
         proj_file = projects_dir / f"{name}.yaml"
         proj_data = {"name": name, "path": str(target), "description": ""}
         proj_file.write_text(yaml.dump(proj_data))
-        summary = ProjectSummary(name, str(target), id=name)
-        await self.project_grid_select.mount(summary)
+        await self.project_grid_select.reload()
         self.project_grid_select.highlighted = len(self.project_grid_select.children) - 1
+        self._hide_instructions()
         suffix = (
             f" (components: {', '.join(components)})"
             if components

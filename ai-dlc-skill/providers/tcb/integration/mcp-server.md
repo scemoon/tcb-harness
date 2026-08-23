@@ -26,13 +26,39 @@ The official TCB MCP server provides tools for:
 
 ## Connection Methods
 
-### stdio (Recommended for local)
+### Auto-Configuration via CDH (Recommended)
+
+```bash
+cdh cloudbase init --secret-id xxx --secret-key xxx --env-id xxx
+```
+
+This writes the opencode-style entry to `~/.onecode/mcp.json` (with `{env:VAR}` templates that resolve at connect time) and stores the credentials in `~/.cloud-harness-tokens.json`.
+
+The resulting `mcp.json` entry:
+
+```json
+{
+  "mcp": {
+    "cloudbase": {
+      "type": "local",
+      "command": ["npx", "-y", "@cloudbase/cloudbase-mcp@latest"],
+      "environment": {
+        "TENCENTCLOUD_SECRETID": "{env:TENCENTCLOUD_SECRETID}",
+        "TENCENTCLOUD_SECRETKEY": "{env:TENCENTCLOUD_SECRETKEY}",
+        "CLOUDBASE_ENV_ID": "{env:CLOUDBASE_ENV_ID}"
+      },
+      "enabled": true
+    }
+  }
+}
+```
+
+### stdio (Manual)
 
 ```bash
 cdh mcp add cloudbase --type stdio \
-  --command npx \
-  --args "@cloudbase/cloudbase-mcp@latest" \
-  --env TENCENTCLOUD_SECRETID=xxx,TENCENTCLOUD_SECRETKEY=xxx
+  --command npx,-y,@cloudbase/cloudbase-mcp@latest \
+  --env TENCENTCLOUD_SECRETID={env:TENCENTCLOUD_SECRETID},TENCENTCLOUD_SECRETKEY={env:TENCENTCLOUD_SECRETKEY}
 ```
 
 ### HTTP (For remote servers)
@@ -40,16 +66,18 @@ cdh mcp add cloudbase --type stdio \
 ```bash
 cdh mcp add cloudbase --type http \
   --url "https://tcb-api.cloud.tencent.com/mcp/v1?env_id=xxx" \
-  --headers "X-TencentCloud-SecretId=xxx,X-TencentCloud-SecretKey=xxx"
+  --headers "X-TencentCloud-SecretId={env:TENCENTCLOUD_SECRETID}"
 ```
 
-### Auto-Configuration via CDH
+### Diagnostic / OAuth
 
 ```bash
-cdh cloudbase init --secret-id xxx --secret-key xxx
+cdh cloudbase status          # live probe + tool count
+cdh mcp debug cloudbase       # full config dump + live probe
+cdh mcp migrate               # one-shot: mcps.yaml -> mcp.json (legacy)
+cdh mcp auth <name>           # OAuth flow (for future remote servers)
+cdh mcp logout <name>         # clear stored OAuth token
 ```
-
-This auto-configures MCP and stores credentials in `~/.cloud-harness-tokens.json`.
 
 ## MCP Tools Reference
 

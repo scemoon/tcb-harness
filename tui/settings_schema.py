@@ -428,4 +428,40 @@ SCHEMA: list[SchemaDict] = [
             },
         ],
     },
+    {
+        "key": "ollama",
+        "title": "Ollama (Local Models)",
+        "help": "Configuration for Ollama local model provider. Ollama must be installed and running.",
+        "type": "object",
+        "fields": [
+            {
+                "key": "endpoint",
+                "title": "Ollama Endpoint",
+                "help": "Ollama server endpoint",
+                "type": "string",
+                "default": "http://localhost:11434",
+            },
+            {
+                "key": "auto_download",
+                "title": "Auto Download",
+                "help": "Automatically download model when not installed",
+                "type": "boolean",
+                "default": True,
+            },
+            {
+                "key": "auto_select",
+                "title": "Auto Select Model",
+                "help": "Automatically select best model based on hardware",
+                "type": "boolean",
+                "default": True,
+            },
+            {
+                "key": "hardware_info",
+                "title": "Hardware Detection",
+                "help": "Detected hardware capabilities",
+                "type": "string",
+                "default": "",
+            },
+        ],
+    },
 ]

@@ -1,19 +1,28 @@
-"""Tests for the auto-ask detection fix: LLM outputs question as plain text + tool calls.
+"""Tests for the auto-ask detection fix.
 
-Verifies that when the LLM outputs a question mark (？ or ?) AND also generates
-tool calls, the engine intercepts before tool execution and yields ask_user
-instead of running tools.
+Verifies that when the LLM asks the user a question, the engine intercepts
+before tool execution and yields ask_user instead of running tools or forcing
+continuation.
 
-Bug scenario (pre-fix):
+Bug scenarios (pre-fix):
   - LLM outputs: "请问要升级哪个用户？" + tool calls (e.g., Read users)
-  - System executes tools while user is still reading the question
-  - User input gets queued (turn == "agent")
+    → System executes tools while user is still reading the question
+  - LLM outputs a plain-text question with NO tool calls
+    → Turn is treated as empty, FORCE_CONTINUE nudging kicks in, and the
+      user's input gets queued (turn == "agent") instead of answering.
 
 Fix (post-fix):
-  - LLM outputs question + tool calls
-  - Engine detects question mark BEFORE tool execution
-  - Engine yields ask_user and waits for user answer
-  - Tools are deferred to the next LLM turn after user answers
+  - Question detected via shared detection (question_detect.py):
+    semantic intent + syntax (question marks).
+  - With tool calls: loose detection (a question mark in the FINAL sentence,
+    or intent) — an aside ``?`` in the middle of the output does not fire.
+  - Without tool calls: strict detection (trailing question mark or intent)
+    so a plain question turn becomes an AskUser dialog.
+  - The ACP adapter's end-of-turn fallback also uses strict detection, so
+    prose that merely contains a question mark does not pop an AskUser
+    dialog every turn (auto-ask fires only when the agent actually asks).
+  - Engine yields ask_user and waits for user answer.
+  - Tools are deferred to the next LLM turn after user answers.
 """
 
 from __future__ import annotations
@@ -50,11 +59,15 @@ def _make_engine():
 
 
 class TestAutoAskDetectionLogic:
-    """Unit-test the _is_auto_ask boolean condition with various inputs.
+    """Unit-test the auto-ask interception with various inputs.
 
-    Detection uses two layers:
-    - Layer 1: Semantic (Thought intent) — explicit "need user input" signals
+    Detection uses two layers (shared with the ACP adapter fallback):
+    - Layer 1: Semantic (intent) — explicit "need user input" signals
     - Layer 2: Syntax (punctuation) — question marks as fallback
+
+    Since the fix, a plain-text question also intercepts when the LLM made
+    NO tool calls (strict detection: trailing question mark or intent), so
+    the turn becomes an AskUser dialog instead of forcing continuation.
     """
 
     @pytest.mark.parametrize("text,has_tools,expected", [
@@ -154,118 +167,60 @@ class TestAutoAskDetectionLogic:
         # 普通陈述句，无问号无语义信号
         ("好的，我来帮你升级VIP。", True, False),
         ("Looking at the codebase...", True, False),
-        # No tools — our path doesn't apply
-        ("请问要升级哪个用户？", False, False),
-        ("请选择要升级的用户", False, False),
-        ("Could you tell me which user to upgrade", False, False),
+        # ── No tool calls: the turn should STILL intercept as AskUser ──
+        # (question-only turns previously fell into the empty-turn nudging
+        # loop and the user's input went to the prompt queue)
+        ("请问要升级哪个用户？", False, True),
+        ("请选择要升级的用户", False, True),
+        ("请确认是否继续", False, True),
+        ("要升级哪个用户?", False, True),
+        ("Which user to upgrade?", False, True),
+        ("Could you tell me which user to upgrade", False, True),
+        ("Do you want me to continue", False, True),
+        # ── No tool calls: self-talk / statements must NOT intercept ──
+        ("让我先读取用户列表", False, False),
+        ("让我想想这个问题", False, False),
+        ("好的，我来帮你升级VIP。", False, False),
+        ("First I'll check the user list", False, False),
+        ("Looking at the codebase...", False, False),
+        # ── On-demand behavior: only real closing questions trigger ──
+        # A question mark buried in the MIDDLE of the output (aside,
+        # rhetorical, code) must not fire auto-ask on every turn.
+        ("先看一下代码？好的，我来读取文件并执行操作", True, False),
+        ("你可能会问为什么这么做。我先执行任务", True, False),
+        ("先确认一下？随后我直接运行", True, False),
+        ("a ? b : c 这种三元表达式很正常", True, False),
+        # A question that CLOSES the turn still triggers, even when it is
+        # preceded by prose or tool calls.
+        ("我已经读取了文件，接下来要修改哪个文件？", True, True),
+        ("好的，我来执行。你确定要删除这个文件？", True, True),
+        ("执行完毕，需要我继续下一步吗？", True, True),
+        # Statement ending with a fullwidth colon is NOT a question.
+        ("操作步骤如下：", True, False),
+        ("让我列出所有选项：", True, False),
         # Empty
         ("", True, False),
         (None, True, False),
     ])
     def test_is_auto_ask_condition(self, text, has_tools, expected):
-        """The detection fires via semantic or syntax layer when tool calls are present."""
-        import re
+        """The detection fires via semantic or syntax layer, with and without tool calls."""
+        from onecode.agent.question_detect import looks_like_question
+
         clean_text = text.rstrip() if text else ""
         tool_uses = [{"id": "tu-1", "name": "Read", "input": {}}] if has_tools else []
 
-        # Semantic layer
-        _SEMANTIC_NEEDS_INPUT = [
-            r"需要用户", r"需要您", r"需要您提供",
-            r"请确认", r"请选择", r"询问您", r"问您",
-            r"需要确认", r"需要知道", r"请告诉我",
-            r"等待您的", r"需要.*信息", r"需要哪些参数",
-            r"请提供", r"请问要", r"请问您", r"需要.*id",
-            r"哪个用户", r"哪个文件", r"什么参数", r"如何处理",
-            r"could you (tell me|confirm|provide|let me know)",
-            r"i need to know",
-            r"please (confirm|tell me|specify|provide|select|choose)",
-            r"which .*(user|file|parameter|option|setting)",
-            r"what .*(parameter|user|file|option|setting)",
-            r"what should i",
-            r"which (file|user|option|one)",
-            r"should i (proceed|continue|upgrade|execute)",
-            r"do you want (me to|to)",
-            r"can you (tell me|confirm|specify)",
-            r"let me know (which|what|if|whether)",
-            r"i'?m not sure (which|what|who|how)",
-            r"you('d| would) like (me to|to)",
-            r"would you like (me to|to)",
-            r"(could i|may i) get (the|your)",
-            r"pick (a|an|the)",
-            r"choose (a|an|the|which)",
-            r"what'?s the (user|file|path|parameter)",
-            r"which one",
-            r"confirm the (user|file|path|parameter)",
-            r"specify (the|which|what)",
-            r"what .*(file|user|path|parameter)",
-            r"which .*should i",
-            r"(do you|would you|should i)",
-        ]
-        _SEMANTIC_SELF_TALK = [
-            r"^让我想想", r"^我需要先", r"^我可以先",
-            r"^首先", r"^然后", r"^接下来", r"^好的",
-            r"自言自语", r"我在想", r"我在考虑",
-            r"让我先", r"我先来", r"先执行",
-            r"^let me (think|check|read|look|find|see)",
-            r"^i('ll| will| can| should)?( be)? (checking|reading|looking|finding|seeing|thinking)",
-            r"^first(ly)?(,| )?(i('ll| will| can| should)?)?",
-            r"^then(,| )?(i('ll| will| can| should)?)?",
-            r"^next(,| )?(i('ll| will| can| should)?)?",
-            r"^okay(|,| ) (so|let me|i('ll| will| can| should)?)",
-            r"^alright(|,| ) (so|let me|i('ll| will| can| should)?)",
-            r"^sure(|,| ) (so|let me|i('ll| will| can| should)?)",
-            r"^sounds good(|,| )",
-            r"^i('ll| will| can| should)?( go ahead| start| begin| proceed| execute)",
-            r"^i('ll| will| can| should)?( need to| have to| want to) (check|read|look|find|see|think|consider|proceed|execute|verify|confirm|fix|update|change|add|remove)",
-            r"^i('m| am)( going to| about to)?",
-            r"^looks like",
-            r"^it seems (like|that)",
-            r"^based on",
-            r"^let me just",
-            r"^i('ll| will)? just (check|read|look|find|see|try)",
-            r"^i think (that )?",
-            r"^i believe (that )?",
-            r"i('m| am) thinking (about|that)",
-            r"i('m| am) considering",
-            r"^here('s| is)",
-            r"^so(,| )? i('ll| will| can| should)?",
-            r"^okay so",
-            r"i need to consider",
-        ]
+        # Same composition as the engine: tool calls relax the syntax check,
+        # no tool calls require a strict (trailing/intent) question signal.
+        _is_auto_ask = bool(tool_uses and looks_like_question(clean_text, strict=False))
+        if not _is_auto_ask and not tool_uses:
+            _is_auto_ask = bool(clean_text and looks_like_question(clean_text, strict=True))
 
-        _thought_needs_input = False
-        for p in _SEMANTIC_SELF_TALK:
-            if re.search(p, clean_text, re.IGNORECASE):
-                _thought_needs_input = False
-                break
-        else:
-            for p in _SEMANTIC_NEEDS_INPUT:
-                if re.search(p, clean_text, re.IGNORECASE):
-                    _thought_needs_input = True
-                    break
-
-        # Syntax layer
-        _stripped = clean_text.rstrip() if clean_text else ""
-        _prev_cjk_or_fullwidth = (
-            len(_stripped) >= 2 and
-            ('\u4e00' <= _stripped[-2] <= '\u9fff' or '\u3000' <= _stripped[-2] <= '\u303f')
-        )
-        _syntax_has_question = bool(
-            _stripped and (
-                _stripped.endswith('\uff1f') or
-                (_stripped.endswith('?') and _prev_cjk_or_fullwidth) or
-                _stripped.endswith('：') or
-                '?' in _stripped
-            )
-        )
-
-        _is_auto_ask = bool(_stripped and tool_uses and (_thought_needs_input or _syntax_has_question))
-
-        assert _is_auto_ask == expected, f"text={text!r}, has_tools={has_tools}, _thought_needs_input={_thought_needs_input}, _syntax_has_question={_syntax_has_question}"
+        assert _is_auto_ask == expected, f"text={text!r}, has_tools={has_tools}"
 
     def test_semantic_detection_coverage(self):
         """Verify semantic patterns cover the upgradeToVip scenario."""
-        import re
+        from onecode.agent.question_detect import semantic_needs_input
+
         # The user's original scenario: "请问要升级哪个用户的VIP？"
         scenarios = [
             ("请问要升级哪个用户的VIP？", True, "fullwidth question mark"),
@@ -278,83 +233,8 @@ class TestAutoAskDetectionLogic:
             ("好的，我来升级VIP", False, "self-talk: 好的"),
         ]
 
-        _SEMANTIC_NEEDS_INPUT = [
-            r"需要用户", r"需要您", r"需要您提供",
-            r"请确认", r"请选择", r"询问您", r"问您",
-            r"需要确认", r"需要知道", r"请告诉我",
-            r"等待您的", r"需要.*信息", r"需要哪些参数",
-            r"请提供", r"请问要", r"请问您", r"需要.*id",
-            r"哪个用户", r"哪个文件", r"什么参数", r"如何处理",
-            r"could you (tell me|confirm|provide|let me know)",
-            r"i need to know",
-            r"please (confirm|tell me|specify|provide|select|choose)",
-            r"which .*(user|file|parameter|option|setting)",
-            r"what .*(parameter|user|file|option|setting)",
-            r"what should i",
-            r"which (file|user|option|one)",
-            r"should i (proceed|continue|upgrade|execute)",
-            r"do you want (me to|to)",
-            r"can you (tell me|confirm|specify)",
-            r"let me know (which|what|if|whether)",
-            r"i'?m not sure (which|what|who|how)",
-            r"you('d| would) like (me to|to)",
-            r"would you like (me to|to)",
-            r"(could i|may i) get (the|your)",
-            r"pick (a|an|the)",
-            r"choose (a|an|the|which)",
-            r"what'?s the (user|file|path|parameter)",
-            r"which one",
-            r"confirm the (user|file|path|parameter)",
-            r"specify (the|which|what)",
-            r"what .*(file|user|path|parameter)",
-            r"which .*should i",
-            r"(do you|would you|should i)",
-        ]
-        _SEMANTIC_SELF_TALK = [
-            r"^让我想想", r"^我需要先", r"^我可以先",
-            r"^首先", r"^然后", r"^接下来", r"^好的",
-            r"自言自语", r"我在想", r"我在考虑",
-            r"让我先", r"我先来", r"先执行",
-            r"^let me (think|check|read|look|find|see)",
-            r"^i('ll| will| can| should)?( be)? (checking|reading|looking|finding|seeing|thinking)",
-            r"^first(ly)?(,| )?(i('ll| will| can| should)?)?",
-            r"^then(,| )?(i('ll| will| can| should)?)?",
-            r"^next(,| )?(i('ll| will| can| should)?)?",
-            r"^okay(|,| ) (so|let me|i('ll| will| can| should)?)",
-            r"^alright(|,| ) (so|let me|i('ll| will| can| should)?)",
-            r"^sure(|,| ) (so|let me|i('ll| will| can| should)?)",
-            r"^sounds good(|,| )",
-            r"^i('ll| will| can| should)?( go ahead| start| begin| proceed| execute)",
-            r"^i('ll| will| can| should)?( need to| have to| want to) (check|read|look|find|see|think|consider|proceed|execute|verify|confirm|fix|update|change|add|remove)",
-            r"^i('m| am)( going to| about to)?",
-            r"^looks like",
-            r"^it seems (like|that)",
-            r"^based on",
-            r"^let me just",
-            r"^i('ll| will)? just (check|read|look|find|see|try)",
-            r"^i think (that )?",
-            r"^i believe (that )?",
-            r"i('m| am) thinking (about|that)",
-            r"i('m| am) considering",
-            r"^here('s| is)",
-            r"^so(,| )? i('ll| will| can| should)?",
-            r"^okay so",
-            r"i need to consider",
-        ]
-
         for text, expected, desc in scenarios:
-            _thought_needs_input = False
-            for p in _SEMANTIC_SELF_TALK:
-                if re.search(p, text, re.IGNORECASE):
-                    _thought_needs_input = False
-                    break
-            else:
-                for p in _SEMANTIC_NEEDS_INPUT:
-                    if re.search(p, text, re.IGNORECASE):
-                        _thought_needs_input = True
-                        break
-
-            assert _thought_needs_input == expected, f"{desc}: {text!r}"
+            assert semantic_needs_input(text) == expected, f"{desc}: {text!r}"
 
 
 class TestAutoAskResolveApproval:
@@ -408,39 +288,38 @@ class TestAutoAskEventSequence:
     """
 
     def test_is_auto_ask_true_triggers_branch(self):
-        """When _is_auto_ask is True, the code should take the interception branch."""
-        engine = _make_engine()
+        """When detection fires, the code should take the interception branch —
+        including question-only turns with NO tool calls."""
+        from onecode.agent.question_detect import looks_like_question
 
-        # The detection condition should evaluate correctly
+        # Question + tool calls (loose detection)
         clean_text = "请问要升级哪个用户？"
         tool_uses = [{"id": "tu-1", "name": "Read", "input": {}}]
+        assert bool(tool_uses and looks_like_question(clean_text.rstrip(), strict=False)) is True
 
-        _is_auto_ask = bool(
-            clean_text and tool_uses and (
-                clean_text.rstrip().endswith('\uff1f') or
-                (clean_text.rstrip().endswith('?') and len(clean_text.rstrip()) >= 2
-                 and '\u4e00' <= clean_text.rstrip()[-2] <= '\u9fff')
-            )
-        )
-
+        # Plain question, NO tool calls (strict detection)
+        clean_text = "Which user should I upgrade?"
+        tool_uses = []
+        _is_auto_ask = bool(tool_uses and looks_like_question(clean_text, strict=False))
+        if not _is_auto_ask and not tool_uses:
+            _is_auto_ask = bool(clean_text and looks_like_question(clean_text, strict=True))
         assert _is_auto_ask is True
 
     def test_is_auto_ask_false_allows_normal_flow(self):
-        """When _is_auto_ask is False, the code proceeds normally."""
-        engine = _make_engine()
+        """When detection does not fire, the code proceeds normally."""
+        from onecode.agent.question_detect import looks_like_question
 
-        # Normal text without question mark
+        # Normal text without question signal
         clean_text = "好的，我来读取用户列表。"
         tool_uses = [{"id": "tu-1", "name": "Read", "input": {}}]
+        assert bool(tool_uses and looks_like_question(clean_text, strict=False)) is False
 
-        _is_auto_ask = bool(
-            clean_text and tool_uses and (
-                clean_text.rstrip().endswith('\uff1f') or
-                (clean_text.rstrip().endswith('?') and len(clean_text.rstrip()) >= 2
-                 and '\u4e00' <= clean_text.rstrip()[-2] <= '\u9fff')
-            )
-        )
-
+        # Self-talk, no tool calls (must NOT intercept)
+        clean_text = "让我先读取用户列表"
+        tool_uses = []
+        _is_auto_ask = bool(tool_uses and looks_like_question(clean_text, strict=False))
+        if not _is_auto_ask and not tool_uses:
+            _is_auto_ask = bool(clean_text and looks_like_question(clean_text, strict=True))
         assert _is_auto_ask is False
 
     def test_fake_ask_user_tool_call_id_format(self):
@@ -483,52 +362,12 @@ class TestAutoAskEventSequence:
     def test_auto_ask_preserves_thinking_blocks(self):
         """When thinking blocks exist alongside a question, they should be
         included in the assistant_blocks so they survive session reload."""
-        import re
+        from onecode.agent.question_detect import looks_like_question
         thinking_blocks = ["Let me think about this..."]
         clean_text = "请问要升级哪个用户？"
         tool_uses = [{"id": "tu-1", "name": "Read", "input": {}}]
 
-        _SEMANTIC_NEEDS_INPUT = [
-            r"需要用户", r"需要您", r"需要您提供",
-            r"请确认", r"请选择", r"询问您", r"问您",
-            r"需要确认", r"需要知道", r"请告诉我",
-            r"等待您的", r"需要.*信息", r"需要哪些参数",
-            r"请提供", r"请问要", r"请问您", r"需要.*id",
-            r"哪个用户", r"哪个文件", r"什么参数", r"如何处理",
-        ]
-        _SEMANTIC_SELF_TALK = [
-            r"^让我想想", r"^我需要先", r"^我可以先",
-            r"^首先", r"^然后", r"^接下来", r"^好的",
-            r"自言自语", r"我在想", r"我在考虑",
-            r"让我先", r"我先来", r"先执行",
-        ]
-
-        _thought_needs_input = False
-        for p in _SEMANTIC_SELF_TALK:
-            if re.search(p, clean_text):
-                _thought_needs_input = False
-                break
-        else:
-            for p in _SEMANTIC_NEEDS_INPUT:
-                if re.search(p, clean_text):
-                    _thought_needs_input = True
-                    break
-
-        _stripped = clean_text.rstrip() if clean_text else ""
-        _prev_cjk_or_fullwidth = (
-            len(_stripped) >= 2 and
-            ('\u4e00' <= _stripped[-2] <= '\u9fff' or '\u3000' <= _stripped[-2] <= '\u303f')
-        )
-        _syntax_has_question = bool(
-            _stripped and (
-                _stripped.endswith('\uff1f') or
-                (_stripped.endswith('?') and _prev_cjk_or_fullwidth) or
-                _stripped.endswith('：') or
-                '?' in _stripped
-            )
-        )
-        _is_auto_ask = bool(_stripped and tool_uses and (_thought_needs_input or _syntax_has_question))
-
+        _is_auto_ask = bool(tool_uses and looks_like_question(clean_text, strict=False))
         assert _is_auto_ask is True
 
         # Simulate what the code does with thinking blocks

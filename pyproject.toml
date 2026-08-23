@@ -33,6 +33,7 @@ dependencies = [
     "textual-diff-view==0.1.5",
     "typing-extensions==4.15.0",
     "agenttrace>=0.1.2",
+    "tencentcloud-sdk-python>=3.0.0",
 ]
 
 [project.scripts]
@@ -75,6 +76,7 @@ dev = [
     "pyinstrument>=5.1.1",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
+    "pytest-bdd>=8.0.0",
     "pytest-cov>=6.0.0",
     "ruff>=0.15.21",
     "textual-dev>=1.8.0",

@@ -20,13 +20,79 @@ class EditFieldScreen(ModalScreen[str]):
 
     CSS = """
     EditFieldScreen { background: rgba(0,0,0,0.7); align: center middle; }
-    #edit-dialog { width: 50; height: 7; background: #111; border: solid #555; }
-    #edit-label { height: 1; background: #333; color: #fff; padding: 0 1; }
-    #edit-input { height: 3; padding: 0 1; background: #111; color: #fff; }
-    #edit-buttons { height: 3; background: #222; align: center middle; }
-    Button { margin: 0 1; background: #444; color: #fff; }
-    Button:hover { background: #666; }
-    Button:focus { background: #555; }
+
+    #edit-dialog {
+        width: 60;
+        height: auto;
+        background: $surface;
+        border: solid $border;
+        padding: 0 1;
+    }
+
+    #edit-label {
+        height: 1;
+        background: $panel;
+        color: $text;
+        padding: 0 1;
+        text-style: bold;
+    }
+
+    #edit-input {
+        height: 3;
+        margin: 1 0;
+        padding: 0 1;
+        background: $surface;
+        color: $text;
+        border: tall $border;
+    }
+
+    #edit-input:focus {
+        border: tall $primary;
+    }
+
+    #edit-input > .input--selection {
+        background: $primary;
+        color: $text;
+    }
+
+    #edit-input > .input--cursor {
+        background: $primary;
+        color: $text;
+        text-style: bold;
+    }
+
+    #edit-input Input.-placeholder {
+        color: $text-muted;
+    }
+
+    #edit-buttons {
+        height: 3;
+        background: $panel;
+        align: center middle;
+    }
+
+    Button {
+        margin: 0 1;
+        background: $panel;
+        color: $text;
+    }
+
+    Button:hover {
+        background: $primary-darken-2;
+    }
+
+    Button:focus {
+        background: $primary-darken-1;
+    }
+
+    #edit-save {
+        background: $primary-background;
+        color: $text;
+    }
+
+    #edit-save:hover {
+        background: $primary-darken-1;
+    }
     """
 
     def compose(self) -> ComposeResult:
@@ -35,12 +101,10 @@ class EditFieldScreen(ModalScreen[str]):
             yield Input(value=self.current_value, id="edit-input")
             with Horizontal(id="edit-buttons"):
                 yield Button("Cancel", id="edit-cancel")
-                yield Button("Save", id="edit-save")
+                yield Button("Save", id="edit-save", variant="primary")
 
     def on_mount(self) -> None:
-        inp = self.query_one("#edit-input", Input)
-        inp.selection_color = "#000"
-        inp.selection_background = "#fff"
+        self.query_one("#edit-input", Input).focus()
 
     @on(Button.Pressed, "#edit-save")
     def on_save(self) -> None:

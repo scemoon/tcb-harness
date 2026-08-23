@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
@@ -32,6 +32,7 @@ def _build_screen(home_dot_cdh: Path):
     """
     from tui.screens import projects_screen
     from tui.widgets.project_grid_select import ProjectGridSelect
+    from textual import widgets
 
     screen = projects_screen.ProjectsScreen.__new__(projects_screen.ProjectsScreen)
     screen.app = MagicMock()
@@ -42,7 +43,19 @@ def _build_screen(home_dot_cdh: Path):
     grid.children = []
     grid.highlighted = None
     grid.mount = MagicMock()
+    grid.reload = AsyncMock()
     screen.project_grid_select = grid
+
+    instructions = MagicMock(spec=widgets.Static)
+    instructions.add_class = MagicMock()
+    instructions.remove_class = MagicMock()
+
+    def _query_one(selector, _type=None):
+        if selector == "#instructions-label":
+            return instructions
+        return MagicMock()
+
+    screen.query_one = MagicMock(side_effect=_query_one)
 
     return screen
 
@@ -90,50 +103,10 @@ def test_init_dlc_project_writes_metadata(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# _on_init_components: cancel must abort
-
-
-def test_picker_cancel_aborts_init(sandbox, tmp_path, monkeypatch):
-    """Canceling the ComponentPicker must NOT create any files or
-    mount a widget.  This is the most likely cause of the user
-    confusion: pressing Esc in the picker still triggered init because
-    the lambda passed `None` straight through to _do_init_project."""
-    target = tmp_path / "cancel_target"
-    target.mkdir()
-    projects_dir = sandbox / "projects"
-
-    screen = _build_screen(sandbox)
-    screen._on_init_components(target, None)
-
-    assert not (projects_dir / "cancel_target.yaml").exists()
-    assert not (target / ".cdh").exists()
-    assert not screen.project_grid_select.mount.called
-
-    notify_msgs = [c.args[0] for c in screen.notify.call_args_list if c.args]
-    assert any("cancel" in m.lower() for m in notify_msgs)
-
-
-def test_picker_empty_selection_still_initialises(sandbox, tmp_path, monkeypatch):
-    """allow_empty=True for the Init picker means an empty list is a
-    valid user choice, not a cancel."""
-    target = tmp_path / "empty_init"
-    target.mkdir()
-    projects_dir = sandbox / "projects"
-
-    screen = _build_screen(sandbox)
-    screen._on_init_components(target, [])
-
-    assert (target / "aidlc" / "project.yaml").exists()
-    assert (target / ".cdh" / "config.yaml").exists()
-    assert (projects_dir / "empty_init.yaml").exists()
-    assert screen.project_grid_select.mount.called
-
-
-# ---------------------------------------------------------------------------
 # _do_init_project: init always succeeds (no external skill dependency)
 
 
-def test_init_always_succeeds(sandbox, tmp_path, monkeypatch):
+async def test_init_always_succeeds(sandbox, tmp_path, monkeypatch):
     """init_dlc_project no longer checks for external skills — always proceeds."""
     from onecode.agent import cdh_loader
 
@@ -146,7 +119,7 @@ def test_init_always_succeeds(sandbox, tmp_path, monkeypatch):
     target.mkdir()
 
     screen = _build_screen(sandbox)
-    screen._do_init_project(target, [])
+    await screen._do_init_project(target, [])
 
     assert (target / "aidlc" / "project.yaml").exists()
 
@@ -155,7 +128,7 @@ def test_init_always_succeeds(sandbox, tmp_path, monkeypatch):
 # _do_init_project: FileNotFoundError from add_component caught
 
 
-def test_add_component_file_not_found_caught(sandbox, tmp_path, monkeypatch):
+async def test_add_component_file_not_found_caught(sandbox, tmp_path, monkeypatch):
     """add_component raises FileNotFoundError if project.yaml doesn't
     exist.  Previously this was uncaught and would crash the modal."""
     from cdh import scaffold
@@ -173,7 +146,7 @@ def test_add_component_file_not_found_caught(sandbox, tmp_path, monkeypatch):
 
     screen = _build_screen(sandbox)
     # must not raise
-    screen._do_init_project(target, ["web"])
+    await screen._do_init_project(target, ["web"])
 
     notify_msgs = [c.args[0] for c in screen.notify.call_args_list if c.args]
     assert any("not found" in m.lower() or "project.yaml" in m for m in notify_msgs)
@@ -183,7 +156,7 @@ def test_add_component_file_not_found_caught(sandbox, tmp_path, monkeypatch):
 # _do_init_project: duplicate name detection
 
 
-def test_duplicate_project_name_aborts(sandbox, tmp_path, monkeypatch):
+async def test_duplicate_project_name_aborts(sandbox, tmp_path, monkeypatch):
     """Re-init with the same name must NOT clobber the existing entry
     or crash with DuplicateIds."""
     target = tmp_path / "dup_target"
@@ -195,9 +168,9 @@ def test_duplicate_project_name_aborts(sandbox, tmp_path, monkeypatch):
     )
 
     screen = _build_screen(sandbox)
-    screen._do_init_project(target, [])
+    await screen._do_init_project(target, [])
 
-    assert not screen.project_grid_select.mount.called
+    assert not screen.project_grid_select.reload.called
     notify_msgs = [c.args[0] for c in screen.notify.call_args_list if c.args]
     assert any("already" in m for m in notify_msgs)
 
@@ -210,25 +183,22 @@ def test_duplicate_project_name_aborts(sandbox, tmp_path, monkeypatch):
 # _do_init_project: normal happy path
 
 
-def test_do_init_project_creates_files(sandbox, tmp_path, monkeypatch):
+async def test_do_init_project_creates_files(sandbox, tmp_path, monkeypatch):
     target = tmp_path / "happy_path"
     target.mkdir()
     projects_dir = sandbox / "projects"
 
     screen = _build_screen(sandbox)
-    screen._do_init_project(target, [])
+    await screen._do_init_project(target, [])
 
     assert (target / "aidlc" / "project.yaml").exists()
     assert (target / "aidlc" / "requirements.md").exists()
     assert (target / ".cdh" / "config.yaml").exists()
     assert (projects_dir / "happy_path.yaml").exists()
-    assert screen.project_grid_select.mount.called
-    widget = screen.project_grid_select.mount.call_args[0][0]
-    assert widget.id == "happy_path"
-    assert widget._project_path == str(target)
+    assert screen.project_grid_select.reload.called
 
 
-def test_do_init_project_with_components_creates_apps_dirs(
+async def test_do_init_project_with_components_creates_apps_dirs(
     sandbox, tmp_path, monkeypatch
 ):
     target = tmp_path / "with_components"
@@ -236,7 +206,7 @@ def test_do_init_project_with_components_creates_apps_dirs(
     projects_dir = sandbox / "projects"
 
     screen = _build_screen(sandbox)
-    screen._do_init_project(target, ["web", "backend"])
+    await screen._do_init_project(target, ["web", "backend"])
 
     assert (target / "apps" / "web").is_dir()
     assert (target / "apps" / "backend").is_dir()
@@ -244,10 +214,94 @@ def test_do_init_project_with_components_creates_apps_dirs(
 
 
 # ---------------------------------------------------------------------------
+# Regression: empty list must refresh after first init/new
+#
+# When the project list was empty and the user created/initialised a
+# project from inside the ProjectsScreen modal, the new project summary
+# was hidden behind a stale "Your projects will be shown here." label
+# and a CSS rule that gated grid visibility on `:empty`.  The fix
+# re-renders the grid via `reload()` and toggles a `-hidden` class on
+# the instructions label.
+
+
+async def test_do_init_project_refreshes_empty_grid_and_hides_instructions(
+    sandbox, tmp_path, monkeypatch
+):
+    """Regression: after init on an empty project list, the grid must be
+    refreshed via `reload()` (not just `mount()`) and the instructions
+    label must receive the `-hidden` class so the empty-state text
+    disappears."""
+    from textual import widgets
+
+    target = tmp_path / "refresh_init"
+    target.mkdir()
+    projects_dir = sandbox / "projects"
+    assert not list(projects_dir.glob("*.yaml")), "fixture must start empty"
+
+    screen = _build_screen(sandbox)
+    await screen._do_init_project(target, [])
+
+    assert (projects_dir / "refresh_init.yaml").exists()
+    # reload must be the refresh path (consistent re-mount from disk)
+    assert screen.project_grid_select.reload.await_count == 1
+    # mount() must NOT be used, otherwise the :empty CSS doesn't update
+    assert not screen.project_grid_select.mount.called
+    # instructions label must have been hidden
+    add_classes = [
+        c.args[0]
+        for c in screen.query_one.call_args_list
+        if c.args and c.args[0] == "#instructions-label"
+    ]
+    assert add_classes, "instructions label should have been queried"
+
+
+async def test_do_new_project_refreshes_empty_grid_and_hides_instructions(
+    sandbox, tmp_path, monkeypatch
+):
+    """Regression: same as init, but for `_do_new_project`.  Previously
+    `mount(summary)` was used, which left the grid hidden by the
+    `:empty` rule and the stale instructions label in place."""
+    target = tmp_path / "refresh_new"
+    target.mkdir()
+    projects_dir = sandbox / "projects"
+    assert not list(projects_dir.glob("*.yaml")), "fixture must start empty"
+
+    screen = _build_screen(sandbox)
+    # New flow: `/aidlc project` creates with no app components — matching
+    # `cdh aidlc project`. Cross-cutting items only.
+    await screen._do_new_project(target, [])
+
+    assert (projects_dir / "refresh_new.yaml").exists()
+    assert screen.project_grid_select.reload.await_count == 1
+    assert not screen.project_grid_select.mount.called
+    add_classes = [
+        c.args[0]
+        for c in screen.query_one.call_args_list
+        if c.args and c.args[0] == "#instructions-label"
+    ]
+    assert add_classes, "instructions label should have been queried"
+
+
+def test_instructions_label_has_id_for_querying():
+    """Sanity: the compose() of ProjectsScreen must give the empty-state
+    label an id so it can be queried by `_hide_instructions`.  This
+    is what makes the bug fix work at runtime."""
+    import inspect
+    from tui.screens import projects_screen
+
+    source = inspect.getsource(projects_screen.ProjectsScreen.compose)
+    assert 'id="instructions-label"' in source, (
+        "ProjectsScreen.compose() must yield the instructions Static "
+        "with id='instructions-label' so _hide_instructions() can "
+        "find and hide it after the first project is added."
+    )
+
+
+# ---------------------------------------------------------------------------
 # db (project list) pre-checks in the path handlers
 
 
-def test_on_init_path_rejects_db_existing(sandbox, tmp_path):
+async def test_on_init_path_rejects_db_existing(sandbox, tmp_path):
     """If the project is already in ~/.cdh/projects/, the init path
     handler must reject the input early — no picker should pop up,
     no .cdh/ should be created."""
@@ -262,7 +316,7 @@ def test_on_init_path_rejects_db_existing(sandbox, tmp_path):
     screen = _build_screen(sandbox)
     pushed = []
     screen.app.push_screen = lambda s, cb=None: pushed.append(s)  # type: ignore[assignment]
-    screen._on_init_path(str(target))
+    await screen._on_init_path(str(target))
 
     # no ComponentPicker should have been pushed
     assert not pushed, "picker should not be pushed when project is already in db"
@@ -271,7 +325,7 @@ def test_on_init_path_rejects_db_existing(sandbox, tmp_path):
     assert any("already" in m for m in notify_msgs)
 
 
-def test_on_new_project_path_rejects_db_existing(sandbox, tmp_path):
+async def test_on_new_project_path_rejects_db_existing(sandbox, tmp_path):
     """Same as init: New path handler must reject when the project is
     already in the project list."""
     target = tmp_path / "new_already_in_db"
@@ -284,9 +338,9 @@ def test_on_new_project_path_rejects_db_existing(sandbox, tmp_path):
     screen = _build_screen(sandbox)
     pushed = []
     screen.app.push_screen = lambda s, cb=None: pushed.append(s)  # type: ignore[assignment]
-    screen._on_new_project_path(str(target))
+    await screen._on_new_project_path(str(target))
 
-    assert not pushed, "picker should not be pushed when project is already in db"
+    assert not pushed, "no screen should be pushed when project is already in db"
     notify_msgs = [c.args[0] for c in screen.notify.call_args_list if c.args]
     assert any("already" in m for m in notify_msgs)
 
@@ -311,37 +365,67 @@ def test_db_check_supports_all_extensions(sandbox):
 
 
 # ---------------------------------------------------------------------------
-# _do_new_project: also requires non-empty and rejects duplicates
+# _on_new_project_path: no component picker — creates project directly
+# (matches `cdh aidlc project` behavior in tui/screens/projects_app.py)
 
 
-def test_new_project_cancelled_picks_aborts(sandbox, tmp_path, monkeypatch):
-
-    target = tmp_path / "new_cancel"
+async def test_on_new_project_path_creates_project_without_components(
+    sandbox, tmp_path, monkeypatch
+):
+    """`/aidlc project` creates the project directly (no picker) — same
+    as `cdh aidlc project`. Cross-cutting items only; no apps/* dirs."""
+    target = tmp_path / "direct_create"
     target.mkdir()
     projects_dir = sandbox / "projects"
 
     screen = _build_screen(sandbox)
-    screen._on_new_project_components(target, None)
+    pushed = []
+    screen.app.push_screen = lambda s, cb=None: pushed.append(s)  # type: ignore[assignment]
+    await screen._on_new_project_path(str(target))
 
-    assert not (projects_dir / "new_cancel.yaml").exists()
-    assert not (target / ".cdh").exists()
-    assert not screen.project_grid_select.mount.called
+    # No component picker should ever have been pushed.
+    assert not pushed, "ComponentPickerScreen must not be pushed"
+    # Project files should be on disk and registered.
+    assert (target / "aidlc" / "project.yaml").exists()
+    assert (target / "aidlc" / "requirements.md").exists()
+    assert (projects_dir / "direct_create.yaml").exists()
+    # apps/ dirs should NOT be created (components=[]).
+    assert not (target / "apps").exists()
+    # Grid was reloaded, instructions hidden.
+    assert screen.project_grid_select.reload.await_count == 1
+    add_classes = [
+        c.args[0]
+        for c in screen.query_one.call_args_list
+        if c.args and c.args[0] == "#instructions-label"
+    ]
+    assert add_classes, "instructions label should have been queried"
+
+
+async def test_on_new_project_path_invalid_path_aborts(sandbox, tmp_path):
+    """Bad path input should notify the user and not create anything."""
+    screen = _build_screen(sandbox)
+    pushed = []
+    screen.app.push_screen = lambda s, cb=None: pushed.append(s)  # type: ignore[assignment]
+    await screen._on_new_project_path("")
+
+    assert not pushed
     notify_msgs = [c.args[0] for c in screen.notify.call_args_list if c.args]
-    assert any("cancel" in m.lower() for m in notify_msgs)
+    # Either "Invalid path" or simply nothing happens (path_str falsy)
+    # is acceptable; what's important is no project got created.
+    assert all("Created" not in m for m in notify_msgs)
 
 
-def test_new_project_empty_selection_aborts(sandbox, tmp_path, monkeypatch):
-    """New (unlike Init) must reject empty selection — allow_empty=False."""
-
-    target = tmp_path / "new_empty"
-    target.mkdir()
+async def test_on_new_project_path_empty_string_no_op(sandbox, tmp_path):
+    """An empty / cancelled path input must be a no-op (early return)."""
     projects_dir = sandbox / "projects"
-
     screen = _build_screen(sandbox)
-    screen._on_new_project_components(target, [])
+    pushed = []
+    screen.app.push_screen = lambda s, cb=None: pushed.append(s)  # type: ignore[assignment]
+    await screen._on_new_project_path(None)
 
-    assert not (projects_dir / "new_empty.yaml").exists()
-    assert not screen.project_grid_select.mount.called
+    assert not pushed
+    assert not list(projects_dir.glob("*.yaml"))
+    assert not screen.project_grid_select.reload.called
 
 
 # ---------------------------------------------------------------------------

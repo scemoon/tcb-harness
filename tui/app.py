@@ -316,6 +316,19 @@ class A2TUIApp(App, inherit_bindings=False):
         self.temporary_background_screen: Screen | None = None
 
         super().__init__()
+
+        import signal
+        from functools import partial
+
+        def _sig_handler(signum: int, frame) -> None:
+            import logging
+            logger = logging.getLogger("tui.app")
+            logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+            self.action_quit()
+
+        signal.signal(signal.SIGINT, _sig_handler)
+        signal.signal(signal.SIGTERM, _sig_handler)
+
         if project_dir:
             self.project_dir = Path(project_dir).expanduser().resolve()
         else:
@@ -782,6 +795,27 @@ class A2TUIApp(App, inherit_bindings=False):
                 return agent
         return None
 
+    def _launch_new_session_for_project(self, project_path: Path | None) -> bool:
+        """Open a fresh agent session/tab rooted at *project_path*.
+
+        Used by ``/aidlc project`` (load/new/init) and the projects modal so
+        that switching to a new project always lands the user in a new tab
+        with a brand-new agent session bound to the new project.
+
+        Returns ``True`` if a new session was launched, ``False`` otherwise
+        (e.g. no launch agent configured).
+        """
+        agent_identity = self._resolve_launch_agent()
+        if not agent_identity:
+            self.notify(
+                "No launch agent configured (set 'launcher.agents' in settings)",
+                title="New session",
+                severity="warning",
+            )
+            return False
+        self.launch_agent(agent_identity, project_path=project_path)
+        return True
+
     async def on_mount(self) -> None:
         self.capture_event("tui-run")
         self.anon_id  # Created on frst reference
@@ -796,36 +830,6 @@ class A2TUIApp(App, inherit_bindings=False):
             )
         else:
             project_path = Path(self.project_dir)
-            # Check project-level .cdh/last_session.json
-            from cdh.project_loader import CdhProjectLoader
-            cdh_dir = CdhProjectLoader.find_cdh_dir(project_path)
-            if cdh_dir:
-                last_session = CdhProjectLoader.load_last_session(cdh_dir)
-                if last_session and last_session.get("agent_session_id"):
-                    agent_session_id = last_session["agent_session_id"]
-                    session_pk = last_session.get("session_pk")
-                    agent_identity = last_session.get("agent_identity")
-                    if agent_identity and session_pk:
-                        db = DB()
-                        session = await db.session_get(session_pk)
-                        if session:
-                            self.launch_agent(
-                                session["agent_identity"],
-                                agent_session_id=session["agent_session_id"],
-                                session_pk=session["id"],
-                            )
-                            return
-                    if agent_identity:
-                        try:
-                            from tui.agents import read_agents
-                            if agent_identity in await read_agents():
-                                self.launch_agent(
-                                    agent_identity,
-                                    agent_session_id=agent_session_id,
-                                )
-                                return
-                        except Exception:
-                            pass
 
             if agent_identity := self._resolve_launch_agent():
                 self.launch_agent(agent_identity, project_path=project_path)
@@ -851,10 +855,6 @@ class A2TUIApp(App, inherit_bindings=False):
         if self.settings.get("ui.auto_copy", bool):
             if (selection := self.screen.get_selected_text()) is not None:
                 self.copy_to_clipboard(selection)
-                self.notify(
-                    "Copied selection to clipboard (see settings)",
-                    title="Automatic copy",
-                )
 
     def run_on_exit(self):
         pass
@@ -917,7 +917,7 @@ class A2TUIApp(App, inherit_bindings=False):
             getattr(agent, "session_id", None) if agent else None
         ) or getattr(conv, "_agent_session_id", None)
 
-    def action_quit(self) -> None:
+    async def action_quit(self) -> None:
         """An [action](/guide/actions) to quit the app as soon as possible."""
 
         self.screen.set_focus(None)
@@ -928,12 +928,14 @@ class A2TUIApp(App, inherit_bindings=False):
                 driver.stop_application_mode()
         except Exception:
             pass
+
+        if hasattr(self.screen, "conversation"):
+            conversation = self.screen.conversation
+            if agent := getattr(conversation, "agent", None):
+                asyncio.create_task(agent.stop())
+
         sid = (self._exit_metrics.get("session_id", "") or "")[:36] if self._exit_metrics else ""
         session_pk = self._exit_metrics.get("session_pk") if self._exit_metrics else None
-        # Format the session ID for display: prefer the short `cdh
-        # session list` form (`session-<pk>` + agent_session_id prefix)
-        # so the displayed value matches what users see in
-        # `cdh session list` and what they pass to `cdh session load`.
         if session_pk is not None:
             display_id = f"session-{session_pk} ({sid[:8]})" if sid else f"session-{session_pk}"
             hint = f"  Reload with: cdh session load {session_pk}\n"
@@ -943,16 +945,13 @@ class A2TUIApp(App, inherit_bindings=False):
         else:
             display_id = "-"
             hint = ""
-        try:
-            with open("/dev/tty", "w") as tty:
-                tty.write(
-                    f"\n  CDH powering down. Goodbye!\n"
-                    f"  Session ID: {display_id}\n"
-                    f"{hint}"
-                )
-        except Exception:
-            pass
         import os
+        msg = (
+            f"\n  CDH powering down. Goodbye!\n"
+            f"  Session ID: {display_id}\n"
+            f"{hint}"
+        ).encode()
+        os.write(1, msg)
         os._exit(0)
 
     def action_help_quit(self) -> None:
@@ -1106,7 +1105,9 @@ class A2TUIApp(App, inherit_bindings=False):
                 write_active_project(name, str(project_path))
                 self.project_dir = project_path
                 self.screen.post_message(messages.ProjectDirectoryUpdated(project_dir=self.project_dir))
-                self.notify(f"Created project '{name}' at {project_path}")
+                launched = self._launch_new_session_for_project(project_path)
+                suffix = " (new session opened)" if launched else ""
+                self.notify(f"Created project '{name}' at {project_path}{suffix}")
                 return
 
             project_name = result if isinstance(result, str) else getattr(result, 'name', None)
@@ -1125,7 +1126,9 @@ class A2TUIApp(App, inherit_bindings=False):
                     new_project_dir = Path(project_path) if project_path else Path.cwd()
                     self.project_dir = new_project_dir
                     self.screen.post_message(messages.ProjectDirectoryUpdated(project_dir=self.project_dir))
-                    self.notify(f"Switched to project: {project_name}")
+                    launched = self._launch_new_session_for_project(new_project_dir)
+                    suffix = " (new session opened)" if launched else ""
+                    self.notify(f"Switched to project: {project_name}{suffix}")
 
     @on(messages.LaunchAgent)
     def on_launch_agent(self, message: messages.LaunchAgent) -> None:

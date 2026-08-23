@@ -30,6 +30,8 @@ class MCPTool(Tool):
 
     def run(self, tool_input: dict[str, Any]) -> ToolResult:
         import asyncio
+        import logging
+        logger = logging.getLogger("onecode.agent.tools.mcp")
         server = tool_input.get("server", "")
         tool_name = tool_input.get("tool", "")
         args = tool_input.get("arguments", {})
@@ -45,11 +47,25 @@ class MCPTool(Tool):
                 future = asyncio.run_coroutine_threadsafe(
                     self._mcp.call_tool(server, tool_name, args), loop
                 )
-                result = future.result(timeout=60)
+                try:
+                    result = future.result(timeout=30)
+                except TimeoutError:
+                    return ToolResult(
+                        name="MCPTool",
+                        output={"error": f"MCP tool '{tool_name}' timed out after 30 seconds"},
+                        is_error=True,
+                    )
             else:
                 result = asyncio.run(self._mcp.call_tool(server, tool_name, args))
             return ToolResult(name="MCPTool", output=result or {"error": "no response"})
+        except TimeoutError:
+            return ToolResult(
+                name="MCPTool",
+                output={"error": f"MCP tool '{tool_name}' timed out after 30 seconds"},
+                is_error=True,
+            )
         except Exception as e:
+            logger.warning("MCP tool '%s' failed: %s", tool_name, e)
             return ToolResult(
                 name="MCPTool",
                 output={"error": str(e)},
@@ -111,6 +127,8 @@ class MCPResourcesTool(Tool):
 
     def run(self, tool_input: dict[str, Any]) -> ToolResult:
         import asyncio
+        import logging
+        logger = logging.getLogger("onecode.agent.tools.mcp")
         server = tool_input.get("server", "")
         action = tool_input.get("action", "list")
         uri = tool_input.get("uri", "")
@@ -134,14 +152,28 @@ class MCPResourcesTool(Tool):
                     future = asyncio.run_coroutine_threadsafe(
                         client.read_resource(uri), loop
                     )
-                result = future.result(timeout=60)
+                try:
+                    result = future.result(timeout=30)
+                except TimeoutError:
+                    return ToolResult(
+                        name="MCPResources",
+                        output={"error": f"MCP resources action '{action}' timed out after 30 seconds"},
+                        is_error=True,
+                    )
             else:
                 if action == "list":
                     result = asyncio.run(client.list_resources())
                 else:
                     result = asyncio.run(client.read_resource(uri))
             return ToolResult(name="MCPResources", output=result or {"error": "no response"})
+        except TimeoutError:
+            return ToolResult(
+                name="MCPResources",
+                output={"error": f"MCP resources action '{action}' timed out after 30 seconds"},
+                is_error=True,
+            )
         except Exception as e:
+            logger.warning("MCP resources '%s' failed: %s", action, e)
             return ToolResult(
                 name="MCPResources",
                 output={"error": str(e)},

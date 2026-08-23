@@ -40,10 +40,14 @@ class PermissionStore:
 
         Call this after ``set_agent()`` to restore the user's choices.
 
-        Hard-DENY settings on the agent (e.g. PlanAgent.permission_edit=DENY)
-        are never overridden — they represent an intentional mode-level
-        restriction that user overrides from another mode must not bypass.
+        Agents with ``permissions_locked`` (e.g. PlanAgent) are skipped
+        entirely — their permission set is an intentional mode-level
+        restriction (read-only plan gate) that user overrides from other
+        modes must never bypass, including fields that happen to be ASK
+        rather than hard-DENY.
         """
+        if getattr(agent, "permissions_locked", False):
+            return
         for perm_key, perm in self._overrides.items():
             attr_name = f"permission_{perm_key}"
             if hasattr(agent, attr_name):

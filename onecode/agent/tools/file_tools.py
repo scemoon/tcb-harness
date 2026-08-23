@@ -34,7 +34,7 @@ class ReadTool(Tool):
         limit = tool_input.get("limit", 0)
         content = self._file_ops.read(path, offset, limit)
         is_error = str(content).startswith("Error") or str(content).startswith("File not found")
-        return ToolResult(name="Read", output=str(content), is_error=is_error)
+        return ToolResult(name="Read", output=str(content), is_error=is_error, content_type="text")
 
 
 

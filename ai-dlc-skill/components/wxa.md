@@ -183,3 +183,37 @@ wx.cloud.callFunction({ name: 'login', data: {} });
 - **INT-FR-NNN**：跨组件行为（登录态同步、支付回调）需声明在 `contracts/` 中
 - **共享类型**：`aidlc/packages/shared/` 中的 OpenAPI 类型通过构建时生成注入
 - **Native/Desktop/Web**：各端独立构建，不共享 WXA 代码
+
+## Design System 规范
+
+### 必读规范
+| 规范 | 路径 |
+|------|------|
+| Design Tokens | `phases/plan/design_system/design_tokens.md` |
+| Atomic Design | `phases/plan/design_system/atomic_design.md` |
+| Component Spec | `phases/plan/design_system/component_spec.md` |
+| Accessibility | `phases/plan/design_system/accessibility.md` |
+| Theme System | `phases/plan/design_system/theme_system.md` |
+| WXA UI | `phases/plan/design_system/platform_ui/wxa.md` |
+| Iconography | `phases/plan/design_system/iconography.md` |
+
+### UI 组件库
+- **默认**: Vant Weapp
+- **主题定制**: 通过 CSS 变量覆盖
+
+### 主题色
+```css
+page {
+  --primary-color: #1989fa;
+  --success-color: #07c160;
+  --danger-color: #ee0a24;
+  --warning-color: #ff976a;
+}
+```
+
+### 组件分层
+- Atom: Button, Cell, Field, Icon
+- Molecule: CellGroup, SearchBar, Card
+- Organism: NavBar, Tabbar, List
+- Template: 页面布局模板
+- Page: 业务页面

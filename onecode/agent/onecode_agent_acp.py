@@ -14,6 +14,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from cdh.project_loader import CdhProjectLoader
 
 logger = logging.getLogger("onecode.agent.cdh_acp")
 
@@ -129,9 +130,9 @@ def _kind_for_category(cat: ToolCategory) -> str:
 _DEFAULT_MODES = {
     "currentModeId": "build",
     "availableModes": [
-        {"id": "build", "name": "Build", "description": "Full development agent. Edits and shell commands require user approval."},
+        {"id": "build", "name": "Build", "description": "Full development agent for direct requests. Plans briefly for complex work, then executes. Edits and shell commands require user approval."},
         {"id": "plan",  "name": "Plan",  "description": "Read-only planning and analysis. Edits and shell commands are denied."},
-        {"id": "solo",  "name": "Solo",  "description": "Independent mode with plan-first workflow. Edits allowed, shell commands require approval."},
+        {"id": "solo",  "name": "Solo",  "description": "Execution agent for approved plans (handoff from plan mode). Edits and shell commands require user approval."},
     ],
 }
 
@@ -515,9 +516,14 @@ def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
         return "No matching tools found."
     if "error" in parsed:
         return str(parsed["error"])
-    # Read: show actual file content (code fence + language wrapping in _emit_tool_result)
+    # Read: show actual file content (code fence + language wrapping in _emit_tool_result).
+    # FileOps.read returns plain text; only unwrap a structured {"content": ...} result,
+    # otherwise the raw text (which may itself be valid JSON, e.g. a .json file) must be
+    # shown verbatim — otherwise JSON-parsable files render as an empty card.
     if tool_name == "Read":
-        return parsed.get("content", "")
+        if "content" in parsed:
+            return parsed.get("content", "")
+        return result_text
     # Todo tools: collapse verbose state echoes to one-liner.
     if tool_name in _STATUS_ONLY_TOOLS:
         return "✓ updated"
@@ -734,6 +740,9 @@ class CDHACPAdapter:
         # from ``self.tool_calls`` so subagent tool cards never collide with
         # main-agent tool ids nor get persisted into the main session view).
         self._subagent_tool_calls: dict[str, dict] = {}
+        # AIDLC phase tracking: detect when agent is working on a phase
+        self._last_aidlc_phase: str = ""
+        self._phase_skill_detected: str = ""
 
     def _perm_store_load(self, cwd: str | None = None) -> None:
         """Load permission overrides from ``.cdh/permissions.json``."""
@@ -928,13 +937,13 @@ class CDHACPAdapter:
         else:
             info_log("[ACP-CANCEL] cancel_prompt called but self.agent is None")
 
-    def resolve_ask_user(self, answer: str, cancelled: bool) -> dict:
+    def resolve_ask_user(self, answer: str, cancelled: bool, rollback: bool = False) -> dict:
         """Resolve the pending ask_user request with the user's answer.
 
         Called from the main loop when a ``session/ask_user_answer`` request arrives.
         """
         if self._ask_user_future is not None and not self._ask_user_future.done():
-            self._ask_user_future.set_result({"answer": answer, "cancelled": cancelled})
+            self._ask_user_future.set_result({"answer": answer, "cancelled": cancelled, "rollback": rollback})
         return {"ok": True}
 
     def send_session_update(self, update: dict):
@@ -1267,6 +1276,35 @@ class CDHACPAdapter:
         if cdh_dir is None:
             return
         state = CdhProjectLoader.load_project_state(cdh_dir)
+
+        # Auto-advance phase if a phase skill was detected during this turn
+        phase_to_advance = ""
+        if self._phase_skill_detected:
+            phase_to_advance = self._phase_skill_detected
+        else:
+            # Check if any subagent was spawned for a phase
+            if self._subagent_fwd_count:
+                for subagent_type in self._subagent_fwd_count.keys():
+                    if subagent_type and subagent_type.startswith("ai-dlc-"):
+                        phase = subagent_type.replace("ai-dlc-", "")
+                        if phase in CdhProjectLoader._PHASE_SEQUENCE:
+                            phase_to_advance = phase
+                            break
+            # Fallback: check agent output for phase keywords
+            if not phase_to_advance and self._agent_text_output:
+                output_lower = self._agent_text_output.lower()
+                for phase in CdhProjectLoader._PHASE_SEQUENCE:
+                    if phase != "init" and phase in output_lower:
+                        phase_to_advance = phase
+                        break
+
+        if phase_to_advance:
+            current_phase = state.get("current_phase", "")
+            if phase_to_advance != current_phase:
+                CdhProjectLoader.advance_phase(self.agent._project_dir, phase_to_advance)
+                state = CdhProjectLoader.load_project_state(cdh_dir)
+            self._phase_skill_detected = ""
+
         self.send_session_update({
             "sessionUpdate": "aidlc_state",
             "current_phase": state.get("current_phase", ""),
@@ -1352,7 +1390,8 @@ class CDHACPAdapter:
 
         loaded = self.agent.load_session(session_id)
         cfg = load_config()
-        self.agent.set_agent(cfg.default_mode)
+        session_mode = self.agent._session.mode if self.agent._session else cfg.default_mode
+        self.agent.set_agent(session_mode)
         self._perm_store.apply_to(self.agent.current_agent)
         self._send_available_commands()
 
@@ -1365,9 +1404,10 @@ class CDHACPAdapter:
         self._emit_aidlc_state_to_tui()
 
         if not loaded:
+            storage_path = getattr(self.agent, "_session", None) and self.agent._session.storage_path
             return {
                 "modes": _DEFAULT_MODES,
-                "error": f"Session {session_id} not found at {self.agent._session.storage_path}",
+                "error": f"Session {session_id} not found at {storage_path}",
             }
 
         # Walk the in-memory context (preserves list-of-blocks structure)
@@ -1810,6 +1850,7 @@ class CDHACPAdapter:
         self._subagent_fwd_bytes = {}
         self._subagent_tool_calls = {}
         self._agent_text_output = ""
+        self._phase_skill_detected = ""
         info_log(
             "[ACP-PROMPT] entering chat_stream loop; agent._cancelled reset to "
             "False; session=%s", session_id,
@@ -1891,11 +1932,18 @@ class CDHACPAdapter:
                         "content": existing.get("content", []),
                         "_tool_name": event.tool_name,
                     }
-                        # Skip sending tool_call for Spawn tools — SubAgent widget
+                    # Skip sending tool_call for Spawn tools — SubAgent widget
                     # handles the display via subagent_start events.
                     if event.tool_name != "Spawn":
                         self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
+                    # Track AIDLC phase skill calls for auto-advance
+                    if event.tool_name == "Skill" and event.tool_args:
+                        skill_name = event.tool_args.get("name", "")
+                        if skill_name and skill_name.startswith("ai-dlc-"):
+                            phase = skill_name.replace("ai-dlc-", "")
+                            if phase in CdhProjectLoader._PHASE_SEQUENCE:
+                                self._phase_skill_detected = phase
                     self.send_session_event({
                         "type": "tool_executed",
                         "tool_name": event.tool_name,
@@ -1958,7 +2006,10 @@ class CDHACPAdapter:
                             "sessionUpdate": "tool_call_update",
                             "toolCallId": event.tool_id,
                             "title": title,
-                            "status": "pending",
+                            # Keep in_progress through execution — the tool is
+                            # still running until TOOL_RESULT flips it to
+                            # completed/failed (no pending/⌛ intermediate).
+                            "status": "in_progress",
                             "content": content,
                             "_tool_name": event.tool_name,
                             "_tool_args": event.tool_args,
@@ -2190,6 +2241,7 @@ class CDHACPAdapter:
                                 "questions": event.ask_questions,
                                 "context": event.ask_context or "",
                                 "toolId": event.tool_id,
+                                "checkpointId": getattr(event, "ask_checkpoint_id", "") or "",
                             })
                         else:
                             self.send_session_update({
@@ -2198,53 +2250,25 @@ class CDHACPAdapter:
                                 "context": event.ask_context or "",
                                 "options": event.ask_options,
                                 "toolId": event.tool_id,
+                                "checkpointId": getattr(event, "ask_checkpoint_id", "") or "",
                             })
-                        answer = ""
-                        cancelled = False
-                        # AskUser re-ask flow:
-                        #   1) send full question, wait up to 60s for response
-                        #   2) on timeout: send brief "请确认" reminder, wait 60s
-                        #   3) on second timeout: use the default/best option
-                        #      instead of cancelling, so the agent can keep going
-                        #      with a sensible default choice.
-                        _ASK_USER_REASK_TIMEOUT = 60
-                        _no_response = False
-                        for _attempt in range(2):
-                            try:
-                                self._ask_user_future = asyncio.get_event_loop().create_future()
-                                ask_response = await asyncio.wait_for(
-                                    self._ask_user_future,
-                                    timeout=_ASK_USER_REASK_TIMEOUT,
-                                )
-                                answer = ask_response.get("answer", "")
-                                cancelled = ask_response.get("cancelled", False)
-                                _no_response = False
-                                break
-                            except (asyncio.TimeoutError, Exception):
-                                if _attempt == 0:
-                                    # Brief re-ask: do NOT resend the full question
-                                    self.send_session_update({
-                                        "sessionUpdate": "ask_user_remind",
-                                        "text": "请确认？",
-                                        "toolId": event.tool_id,
-                                    })
-                                    _no_response = True
-                                    continue
-                                # Second timeout: pick the default option
-                                answer = self._pick_default_ask_user_answer(event)
-                                cancelled = False
-                                _no_response = True
-                            finally:
-                                self._ask_user_future = None
-                        if _no_response and not cancelled and answer:
-                            self.send_session_update({
-                                "sessionUpdate": "ask_user_default_used",
-                                "answer": answer,
-                                "toolId": event.tool_id,
-                            })
+
+                        is_plan_submit = getattr(event, "ask_plan_submit", False)
+                        answer, cancelled = await self._wait_for_ask_user_response(
+                            event, event.tool_id,
+                            is_plan_submit=is_plan_submit,
+                        )
+
                         result = await self.agent.resolve_approval(
                             approved=not cancelled, answer=answer,
                         )
+                        if is_plan_submit and cancelled:
+                            self.agent._cancelled = True
+                            self.send_session_update({
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": "计划已取消。会话结束。"},
+                            })
+                            return {"stopReason": "cancelled"}
                         if result:
                             tid = result.get("tool_use_id", "") or event.tool_id
                             rstr = result.get("content", "") or ""
@@ -2255,7 +2279,6 @@ class CDHACPAdapter:
                                   "content": rstr, "is_error": ierr}],
                                 name=tid,
                             )
-                            # Update TUI tool call status
                             status = "failed" if ierr else "completed"
                             content_block = [{
                                 "type": "content",
@@ -2264,6 +2287,7 @@ class CDHACPAdapter:
                             self.send_session_update({
                                 "sessionUpdate": "tool_call_update",
                                 "toolCallId": tid,
+                                "title": "AskUser",
                                 "status": status,
                                 "content": content_block,
                             })
@@ -2408,36 +2432,33 @@ class CDHACPAdapter:
         # user's response does not get lost in the prompt queue.
         # We then recursively call session_prompt with the answer to get an
         # immediate follow-up from the LLM.
+        #
+        # Detection shares the engine's semantic + syntax rules (question_detect)
+        # so both layers agree; the engine normally intercepts question-only
+        # turns before they get here, this is the last-chance fallback.
+        # Use the strict variant: the question must be signalled by intent or
+        # by trailing question punctuation, so ordinary prose that merely
+        # contains a question mark does not pop an AskUser dialog every turn.
         _auto_text = self._agent_text_output.rstrip()
-        _auto_is_q = False
-        if _auto_text.endswith('\uff1f'):  # fullwidth ？
-            _auto_is_q = True
-        elif _auto_text.endswith('?') and len(_auto_text) >= 2:
-            _prev = _auto_text[-2]
-            if '\u4e00' <= _prev <= '\u9fff' or '\u3000' <= _prev <= '\u303f':
-                _auto_is_q = True
+        from onecode.agent.question_detect import looks_like_question, compact_question
+        _auto_is_q = bool(_auto_text and looks_like_question(_auto_text, strict=True))
         if _auto_is_q and not self.agent._cancelled:
-            # Show a compact version of the question (last few hundred chars)
-            _q_idx = _auto_text.rfind('\uff1f')
-            if _q_idx < 0:
-                _q_idx = _auto_text.rfind('?')
-            _q_show = _auto_text
-            if _q_idx >= 0 and len(_auto_text) > 500:
-                _start = max(0, _q_idx - 200)
-                _prefix = "…" if _start > 0 else ""
-                _q_show = _prefix + _auto_text[_start:]
+            _q_show = compact_question(_auto_text)
             self.send_session_update({
                 "sessionUpdate": "ask_user",
                 "question": _q_show,
                 "toolId": "auto-text-ask",
             })
+            ask_cfg = getattr(self.agent.app.config, "ask_user", None)
+            _auto_timeout = getattr(ask_cfg, "timeout_seconds", 10) if ask_cfg else 10
+
             _auto_ans = ""
             _auto_cancelled = False
             for _attempt in range(2):
                 try:
                     self._ask_user_future = asyncio.get_event_loop().create_future()
                     _resp = await asyncio.wait_for(
-                        self._ask_user_future, timeout=60,
+                        self._ask_user_future, timeout=_auto_timeout,
                     )
                     _auto_ans = _resp.get("answer", "")
                     _auto_cancelled = _resp.get("cancelled", False)
@@ -2454,8 +2475,6 @@ class CDHACPAdapter:
                 finally:
                     self._ask_user_future = None
             if not _auto_cancelled and _auto_ans:
-                # Feed the answer as a new prompt so the LLM responds to it
-                # immediately, using the full streaming pipeline.
                 return await self.session_prompt(
                     prompt=[{"type": "text", "text": _auto_ans}],
                     session_id=session_id,
@@ -2541,6 +2560,89 @@ class CDHACPAdapter:
             return _pick(options)
         return ""
 
+    async def _wait_for_ask_user_response(
+        self,
+        event,
+        tool_id: str,
+        timeout_seconds: int | None = None,
+        use_default_on_timeout: bool | None = None,
+        is_plan_submit: bool = False,
+    ) -> tuple[str, bool]:
+        """Wait for AskUser response with configurable timeout and behavior.
+
+        Returns (answer, cancelled).
+
+        Non-multi-question AskUser (auto-ask, single question): stops session
+        immediately so user can type directly without waiting for timeout.
+
+        Multi-question AskUser (questions list): waits for user response since
+        the AskUser component will be invoked.
+
+        For plan_submit questions (is_plan_submit=True), timeout or cancellation
+        is treated as rejection — no default answer is used.
+        """
+        questions = getattr(event, "ask_questions", None)
+        if questions is None:
+            return "", True
+
+        ask_cfg = getattr(self.agent.app.config, "ask_user", None)
+        if timeout_seconds is None:
+            timeout_seconds = getattr(ask_cfg, "timeout_seconds", 10) if ask_cfg else 10
+        if use_default_on_timeout is None:
+            use_default_on_timeout = (
+                getattr(ask_cfg, "timeout_behavior", "use_default") == "use_default"
+            ) if ask_cfg else True
+
+        answer = ""
+        cancelled = False
+        _no_response = False
+
+        for _attempt in range(2):
+            try:
+                self._ask_user_future = asyncio.get_event_loop().create_future()
+                ask_response = await asyncio.wait_for(
+                    self._ask_user_future,
+                    timeout=timeout_seconds,
+                )
+                answer = ask_response.get("answer", "")
+                cancelled = ask_response.get("cancelled", False)
+                _no_response = False
+                break
+            except asyncio.TimeoutError:
+                if _attempt == 0:
+                    self.send_session_update({
+                        "sessionUpdate": "ask_user_remind",
+                        "text": "请确认？",
+                        "toolId": tool_id,
+                    })
+                    _no_response = True
+                    continue
+                # Second timeout: use default or cancel
+                _no_response = True
+                if is_plan_submit:
+                    cancelled = True
+                elif use_default_on_timeout:
+                    questions = getattr(event, "ask_questions", None) or []
+                    options = getattr(event, "ask_options", None) or []
+                    if questions or options:
+                        answer = self._pick_default_ask_user_answer(event)
+                        cancelled = False
+                    else:
+                        cancelled = True
+                else:
+                    cancelled = True
+            finally:
+                self._ask_user_future = None
+
+        if _no_response and not cancelled and answer:
+            self.send_session_update({
+                "sessionUpdate": "ask_user_default_used",
+                "answer": answer,
+                "toolId": tool_id,
+            })
+
+        return answer, cancelled
+
     def _build_session_usage(self) -> dict:
         """Aggregate per-turn usage from the engine into a single Usage dict.
 
@@ -2614,6 +2716,15 @@ class CDHACPAdapter:
             self._emit_aidlc_state_to_tui()
         return {"cleared": True}
 
+    async def session_compact(self, session_id: str):
+        """Compact the agent context to reduce token usage."""
+        if self.agent is None:
+            return {"level": "none", "tokens_before": 0, "tokens_after": 0}
+        tokens_before = self.agent.context._token_count
+        level = self.agent.context.compact()
+        tokens_after = self.agent.context._token_count
+        return {"level": level, "tokens_before": tokens_before, "tokens_after": tokens_after}
+
     # ── Terminal RPC stubs ──────────────────────────────────────────
     async def terminal_create(
         self, session_id: str, terminal_id: str, command: str, args: list[str] | None = None,
@@ -2646,6 +2757,7 @@ class JSONRPCServer:
             "session/save": self._handle_session_save,
             "session/set_mode": self._handle_session_set_mode,
             "session/clear_todos": self._handle_session_clear_todos,
+            "session/compact": self._handle_session_compact,
             "session/load_earlier": self._handle_session_load_earlier,
             "session/ask_user_answer": self._handle_ask_user_answer,
             "terminal/create": self._handle_terminal_create,
@@ -2713,6 +2825,7 @@ class JSONRPCServer:
         return self.adapter.resolve_ask_user(
             params.get("answer", ""),
             params.get("cancelled", True),
+            params.get("rollback", False),
         )
 
     async def _handle_session_set_mode(self, params: dict):
@@ -2723,6 +2836,11 @@ class JSONRPCServer:
 
     async def _handle_session_clear_todos(self, params: dict):
         return await self.adapter.session_clear_todos(
+            params.get("sessionId"),
+        )
+
+    async def _handle_session_compact(self, params: dict):
+        return await self.adapter.session_compact(
             params.get("sessionId"),
         )
 

@@ -7,15 +7,38 @@ description: |
   complexity, delegates sub-tasks.
 triggers:
   - ai-dlc
-  - ai dlc
   - lifecycle
   - BDD
   - INT-FR
+  - spec-delta
+  - EARS
+  - feature-file
+  - task-list
+  - deploy-stack
+  - brownfield
+  - explore
+  - debug
+  - tcb-debug
+  - tcb-logs
+  - 排查日志
+allowed_tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
+  - TodoClear
+  - TodoWrite
+  - Task
+  - AskUser
 phases:
   - understand
   - plan
   - verify
   - deliver
+  - brownfield
+  - debug
 compatibility:
   cdh: ">=1.4"
   opencode: ">=1.15"
@@ -34,10 +57,12 @@ metadata:
 ## Core Cycle
 
 ```
+0 Brownfield (optional)  Explore existing codebase → Context summary
 ① Understand (SDD+BDD)   Intent → Spec Delta → BDD Feature Files
 ② Plan (SDD+TDD)         Design Doc → Task DAG → Test Plan
 ③ Verify (BDD+TDD)       Red → Green → Refactor per scenario
 ④ Deliver (SDD+Cloud)    Stack Preview → e2e → Production + BVT
+⑤ Debug (optional)       TCB/云函数日志排查 → 问题定位
 ```
 
 ## Components
@@ -55,41 +80,27 @@ metadata:
 
 ## Adaptive Flow
 
-See `core/adaptive-flow.md` for complexity assessment.
+See `core/adaptive-flow.md` for complexity assessment (L1-L5).
 See `core/task-registry.md` for task status tracking.
+See `core/security.md` for security baseline (SEC-001~007).
 
-**State file**: `.cdh/state.json` — read/write via bash (`cat`, `python -c`).
-
-```json
-{
-  "current_phase": "understand",
-  "completed_phases": [],
-  "gate_results": {},
-  "task_registry": []
-}
-```
-
-1. **Check Registry**: Read `.cdh/state.json`, scan `task_registry` for matching intent
-   - Found + all phases completed → SKIP, return existing result
-   - Found + partially completed → skip completed phases, run pending only
-   - Not found → create new entry in `task_registry`
-2. Analyze intent → determine complexity (L1-L5)
-3. Select phases to execute (skip any already completed per registry)
-4. Write to `.cdh/state.json`: `current_phase` = first phase, `task_registry` new entry
-5. For each pending phase:
-   a. Call `TodoClear` to reset the plan
-   b. Delegate via `Task(agent_type="ai-dlc-{phase}", prompt=...)` using phase's `prompt.md`
-   c. Collect result, enforce gate
-   d. Write to `.cdh/state.json`: move phase to `completed_phases`, update `current_phase`
-6. All phases done → mark task_registry entry `completed`
+**State file**: `.cdh/state.json`
 
 ## Phase Reference
 
-| Phase | Lifecycle | Rules | Practices |
-|-------|-----------|-------|-----------|
-| ① Understand | `phases/understand/lifecycle.md` | `phases/understand/rules.md` | SDD, BDD |
-| ② Plan | `phases/plan/lifecycle.md` | `phases/plan/rules.md` | SDD, TDD |
-| ③ Verify | `phases/verify/lifecycle.md` | `phases/verify/rules.md` | BDD, TDD |
-| ④ Deliver | `phases/deliver/lifecycle.md` | `phases/deliver/rules.md` | SDD, Cloud |
+| Phase | Entry | Lifecycle | Rules | Practices |
+|-------|-------|-----------|-------|-----------|
+| 0 Brownfield | `brownfield/entry.md` | `brownfield/README.md` | — | Explore existing codebase |
+| ① Understand | `phases/understand/entry.md` | `phases/understand/lifecycle.md` | `phases/understand/rules.md` | SDD, BDD |
+| ② Plan | `phases/plan/entry.md` | `phases/plan/lifecycle.md` | `phases/plan/rules.md` | SDD, TDD |
+| ③ Verify | `phases/verify/entry.md` | `phases/verify/lifecycle.md` | `phases/verify/rules.md` | BDD, TDD |
+| ④ Deliver | `phases/deliver/entry.md` | `phases/deliver/lifecycle.md` | `phases/deliver/rules.md` | SDD, Cloud |
+| ⑤ Debug | `phases/debug/entry.md` | `phases/debug/lifecycle.md` | — | TCB/云函数日志排查 |
 
-Security baseline: `core/security.md` (all phases).
+## Sub-agent Delegation
+
+Each phase is delegated via `Task(agent_type="ai-dlc-{phase}")` with the phase's `entry.md` as entry point.
+
+## Key Paths
+
+See `aidlc/CONFIG.md` for full path variable definitions.

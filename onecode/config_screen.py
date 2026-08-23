@@ -204,11 +204,30 @@ class ConfigScreen(App):
                 self._section_fields.append(ConfigItem("default_model", "Model", cfg.default_model))
                 self._section_fields.append(ConfigItem("log_level", "Log", cfg.log_level))
             case "providers":
-                for pid, pcfg in cfg.providers.items():
-                    ak = _truncate(_display_val(pcfg.api_key), 24)
-                    ep = _truncate(_display_val(pcfg.endpoint), 20)
-                    status = f"ep:{ep} ak:{ak}"
-                    self._section_fields.append(ConfigItem(pid, PROVIDER_NAMES.get(pid, pid), status, item_type="provider"))
+                if not cfg.providers:
+                    # Defensive fallback: even after the load_config
+                    # auto-populate pass, show any provider class the
+                    # registry knows about so the user can always see
+                    # what's available.
+                    try:
+                        from onecode.models.provider import ProviderRegistry
+                        from onecode.models import providers as _  # noqa: F401
+                        for pid in sorted(ProviderRegistry.list()):
+                            self._section_fields.append(
+                                ConfigItem(
+                                    pid, PROVIDER_NAMES.get(pid, pid),
+                                    "ep: ak:  (unconfigured)",
+                                    item_type="provider",
+                                )
+                            )
+                    except Exception:
+                        pass
+                else:
+                    for pid, pcfg in cfg.providers.items():
+                        ak = _truncate(_display_val(pcfg.api_key), 24)
+                        ep = _truncate(_display_val(pcfg.endpoint), 20)
+                        status = f"ep:{ep} ak:{ak}"
+                        self._section_fields.append(ConfigItem(pid, PROVIDER_NAMES.get(pid, pid), status, item_type="provider"))
             case "agent":
                 self._section_fields.append(ConfigItem("agent.max_iterations", "Max Iter", str(cfg.agent.max_iterations)))
                 self._section_fields.append(ConfigItem("agent.timeout_seconds", "Timeout", str(cfg.agent.timeout_seconds)))

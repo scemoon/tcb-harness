@@ -100,8 +100,14 @@ class TestAskUserSingleRendering:
                 radios = list(rs.query(RadioButton))
                 # 2 options + 其他 = 3
                 assert len(radios) == 3
-                values = {r.value for r in radios}
-                assert values == {"yes", "no", CUSTOM_VALUE}
+                ids = {r.id for r in radios}
+                assert ids == {"_ask_opt_0_0", "_ask_opt_0_1", "_ask_opt_0_custom"}
+                # wire values are stored in widget._option_values (button
+                # ids → wire value), not on RadioButton.value itself.
+                widget = app.query_one(AskUserWidget)
+                assert widget._option_values["_ask_opt_0_0"] == "yes"
+                assert widget._option_values["_ask_opt_0_1"] == "no"
+                assert widget._option_values["_ask_opt_0_custom"] == CUSTOM_VALUE
         _run(_test())
 
     def test_no_options_skips_radio_set(self):
@@ -123,8 +129,9 @@ class TestAskUserSingleRendering:
                 await pilot.pause()
                 rs = app.query_one("#ask-radio-set", RadioSet)
                 radios = list(rs.query(RadioButton))
-                assert radios[-1].value == CUSTOM_VALUE
                 assert radios[-1].label.plain == "其他"
+                widget = app.query_one(AskUserWidget)
+                assert widget._option_values[radios[-1].id] == CUSTOM_VALUE
         _run(_test())
 
     def test_custom_input_row_initially_hidden(self):
@@ -252,6 +259,40 @@ class TestAskUserSingleSubmission:
                 assert app.capture.values[0] == "__rollback__"
         _run(_test())
 
+    def test_enter_key_submits_first_option(self):
+        """Pressing Enter on the focused RadioButton must submit that option
+        (Regression: RadioButton's value being constructor-value made Enter
+        a no-op because the button was already 'selected').
+        """
+        options = [{"label": "Yes", "value": "yes"}]
+        app = _ProbeApp("Proceed?", options)
+        async def _test():
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                assert len(app.capture.values) == 1
+                assert app.capture.values[0] == "yes"
+        _run(_test())
+
+    def test_arrow_then_enter_submits_target_option(self):
+        """Down arrow then Enter must submit the focused (target) option."""
+        options = [
+            {"label": "Yes", "value": "yes"},
+            {"label": "No", "value": "no"},
+        ]
+        app = _ProbeApp("Proceed?", options)
+        async def _test():
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                await pilot.press("down")
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                assert len(app.capture.values) == 1
+                assert app.capture.values[0] == "no"
+        _run(_test())
+
 
 # ── Multi question ────────────────────────────────────────────────────────────
 
@@ -317,8 +358,9 @@ class TestAskUserMultiQuestion:
                 await pilot.pause()
                 rs = app.query_one("#_ask_q_0_radios", RadioSet)
                 radios = list(rs.query(RadioButton))
-                assert radios[-1].value == CUSTOM_VALUE
                 assert radios[-1].label.plain == "其他"
+                widget = app.query_one(AskUserWidget)
+                assert widget._option_values[radios[-1].id] == CUSTOM_VALUE
         _run(_test())
 
     def test_multi_submit_all_returns_json(self):

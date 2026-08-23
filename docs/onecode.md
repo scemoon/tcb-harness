@@ -641,20 +641,76 @@ class Provider(ABC):
 
 ## 6. MCP 集成
 
-### 6.1 客户端 (`mcp/client.py`)
+### 6.1 客户端 (`mcp/client.py`, `mcp/manager.py`)
 
 | 传输 | 说明 | 配置字段 |
 |------|------|---------|
-| SSE | Server-Sent Events | `url` |
-| stdio | 子进程 stdin/stdout | `command`, `args` |
-| streamable-http | HTTP 流式 | `url` |
+| stdio (`local`) | 子进程 stdin/stdout | `command` (数组), `environment` |
+| SSE (`remote`) | Server-Sent Events | `url` |
+| streamable HTTP (`remote`) | HTTP 流式 | `url`, `headers` |
 
-### 6.2 功能
+### 6.2 配置文件 `~/.onecode/mcp.json`（opencode 风格）
 
-- 工具调用：`mcp_tool(name, arguments)`
-- 资源读取：`mcp_resources(uri)`
-- 按 Server 分组管理
-- 可启用 / 禁用 / 配置环境变量
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "cloudbase": {
+      "type": "local",
+      "command": ["npx", "-y", "@cloudbase/cloudbase-mcp@latest"],
+      "environment": {
+        "TENCENTCLOUD_SECRETID": "{env:TENCENTCLOUD_SECRETID}",
+        "TENCENTCLOUD_SECRETKEY": "{env:TENCENTCLOUD_SECRETKEY}"
+      },
+      "enabled": true
+    },
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {
+        "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+支持的环境变量模板（启动时解析）：
+
+- `{env:VAR}` —— 替换为进程环境变量值
+- `{file:PATH:KEY}` —— 从 JSON 文件取键（支持点号路径，如 `tokens.TENCENTCLOUD_SECRETID`）
+
+未找到的变量会记录 WARNING 并替换为空字符串（不会导致连接失败）。
+
+### 6.3 全局开关 `~/.onecode/onecode.config.yaml`
+
+```yaml
+mcp:
+  timeout: 60.0
+  heartbeat_interval: 15.0
+  reconnect_enabled: true
+  disabled: ["cloudbase", "test-*"]   # glob 模式；匹配则跳过连接
+```
+
+### 6.4 命令清单
+
+```bash
+cdh mcp list                 # 列出（屏蔽 secret）
+cdh mcp add <name> [URL]     # 智能判断 local/remote
+cdh mcp add <name> --type stdio --command npx,-y,pkg --env K={env:VAR}
+cdh mcp add <name> --type http  --url https://x --headers K=V
+cdh mcp remove <name>
+cdh mcp enable|disable <name>
+cdh mcp auth <name>          # OAuth / 手动粘贴 token
+cdh mcp logout <name>        # 清除已存 token
+cdh mcp debug <name>         # 诊断：config + auth 状态 + 实时探活
+cdh mcp migrate              # mcps.yaml -> mcp.json（首次自动备份）
+cdh cloudbase init|status|logout   # CloudBase 专用快捷命令
+```
+
+### 6.5 旧版 `mcps.yaml` 兼容
+
+旧 YAML 文件仍可读取（首次加载时记录 INFO 提示运行 `cdh mcp migrate`），但所有写入操作都会落到 `mcp.json`。
 
 ---
 

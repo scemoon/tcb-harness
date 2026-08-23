@@ -74,6 +74,7 @@ class AskUser(AgentMessage):
     options: list[dict] = field(default_factory=list)
     questions: list[dict] = field(default_factory=list)
     tool_id: str = ""
+    checkpoint_id: str = ""
 
 
 @dataclass

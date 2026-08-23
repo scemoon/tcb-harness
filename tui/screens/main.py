@@ -143,10 +143,12 @@ class MainScreen(Screen, can_focus=False):
         self.conversation.update_title()
 
     def compose(self) -> ComposeResult:
+        aidlc_stats = AIDLCStats(id="aidlc-stats")
+        aidlc_stats.project_path = self.project_path
         panels: list[SideBar.Panel] = [
             SideBar.Panel(
                 "AI-DLC",
-                AIDLCStats(id="aidlc-stats"),
+                aidlc_stats,
                 collapsed=False,
                 id="aidlc-panel",
             ),
@@ -228,6 +230,8 @@ class MainScreen(Screen, can_focus=False):
             self.project_path = new_dir
             if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
                 mf.refresh_files()
+            if aidlc_stats := sidebar.query_one_optional("#aidlc-stats", AIDLCStats):
+                aidlc_stats.project_path = new_dir
             self._swap_directory_watcher(new_dir)
 
     def _swap_directory_watcher(self, project_path: Path | None) -> None:
@@ -346,8 +350,9 @@ class MainScreen(Screen, can_focus=False):
                 tree.data_bind(path=MainScreen.project_path)
             for tree in self.query(DirectoryTree):
                 tree.guide_depth = 3
-        mf = self.query_one("#modified_files", ModifiedFiles)
-        mf.data_bind(path=MainScreen.project_path)
+        mf = self.query_one_optional("#modified_files", ModifiedFiles)
+        if mf is not None:
+            mf.data_bind(path=MainScreen.project_path)
 
     @on(OptionList.OptionHighlighted)
     def on_option_list_option_highlighted(

@@ -64,7 +64,9 @@ except Exception:  # pragma: no cover - rich is optional
     _HAVE_RICH = False
 
 
-_PHASE_SEQUENCE = ["init", "understand", "plan", "verify", "deliver"]
+from cdh.project_loader import CdhProjectLoader
+
+_PHASE_SEQUENCE = CdhProjectLoader._PHASE_SEQUENCE
 
 
 # ---------------------------------------------------------------------------

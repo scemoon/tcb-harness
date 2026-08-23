@@ -64,9 +64,18 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._by_name.get(name.lower())
 
-    def make_openai_schemas(self) -> list[dict]:
+    def make_openai_schemas(self, exclude: set[str] | None = None) -> list[dict]:
+        """Build OpenAI-style function schemas for every registered tool.
+
+        When *exclude* is provided, tools whose names appear in it are
+        omitted entirely so the LLM never sees (and never attempts) tools
+        that the current agent's permissions would deny at runtime.
+        """
+        exclude = exclude or set()
         schemas = []
         for spec in self.list_specs():
+            if spec.name in exclude:
+                continue
             schemas.append({
                 "type": "function",
                 "function": {

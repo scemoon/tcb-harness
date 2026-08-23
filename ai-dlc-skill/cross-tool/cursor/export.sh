@@ -3,15 +3,22 @@
 
 set -euo pipefail
 
-SKILL_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+CANONICAL_SKILL_DIR="${HOME}/.cdh/skills/ai-dlc-skill"
+DEV_SKILL_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+PROJECT_ROOT="$(cd "$DEV_SKILL_DIR/.." && pwd)"
+
+if [ -d "$CANONICAL_SKILL_DIR" ]; then
+    SKILL_DIR="$CANONICAL_SKILL_DIR"
+else
+    SKILL_DIR="$DEV_SKILL_DIR"
+fi
+
 SKILL_FILE="$SKILL_DIR/SKILL.md"
-PROJECT_ROOT="$(cd "$SKILL_DIR/.." && pwd)"
 OUTPUT_DIR="$PROJECT_ROOT/.cursor/rules"
 OUTPUT_FILE="$OUTPUT_DIR/ai-dlc-core.mdc"
 
 mkdir -p "$OUTPUT_DIR"
 
-# Build the .mdc file: frontmatter + body from SKILL.md + project rules
 cat > "$OUTPUT_FILE" << 'MDCFRONT'
 ---
 description: AI-DLC Core Lifecycle Rules
@@ -20,7 +27,6 @@ globs: ["*"]
 
 MDCFRONT
 
-# SKILL.md body: skip YAML frontmatter (everything between first two --- lines)
 awk '
   BEGIN { found=0; count=0; }
   /^---$/ { count++; if (count == 1) next; if (count == 2) { found=1; next; } }
@@ -44,4 +50,4 @@ cat >> "$OUTPUT_FILE" << 'RULES'
 8. Run lint/typecheck/test after non-trivial edits
 RULES
 
-echo "✅ Generated $OUTPUT_FILE from SKILL.md"
+echo "Generated $OUTPUT_FILE from $SKILL_DIR/SKILL.md"
