@@ -2,7 +2,7 @@
 
 AI-powered terminal-based development framework for cloud-native applications, featuring a Textual TUI, multi-provider LLM support, MCP integration, and sandboxed execution.
 
-**Version 1.0.0**
+**Version 1.0.5**
 
 ## Features
 
@@ -17,7 +17,6 @@ AI-powered terminal-based development framework for cloud-native applications, f
 - **Observability** — Distributed tracing with local JSON export or OTLP
 - **Task Management** — Task dependency tracking, cron scheduling
 - **ACP Protocol** — Agent Communication Protocol for inter-agent messaging
-- **HTTP/SSE Server** — Remote agent access via web interface
 - **Codebase Indexing** — BM25-based code search, chunking, and retrieval
 - **Memory Systems** — Pyramid, recall, and symbolic memory for long-term context
 - **Multi-Cloud Abstraction** — Vendor-neutral cloud resource management (TCB, Aliyun, AWS)
