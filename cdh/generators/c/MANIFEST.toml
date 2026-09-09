@@ -1,0 +1,14 @@
+# Plugin manifest for c
+[plugin]
+name = "c"
+display_name = "C"
+file_extension = ".h"
+mime_type = "text/x-c"
+default_outdir = "c"
+output_filename_template = "{name}}.h"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid"]

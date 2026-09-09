@@ -1,0 +1,22 @@
+-- Auto-generated from {{.SourceFile}}
+module Types
+
+import Data.JSON
+
+%default total
+
+{{range .Types}}
+record {{.Name}} where
+    constructor Mk{{.Name}}
+{{range .Properties}}    {{.Name}} : {{if .IsNullable}}Maybe String{{else}}String{{end}}
+{{end}}
+
+FromJSON {{.Name}} where
+    fromJSON j = Mk{{.Name}}
+{{range .Properties}}        <$> j {}.{{.JsonName}}
+{{end}}
+
+ToJSON {{.Name}} where
+    toJSON (Mk{{.Name}} {{range .Properties}}{{.Name}}{{end}}) =
+        object [{{range .Properties}}"{{.JsonName}}" .= {{.Name}}{{end}}]
+{{end}}

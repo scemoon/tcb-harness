@@ -92,6 +92,10 @@ class AskUserTool(Tool):
                         "maxItems": 6,
                         "description": "One or more questions to ask the user. Supports single choice, multiple selection, and confirm types.",
                     },
+                    "plan_submit": {
+                        "type": "boolean",
+                        "description": "PLAN AGENT ONLY: set to true when submitting the final plan for user approval (plan text goes in 'context'). On approval the system automatically hands off execution to the execution agent.",
+                    },
                 },
                 "oneOf": [
                     {"required": ["question"]},
@@ -107,12 +111,14 @@ class AskUserTool(Tool):
         context = tool_input.get("context", "")
         options = tool_input.get("options", [])
         questions = tool_input.get("questions", [])
+        plan_submit = bool(tool_input.get("plan_submit", False))
         return ToolResult(name="AskUser", output={
             "question": question,
             "header": header,
             "context": context,
             "options": options,
             "questions": questions,
+            "plan_submit": plan_submit,
         })
 
 

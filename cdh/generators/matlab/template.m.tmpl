@@ -1,0 +1,26 @@
+% Auto-generated from {{.SourceFile}}
+classdef {{.Name}} < handle
+    properties
+{{range .Properties}}        {{.Name}}
+{{end}}    end
+
+    methods
+        function obj = {{.Name}}({{range .Properties}}{{.Name}}{{end}})
+            obj.{{.Name}} = {{.Name}};
+        end
+
+        function json = to_json(obj)
+            json = struct(
+{{range .Properties}}                '{{.JsonName}}', obj.{{.Name}},
+{{end}}            );
+        end
+
+        function obj = from_json(json_struct)
+            obj = {{.Name}}();
+{{range .Properties}}            if isfield(json_struct, '{{.JsonName}}')
+                obj.{{.Name}} = json_struct.{{.JsonName}};
+            end
+{{end}}        end
+    end
+end
+{{end}}

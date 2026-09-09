@@ -11,7 +11,7 @@ from typing import Optional
 from pathspec import PathSpec
 from pathspec.patterns import GitWildMatchPattern
 
-from onecode.codebase.chunker import chunk_file
+from onecode.codebase.chunker import chunk_file, CodeChunk
 from onecode.config import CodebaseConfig
 from onecode.codebase.storage import CodebaseStorage
 
@@ -83,14 +83,10 @@ class CodebaseIndexer:
         files = self.walk_files()
         result.total_files = len(files)
 
-        # Yield control to the event loop periodically so:
-        #   - CancelledError injected by ``prompt_task.cancel()`` during a
-        #     subagent chat_stream can actually propagate (without this
-        #     the synchronous SQLite/chunker loop below would monopolise
-        #     the event loop and a stuck subagent could never be stopped).
-        #   - other coroutines (e.g. the ACP stdin loop, TUI refresh) keep
-        #     getting scheduled while a long indexing pass runs.
         _YIELD_EVERY = 16
+        _BATCH_SIZE = 32
+
+        pending_chunks: list[tuple[list[CodeChunk], float]] = []
 
         for i, fpath in enumerate(files):
             if i and (i % _YIELD_EVERY) == 0:
@@ -102,20 +98,28 @@ class CodebaseIndexer:
 
             try:
                 mtime = fpath.stat().st_mtime
-                chunks = chunk_file(
+                chunks = await asyncio.to_thread(
+                    chunk_file,
                     fpath,
                     strategy=self.config.chunk_strategy,
                     chunk_lines=self.config.chunk_lines,
                     overlap=self.config.chunk_overlap,
                 )
                 if chunks:
-                    self.storage.save_chunks(chunks, mtime=mtime)
-                result.indexed_files += 1
-                result.total_chunks += len(chunks)
+                    pending_chunks.append((chunks, mtime))
+                    result.indexed_files += 1
+                    result.total_chunks += len(chunks)
+
+                if len(pending_chunks) >= _BATCH_SIZE:
+                    self.storage.save_chunks_batch(pending_chunks)
+                    pending_chunks.clear()
             except Exception as e:
                 logger.warning("Failed to index %s: %s", fpath, e)
                 result.failed_files += 1
                 result.errors.append(f"{fpath}: {e}")
+
+        if pending_chunks:
+            self.storage.save_chunks_batch(pending_chunks)
 
         result.duration_ms = (time.monotonic() - start) * 1000
         logger.info(
@@ -135,7 +139,8 @@ class CodebaseIndexer:
             return
         try:
             mtime = file_path.stat().st_mtime
-            chunks = chunk_file(
+            chunks = await asyncio.to_thread(
+                chunk_file,
                 file_path,
                 strategy=self.config.chunk_strategy,
                 chunk_lines=self.config.chunk_lines,

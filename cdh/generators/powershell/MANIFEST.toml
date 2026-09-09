@@ -1,0 +1,14 @@
+# Plugin manifest for powershell
+[plugin]
+name = "powershell"
+display_name = "PowerShell"
+file_extension = ".ps1"
+mime_type = "text/x-powershell"
+default_outdir = "powershell"
+output_filename_template = "{name}}.ps1"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

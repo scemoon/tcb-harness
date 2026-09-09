@@ -1,0 +1,14 @@
+# Plugin manifest for cobol
+[plugin]
+name = "cobol"
+display_name = "COBOL"
+file_extension = ".cbl"
+mime_type = "text/x-cobol"
+default_outdir = "cobol"
+output_filename_template = "{name}}.cbl"
+package_name_default = "TYPES"
+
+[features]
+enums = false
+nullable = false
+format_hints = ["date-time", "uuid"]

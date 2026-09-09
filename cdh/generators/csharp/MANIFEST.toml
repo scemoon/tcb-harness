@@ -1,0 +1,23 @@
+[plugin]
+name = "csharp"
+display_name = "C#"
+file_extension = ".cs"
+mime_type = "text/x-csharp"
+default_outdir = "cs"
+output_filename_template = "{name}.cs"
+package_name_default = "Types"
+
+[features]
+enums = true
+allOf = true
+oneOf = true
+anyOf = true
+nullable = true
+readOnly = true
+writeOnly = true
+format_hints = ["date-time", "uuid", "email", "uri", "double"]
+
+[imports]
+date-time = "using System;"
+uuid = "using System;"
+nullable_value_types = "using System.Collections.Generic;"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from onecode.agent.tools.protocol import ToolResult
@@ -84,6 +85,9 @@ class TaskTool(Tool):
     def __init__(self, spawn_fn):
         self._spawn = spawn_fn
 
+    def run(self, tool_input: dict[str, Any]) -> ToolResult:
+        return asyncio.run(self.run_async(tool_input))
+
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="Spawn",
@@ -102,7 +106,7 @@ class TaskTool(Tool):
             },
         )
 
-    def run(self, tool_input: dict[str, Any]) -> ToolResult:
+    async def run_async(self, tool_input: dict[str, Any]) -> ToolResult:
         agent_type = tool_input.get("agent_type", "general")
         prompt = tool_input.get("prompt", "")
         if agent_type not in self.VALID_AGENT_TYPES:
@@ -116,16 +120,8 @@ class TaskTool(Tool):
                 },
                 is_error=True,
             )
-        import asyncio
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                future = asyncio.run_coroutine_threadsafe(
-                    self._spawn(agent_type, prompt), loop
-                )
-                result = future.result(timeout=300)
-            else:
-                result = asyncio.run(self._spawn(agent_type, prompt))
+            result = await self._spawn(agent_type, prompt)
         except Exception as e:
             return ToolResult(name="Spawn", output={"error": str(e)}, is_error=True)
         return ToolResult(name="Spawn", output=str(result))

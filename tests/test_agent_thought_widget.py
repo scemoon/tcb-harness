@@ -120,8 +120,44 @@ class TestAgentThoughtMarkdownRendering:
 
         assert asyncio.run(_run()) == "⏳ thinking:"
 
-    def test_mark_completed_auto_collapses(self):
-        """After mark_completed, header shows '+ Thought' and content is hidden."""
+    def test_mark_completed_collapses_widget(self):
+        """After mark_completed, the widget stays in the DOM collapsed with '+ Thought'."""
+        from tui.widgets.agent_thought import AgentThought
+        from textual.app import App
+        from textual.containers import Container
+
+        widget = AgentThought("reasoning…")
+
+        class _ProbeApp(App):
+            def compose(self):
+                with Container():
+                    yield widget
+
+        app = _ProbeApp()
+        async def _run():
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                parent = widget.parent
+                assert widget in parent.children
+                widget.mark_completed()
+                await pilot.pause()
+                return (
+                    widget in parent.children,
+                    str(widget.query_one("#thought-header").render()),
+                    widget.query_one("#thought-content").display,
+                    widget._completed,
+                    widget._collapsed,
+                )
+
+        present, header_text, content_display, completed, collapsed = asyncio.run(_run())
+        assert present is True
+        assert header_text == "+ Thought"
+        assert content_display is False
+        assert completed is True
+        assert collapsed is True
+
+    def test_ctrl_x_toggle_after_completion(self):
+        """After completion, Ctrl+X toggles '+ Thought' <-> '- Thought'."""
         from tui.widgets.agent_thought import AgentThought
         from textual.app import App
         from textual.containers import Container
@@ -139,18 +175,22 @@ class TestAgentThoughtMarkdownRendering:
                 await pilot.pause()
                 widget.mark_completed()
                 await pilot.pause()
-                return (
-                    str(widget.query_one("#thought-header").render()),
-                    widget.query_one("#thought-content").display,
-                )
+                h0 = str(widget.query_one("#thought-header").render())
+                d0 = widget.query_one("#thought-content").display
+                widget.action_toggle()
+                await pilot.pause()
+                h1 = str(widget.query_one("#thought-header").render())
+                d1 = widget.query_one("#thought-content").display
+                return (h0, d0, h1, d1)
 
-        header, content_display = asyncio.run(_run())
-        assert header == "+ Thought"
-        assert content_display is False
+        h0, d0, h1, d1 = asyncio.run(_run())
+        assert h0 == "+ Thought"
+        assert d0 is False
+        assert h1 == "- Thought"
+        assert d1 is True
 
-    def test_ctrl_x_toggle_collapses_then_expands(self):
-        """Ctrl+X action_toggle should hide then show content; header toggles
-        between '+ Thought' and '- Thought'.  Starts collapsed after completion."""
+    def test_ctrl_x_toggle_before_completion(self):
+        """Ctrl+X collapses content before completion; header stays '⏳ thinking:'."""
         from tui.widgets.agent_thought import AgentThought
         from textual.app import App
         from textual.containers import Container
@@ -166,24 +206,20 @@ class TestAgentThoughtMarkdownRendering:
         async def _run():
             async with app.run_test() as pilot:
                 await pilot.pause()
-                widget.mark_completed()
-                await pilot.pause()
-                # After mark_completed: collapsed (+ Thought, hidden)
-                widget.action_toggle()  # expand
+                # Before completion: starts expanded with "⏳ thinking:"
+                h0 = str(widget.query_one("#thought-header").render())
+                d0 = widget.query_one("#thought-content").display
+                widget.action_toggle()  # collapse
                 await pilot.pause()
                 h1 = str(widget.query_one("#thought-header").render())
                 d1 = widget.query_one("#thought-content").display
-                widget.action_toggle()  # collapse
-                await pilot.pause()
-                h2 = str(widget.query_one("#thought-header").render())
-                d2 = widget.query_one("#thought-content").display
-                return (h1, d1, h2, d2)
+                return (h0, d0, h1, d1)
 
-        h1, d1, h2, d2 = asyncio.run(_run())
-        assert h1 == "- Thought"
-        assert d1 is True
-        assert h2 == "+ Thought"
-        assert d2 is False
+        h0, d0, h1, d1 = asyncio.run(_run())
+        assert h0 == "⏳ thinking:"
+        assert d0 is True
+        assert h1 == "⏳ thinking:"
+        assert d1 is False
 
     def test_agent_thought_has_min_height_inside_verticalscroll(self):
         """The widget must enforce height: auto + min-height: 3 so it

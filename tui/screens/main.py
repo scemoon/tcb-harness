@@ -23,13 +23,13 @@ from tui import messages
 from tui.agent_schema import Agent
 from tui.acp import messages as acp_messages
 
+from tui.widgets.aidlc import AIDLCStats
 from tui.widgets.context_stats import ContextStats
 from tui.widgets.modified_files import ModifiedFiles
 from tui.widgets.plan import Plan
 from tui.widgets.throbber import Throbber
 from tui.widgets.conversation import Conversation
 from tui.widgets.side_bar import SideBar
-from tui.widgets.session_tabs import SessionsTabs, SessionLabel
 from tui.screens.diff_screen import DiffScreen
 
 
@@ -78,17 +78,16 @@ class MainScreen(Screen, can_focus=False):
     SESSION_NAVIGATION_GROUP = Binding.Group(description="Sessions")
     BINDINGS = [
         Binding("ctrl+b,f20", "show_sidebar", "Sidebar", priority=True),
-        Binding("ctrl+g", "go_home", "Home", priority=True),
         Binding(
             "ctrl+left_square_bracket",
             "session_previous",
-            "Previous session",
+            "Prev",
             group=SESSION_NAVIGATION_GROUP,
         ),
         Binding(
             "ctrl+right_square_bracket",
             "session_next",
-            "Next session",
+            "Next",
             group=SESSION_NAVIGATION_GROUP,
         ),
     ]
@@ -144,7 +143,15 @@ class MainScreen(Screen, can_focus=False):
         self.conversation.update_title()
 
     def compose(self) -> ComposeResult:
+        aidlc_stats = AIDLCStats(id="aidlc-stats")
+        aidlc_stats.project_path = self.project_path
         panels: list[SideBar.Panel] = [
+            SideBar.Panel(
+                "AI-DLC",
+                aidlc_stats,
+                collapsed=False,
+                id="aidlc-panel",
+            ),
             SideBar.Panel(
                 "Plan",
                 Plan([], placeholder="no plan yet"),
@@ -223,6 +230,8 @@ class MainScreen(Screen, can_focus=False):
             self.project_path = new_dir
             if mf := sidebar.query_one_optional("#modified_files", ModifiedFiles):
                 mf.refresh_files()
+            if aidlc_stats := sidebar.query_one_optional("#aidlc-stats", AIDLCStats):
+                aidlc_stats.project_path = new_dir
             self._swap_directory_watcher(new_dir)
 
     def _swap_directory_watcher(self, project_path: Path | None) -> None:
@@ -285,6 +294,15 @@ class MainScreen(Screen, can_focus=False):
         from tui.widgets.plan import entries_from_dicts
         self.query_one("SideBar Plan", Plan).entries = entries_from_dicts(message.entries)
 
+    @on(acp_messages.AIDLCState)
+    async def on_acp_aidlc_state(self, message: acp_messages.AIDLCState):
+        message.stop()
+        self.query_one("#aidlc-stats", AIDLCStats).refresh_from_state({
+            "current_phase": message.current_phase,
+            "completed_phases": message.completed_phases,
+            "gate_results": message.gate_results,
+        })
+
     @on(messages.SessionUpdate)
     async def on_session_update(self, event: messages.SessionUpdate) -> None:
         if event.name is not None:
@@ -321,14 +339,6 @@ class MainScreen(Screen, can_focus=False):
         session_tracker.close_session(current_mode)
         if next_mode:
             self.app.switch_mode(next_mode)
-            # Directly remove the closed tab from the visible screen's SessionsTabs
-            if sessions_tabs := self.app.screen.query_one_optional(
-                SessionsTabs
-            ):
-                if current_tab := sessions_tabs.query_one_optional(
-                    f"#{current_mode}", SessionLabel
-                ):
-                    await current_tab.remove()
         self.app.call_later(self.app.remove_mode, current_mode)
 
     def on_mount(self) -> None:
@@ -340,8 +350,9 @@ class MainScreen(Screen, can_focus=False):
                 tree.data_bind(path=MainScreen.project_path)
             for tree in self.query(DirectoryTree):
                 tree.guide_depth = 3
-        mf = self.query_one("#modified_files", ModifiedFiles)
-        mf.data_bind(path=MainScreen.project_path)
+        mf = self.query_one_optional("#modified_files", ModifiedFiles)
+        if mf is not None:
+            mf.data_bind(path=MainScreen.project_path)
 
     @on(OptionList.OptionHighlighted)
     def on_option_list_option_highlighted(

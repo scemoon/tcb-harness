@@ -16,6 +16,16 @@ _DANGEROUS_PATTERNS = [
     re.compile(r"\bdd\b\s+if=", re.IGNORECASE),
     re.compile(r"\brm\b.*\s+-rf\s+/\s*$", re.IGNORECASE),
     re.compile(r"\brm\b.*\s+-rf\s+/\s+"),
+    re.compile(r"\brm\b.*\s+-rf\s+\$", re.IGNORECASE),
+    re.compile(r"\brm\b.*\s+-rf\s+~", re.IGNORECASE),
+    re.compile(r"\brm\b.*\s+-rf\s+/[a-z]+\s*$", re.IGNORECASE),
+    re.compile(r"\bchown\b.*\s+-R\s+", re.IGNORECASE),
+    re.compile(r"\bchmod\b.*\s+-R\s+777\s+/", re.IGNORECASE),
+    re.compile(r"\bchmod\b.*777\s+/\s*$", re.IGNORECASE),
+    re.compile(r"\bmv\b.*/\s+/dev/null", re.IGNORECASE),
+    re.compile(r"\bpasswd\b", re.IGNORECASE),
+    re.compile(r"\buseradd\b", re.IGNORECASE),
+    re.compile(r"\busermod\b", re.IGNORECASE),
     re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", re.IGNORECASE),
 ]
 

@@ -14,6 +14,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from cdh.project_loader import CdhProjectLoader
 
 logger = logging.getLogger("onecode.agent.cdh_acp")
 
@@ -129,9 +130,9 @@ def _kind_for_category(cat: ToolCategory) -> str:
 _DEFAULT_MODES = {
     "currentModeId": "build",
     "availableModes": [
-        {"id": "build", "name": "Build", "description": "Full development agent. Edits and shell commands require user approval."},
-        {"id": "plan",  "name": "Plan",  "description": "Read-only planning and analysis. Edits and shell commands require approval."},
-        {"id": "solo",  "name": "Solo",  "description": "Independent mode with plan-first workflow. Edits allowed, shell commands require approval."},
+        {"id": "build", "name": "Build", "description": "Full development agent for direct requests. Plans briefly for complex work, then executes. Edits and shell commands require user approval."},
+        {"id": "plan",  "name": "Plan",  "description": "Read-only planning and analysis. Edits and shell commands are denied."},
+        {"id": "solo",  "name": "Solo",  "description": "Execution agent for approved plans (handoff from plan mode). Edits and shell commands require user approval."},
     ],
 }
 
@@ -397,6 +398,19 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
                 "type": "content",
                 "content": {"type": "text", "text": text},
             }]
+        if include:
+            text = f"📁 Filter: `{include}`"
+            return [{
+                "type": "content",
+                "content": {"type": "text", "text": text},
+            }]
+        try:
+            return [{
+                "type": "content",
+                "content": {"type": "text", "text": f"```json\n{json.dumps(arguments, indent=2)}\n```"},
+            }]
+        except (TypeError, ValueError):
+            return []
 
     if name == "ToolSearch":
         return []
@@ -447,6 +461,18 @@ def _build_tool_call_content(name: str | None, arguments: dict) -> list:
             "content": {"type": "text", "text": "\n".join(lines)},
         }] if lines else []
 
+    if name is None or (name is not None and name not in (
+        "Read", "Write", "Edit", "Bash", "Grep", "ToolSearch", "ApplyPatch",
+        "Insert", "UndoEdit", "AskUser",
+    ) and not name.startswith("Todo") and not name.startswith("MCPTool")):
+        try:
+            return [{
+                "type": "content",
+                "content": {"type": "text", "text": f"```json\n{json.dumps(arguments, indent=2)}\n```"},
+            }]
+        except (TypeError, ValueError):
+            return []
+
     return []
 
 
@@ -490,9 +516,14 @@ def _format_tui_display_text(result_text: str, tool_name: str = "") -> str:
         return "No matching tools found."
     if "error" in parsed:
         return str(parsed["error"])
-    # Read: show actual file content (code fence + language wrapping in _emit_tool_result)
+    # Read: show actual file content (code fence + language wrapping in _emit_tool_result).
+    # FileOps.read returns plain text; only unwrap a structured {"content": ...} result,
+    # otherwise the raw text (which may itself be valid JSON, e.g. a .json file) must be
+    # shown verbatim — otherwise JSON-parsable files render as an empty card.
     if tool_name == "Read":
-        return parsed.get("content", "")
+        if "content" in parsed:
+            return parsed.get("content", "")
+        return result_text
     # Todo tools: collapse verbose state echoes to one-liner.
     if tool_name in _STATUS_ONLY_TOOLS:
         return "✓ updated"
@@ -699,11 +730,19 @@ class CDHACPAdapter:
         # Diagnostics: per-subagent ACP forward counters (id → int)
         self._subagent_fwd_count: dict[str, int] = {}
         self._subagent_fwd_bytes: dict[str, int] = {}
+        # Turn counter for session/event notifications
+        self._turn_count: int = 0
+        # Accumulated plain-text output from the agent during the current turn,
+        # used to detect text-based questions and auto-convert to AskUser.
+        self._agent_text_output: str = ""
         # Display state for tools invoked *inside* a subagent, keyed by a
         # namespaced id ``"sa:{subagent_id}:{inner_tool_id}"`` (kept separate
         # from ``self.tool_calls`` so subagent tool cards never collide with
         # main-agent tool ids nor get persisted into the main session view).
         self._subagent_tool_calls: dict[str, dict] = {}
+        # AIDLC phase tracking: detect when agent is working on a phase
+        self._last_aidlc_phase: str = ""
+        self._phase_skill_detected: str = ""
 
     def _perm_store_load(self, cwd: str | None = None) -> None:
         """Load permission overrides from ``.cdh/permissions.json``."""
@@ -898,13 +937,13 @@ class CDHACPAdapter:
         else:
             info_log("[ACP-CANCEL] cancel_prompt called but self.agent is None")
 
-    def resolve_ask_user(self, answer: str, cancelled: bool) -> dict:
+    def resolve_ask_user(self, answer: str, cancelled: bool, rollback: bool = False) -> dict:
         """Resolve the pending ask_user request with the user's answer.
 
         Called from the main loop when a ``session/ask_user_answer`` request arrives.
         """
         if self._ask_user_future is not None and not self._ask_user_future.done():
-            self._ask_user_future.set_result({"answer": answer, "cancelled": cancelled})
+            self._ask_user_future.set_result({"answer": answer, "cancelled": cancelled, "rollback": rollback})
         return {"ok": True}
 
     def send_session_update(self, update: dict):
@@ -912,6 +951,41 @@ class CDHACPAdapter:
         self.send_notification("session/update", {
             "sessionId": self.session_id,
             "update": update,
+        })
+
+    def send_awaiting_user_input(self, prompt_preview: str = "") -> None:
+        """Notify the TUI that the agent has yielded control and is waiting
+        for user input but did NOT invoke the AskUser tool.
+
+        The TUI switches turn to "client" so the next user_input_submitted
+        is routed as a reply to the question currently on screen rather
+        than being appended to the prompt queue as a brand-new task.
+
+        Note: this method is opt-in. Callers (engine, sub-agents, custom
+        workflows) decide when to invoke it. Streaming output is left
+        intact; only the turn state changes on the TUI side.
+        """
+        self.send_session_update({
+            "sessionUpdate": "awaiting_user_input",
+            "promptPreview": prompt_preview or "",
+        })
+
+    def send_session_event(self, event: dict, metrics: dict | None = None):
+        """Send a session/event notification (onecode enhancement).
+
+        Provides structured event data for L3/L4 loop analysis.
+        See docs/loop.md §9.2 for protocol spec.
+
+        Args:
+            event: Event payload dict with at minimum a ``type`` key.
+            metrics: Optional derived metrics dict for session-level stats.
+        """
+        payload: dict = {"event": event}
+        if metrics is not None:
+            payload["metrics"] = metrics
+        self.send_notification("session/event", {
+            "sessionId": self.session_id,
+            **payload,
         })
 
     def _subagent_tool_ns_id(self, subagent_id: str, inner_tool_id: str) -> str:
@@ -1195,6 +1269,49 @@ class CDHACPAdapter:
                 "entries": event.plan_entries,
             })
 
+    def _emit_aidlc_state_to_tui(self) -> None:
+        if self.agent is None:
+            return
+        cdh_dir = CdhProjectLoader.find_cdh_dir(self.agent._project_dir)
+        if cdh_dir is None:
+            return
+        state = CdhProjectLoader.load_project_state(cdh_dir)
+
+        # Auto-advance phase if a phase skill was detected during this turn
+        phase_to_advance = ""
+        if self._phase_skill_detected:
+            phase_to_advance = self._phase_skill_detected
+        else:
+            # Check if any subagent was spawned for a phase
+            if self._subagent_fwd_count:
+                for subagent_type in self._subagent_fwd_count.keys():
+                    if subagent_type and subagent_type.startswith("ai-dlc-"):
+                        phase = subagent_type.replace("ai-dlc-", "")
+                        if phase in CdhProjectLoader._PHASE_SEQUENCE:
+                            phase_to_advance = phase
+                            break
+            # Fallback: check agent output for phase keywords
+            if not phase_to_advance and self._agent_text_output:
+                output_lower = self._agent_text_output.lower()
+                for phase in CdhProjectLoader._PHASE_SEQUENCE:
+                    if phase != "init" and phase in output_lower:
+                        phase_to_advance = phase
+                        break
+
+        if phase_to_advance:
+            current_phase = state.get("current_phase", "")
+            if phase_to_advance != current_phase:
+                CdhProjectLoader.advance_phase(self.agent._project_dir, phase_to_advance)
+                state = CdhProjectLoader.load_project_state(cdh_dir)
+            self._phase_skill_detected = ""
+
+        self.send_session_update({
+            "sessionUpdate": "aidlc_state",
+            "current_phase": state.get("current_phase", ""),
+            "completed_phases": state.get("completed_phases", []),
+            "gate_results": state.get("gate_results", {}),
+        })
+
     async def initialize(self, protocol_version: int, client_capabilities: dict, client_info: dict):
         """Handle ACP initialize."""
         return {
@@ -1273,7 +1390,8 @@ class CDHACPAdapter:
 
         loaded = self.agent.load_session(session_id)
         cfg = load_config()
-        self.agent.set_agent(cfg.default_mode)
+        session_mode = self.agent._session.mode if self.agent._session else cfg.default_mode
+        self.agent.set_agent(session_mode)
         self._perm_store.apply_to(self.agent.current_agent)
         self._send_available_commands()
 
@@ -1283,11 +1401,13 @@ class CDHACPAdapter:
         # Surface loaded tasks to the TUI Plan widget so the user sees
         # pending work without having to send a new message first.
         self._emit_plan_update_to_tui()
+        self._emit_aidlc_state_to_tui()
 
         if not loaded:
+            storage_path = getattr(self.agent, "_session", None) and self.agent._session.storage_path
             return {
                 "modes": _DEFAULT_MODES,
-                "error": f"Session {session_id} not found at {self.agent._session.storage_path}",
+                "error": f"Session {session_id} not found at {storage_path}",
             }
 
         # Walk the in-memory context (preserves list-of-blocks structure)
@@ -1513,6 +1633,7 @@ class CDHACPAdapter:
             nonlocal text_buffer, thinking_sent_len, in_thinking, in_tool_call
             nonlocal in_minimax_tool_call, in_bare_tool_call, bare_tool_start
             text_buffer += text
+            self._agent_text_output += text
 
             # Watchdog: if a marker opened but the close never arrived
             # and the buffer has grown past the safety cap, give up
@@ -1728,6 +1849,8 @@ class CDHACPAdapter:
         self._subagent_fwd_count = {}
         self._subagent_fwd_bytes = {}
         self._subagent_tool_calls = {}
+        self._agent_text_output = ""
+        self._phase_skill_detected = ""
         info_log(
             "[ACP-PROMPT] entering chat_stream loop; agent._cancelled reset to "
             "False; session=%s", session_id,
@@ -1792,6 +1915,7 @@ class CDHACPAdapter:
             async for event in self.agent.chat_stream(user_content):
                 if event.type == StreamEventType.TEXT_DELTA:
                     self._text_chunker.append(event.text)
+                    self._agent_text_output += event.text
                 elif event.type == StreamEventType.THINKING:
                     self._thought_chunker.append(event.thinking)
                 elif event.type == StreamEventType.TOOL_CALL_START:
@@ -1808,11 +1932,23 @@ class CDHACPAdapter:
                         "content": existing.get("content", []),
                         "_tool_name": event.tool_name,
                     }
-                        # Skip sending tool_call for Spawn tools — SubAgent widget
+                    # Skip sending tool_call for Spawn tools — SubAgent widget
                     # handles the display via subagent_start events.
                     if event.tool_name != "Spawn":
                         self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
+                    # Track AIDLC phase skill calls for auto-advance
+                    if event.tool_name == "Skill" and event.tool_args:
+                        skill_name = event.tool_args.get("name", "")
+                        if skill_name and skill_name.startswith("ai-dlc-"):
+                            phase = skill_name.replace("ai-dlc-", "")
+                            if phase in CdhProjectLoader._PHASE_SEQUENCE:
+                                self._phase_skill_detected = phase
+                    self.send_session_event({
+                        "type": "tool_executed",
+                        "tool_name": event.tool_name,
+                        "tool_category": str(event.tool_category),
+                    })
                     if event.tool_id in self.tool_calls:
                         title = event.tool_name
                         if event.tool_args:
@@ -1870,7 +2006,10 @@ class CDHACPAdapter:
                             "sessionUpdate": "tool_call_update",
                             "toolCallId": event.tool_id,
                             "title": title,
-                            "status": "pending",
+                            # Keep in_progress through execution — the tool is
+                            # still running until TOOL_RESULT flips it to
+                            # completed/failed (no pending/⌛ intermediate).
+                            "status": "in_progress",
                             "content": content,
                             "_tool_name": event.tool_name,
                             "_tool_args": event.tool_args,
@@ -1880,6 +2019,11 @@ class CDHACPAdapter:
                         if event.tool_name != "Spawn":
                             self.send_session_update(self.tool_calls[event.tool_id])
                 elif event.type == StreamEventType.TOOL_RESULT:
+                    self.send_session_event({
+                        "type": "tool_result",
+                        "tool_id": event.tool_id,
+                        "is_error": event.result_is_error,
+                    })
                     # Spawn tool results: subagent_start/chunk/end events were
                     # already sent during subagent execution — just skip the
                     # tool_call_update (no duplicate SubAgent widget needed).
@@ -2067,6 +2211,19 @@ class CDHACPAdapter:
                     self._handle_subagent_tool_call(event)
                 elif event.type == StreamEventType.SUBAGENT_TOOL_RESULT:
                     self._handle_subagent_tool_result(event)
+                elif event.type == StreamEventType.VERIFICATION_PASSED:
+                    self.send_session_event({
+                        "type": "verification_passed",
+                        "tool_name": event.tool_name,
+                        "summary": event.text,
+                    })
+                elif event.type == StreamEventType.VERIFICATION_FAILED:
+                    self.send_session_event({
+                        "type": "verification_failed",
+                        "tool_name": event.tool_name,
+                        "failed_gates": event.verification_failed_gates,
+                        "summary": event.text,
+                    })
                 elif event.type == StreamEventType.PLAN:
                     self.send_session_update({
                         "sessionUpdate": "plan",
@@ -2084,6 +2241,7 @@ class CDHACPAdapter:
                                 "questions": event.ask_questions,
                                 "context": event.ask_context or "",
                                 "toolId": event.tool_id,
+                                "checkpointId": getattr(event, "ask_checkpoint_id", "") or "",
                             })
                         else:
                             self.send_session_update({
@@ -2092,53 +2250,25 @@ class CDHACPAdapter:
                                 "context": event.ask_context or "",
                                 "options": event.ask_options,
                                 "toolId": event.tool_id,
+                                "checkpointId": getattr(event, "ask_checkpoint_id", "") or "",
                             })
-                        answer = ""
-                        cancelled = False
-                        # AskUser re-ask flow:
-                        #   1) send full question, wait up to 60s for response
-                        #   2) on timeout: send brief "请确认" reminder, wait 60s
-                        #   3) on second timeout: use the default/best option
-                        #      instead of cancelling, so the agent can keep going
-                        #      with a sensible default choice.
-                        _ASK_USER_REASK_TIMEOUT = 60
-                        _no_response = False
-                        for _attempt in range(2):
-                            try:
-                                self._ask_user_future = asyncio.get_event_loop().create_future()
-                                ask_response = await asyncio.wait_for(
-                                    self._ask_user_future,
-                                    timeout=_ASK_USER_REASK_TIMEOUT,
-                                )
-                                answer = ask_response.get("answer", "")
-                                cancelled = ask_response.get("cancelled", False)
-                                _no_response = False
-                                break
-                            except (asyncio.TimeoutError, Exception):
-                                if _attempt == 0:
-                                    # Brief re-ask: do NOT resend the full question
-                                    self.send_session_update({
-                                        "sessionUpdate": "ask_user_remind",
-                                        "text": "请确认？",
-                                        "toolId": event.tool_id,
-                                    })
-                                    _no_response = True
-                                    continue
-                                # Second timeout: pick the default option
-                                answer = self._pick_default_ask_user_answer(event)
-                                cancelled = False
-                                _no_response = True
-                            finally:
-                                self._ask_user_future = None
-                        if _no_response and not cancelled and answer:
-                            self.send_session_update({
-                                "sessionUpdate": "ask_user_default_used",
-                                "answer": answer,
-                                "toolId": event.tool_id,
-                            })
+
+                        is_plan_submit = getattr(event, "ask_plan_submit", False)
+                        answer, cancelled = await self._wait_for_ask_user_response(
+                            event, event.tool_id,
+                            is_plan_submit=is_plan_submit,
+                        )
+
                         result = await self.agent.resolve_approval(
                             approved=not cancelled, answer=answer,
                         )
+                        if is_plan_submit and cancelled:
+                            self.agent._cancelled = False
+                            self.send_session_update({
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": "计划已取消。会话结束。"},
+                            })
+                            return {"stopReason": "cancelled"}
                         if result:
                             tid = result.get("tool_use_id", "") or event.tool_id
                             rstr = result.get("content", "") or ""
@@ -2149,7 +2279,6 @@ class CDHACPAdapter:
                                   "content": rstr, "is_error": ierr}],
                                 name=tid,
                             )
-                            # Update TUI tool call status
                             status = "failed" if ierr else "completed"
                             content_block = [{
                                 "type": "content",
@@ -2158,6 +2287,7 @@ class CDHACPAdapter:
                             self.send_session_update({
                                 "sessionUpdate": "tool_call_update",
                                 "toolCallId": tid,
+                                "title": "AskUser",
                                 "status": status,
                                 "content": content_block,
                             })
@@ -2261,6 +2391,7 @@ class CDHACPAdapter:
                         )
                         # Sync plan after approval — the tool may have mutated todos
                         self._emit_plan_update_to_tui()
+                        self._emit_aidlc_state_to_tui()
                     verb = "Approved" if approved else "Rejected"
                     self.send_session_update({
                         "sessionUpdate": "agent_message_chunk",
@@ -2295,6 +2426,8 @@ class CDHACPAdapter:
         self._text_chunker.flush()
         self._thought_chunker.flush()
 
+        self.send_awaiting_user_input()
+
         try:
             self.agent.save_session()
         except Exception:
@@ -2308,6 +2441,7 @@ class CDHACPAdapter:
 
         # Sync plan to TUI so sidebar shows final todo state
         self._emit_plan_update_to_tui()
+        self._emit_aidlc_state_to_tui()
 
         # Send context usage stats to TUI sidebar
         ctx = self.agent.context
@@ -2324,6 +2458,19 @@ class CDHACPAdapter:
 
         stop_reason = "cancelled" if self.agent._cancelled else "end_turn"
         usage = self._build_session_usage()
+        self._turn_count += 1
+        self.send_session_event(
+            event={
+                "type": "session_ended",
+                "stop_reason": stop_reason,
+                "turn_count": self._turn_count,
+            },
+            metrics={
+                "tool_calls": len(self.tool_calls),
+                "subagent_calls": sum(self._subagent_fwd_count.values()),
+                "usage": usage,
+            },
+        )
         return {
             "sessionId": self.session_id,
             "stopReason": stop_reason,
@@ -2358,6 +2505,89 @@ class CDHACPAdapter:
         if options:
             return _pick(options)
         return ""
+
+    async def _wait_for_ask_user_response(
+        self,
+        event,
+        tool_id: str,
+        timeout_seconds: int | None = None,
+        use_default_on_timeout: bool | None = None,
+        is_plan_submit: bool = False,
+    ) -> tuple[str, bool]:
+        """Wait for AskUser response with configurable timeout and behavior.
+
+        Returns (answer, cancelled).
+
+        Non-multi-question AskUser (auto-ask, single question): stops session
+        immediately so user can type directly without waiting for timeout.
+
+        Multi-question AskUser (questions list): waits for user response since
+        the AskUser component will be invoked.
+
+        For plan_submit questions (is_plan_submit=True), timeout or cancellation
+        is treated as rejection — no default answer is used.
+        """
+        questions = getattr(event, "ask_questions", None)
+        if questions is None:
+            return "", True
+
+        ask_cfg = getattr(self.agent.app.config, "ask_user", None)
+        if timeout_seconds is None:
+            timeout_seconds = getattr(ask_cfg, "timeout_seconds", 10) if ask_cfg else 10
+        if use_default_on_timeout is None:
+            use_default_on_timeout = (
+                getattr(ask_cfg, "timeout_behavior", "use_default") == "use_default"
+            ) if ask_cfg else True
+
+        answer = ""
+        cancelled = False
+        _no_response = False
+
+        for _attempt in range(2):
+            try:
+                self._ask_user_future = asyncio.get_event_loop().create_future()
+                ask_response = await asyncio.wait_for(
+                    self._ask_user_future,
+                    timeout=timeout_seconds,
+                )
+                answer = ask_response.get("answer", "")
+                cancelled = ask_response.get("cancelled", False)
+                _no_response = False
+                break
+            except asyncio.TimeoutError:
+                if _attempt == 0:
+                    self.send_session_update({
+                        "sessionUpdate": "ask_user_remind",
+                        "text": "请确认？",
+                        "toolId": tool_id,
+                    })
+                    _no_response = True
+                    continue
+                # Second timeout: use default or cancel
+                _no_response = True
+                if is_plan_submit:
+                    cancelled = True
+                elif use_default_on_timeout:
+                    questions = getattr(event, "ask_questions", None) or []
+                    options = getattr(event, "ask_options", None) or []
+                    if questions or options:
+                        answer = self._pick_default_ask_user_answer(event)
+                        cancelled = False
+                    else:
+                        cancelled = True
+                else:
+                    cancelled = True
+            finally:
+                self._ask_user_future = None
+
+        if _no_response and not cancelled and answer:
+            self.send_session_update({
+                "sessionUpdate": "ask_user_default_used",
+                "answer": answer,
+                "toolId": tool_id,
+            })
+
+        return answer, cancelled
 
     def _build_session_usage(self) -> dict:
         """Aggregate per-turn usage from the engine into a single Usage dict.
@@ -2429,7 +2659,17 @@ class CDHACPAdapter:
                 tm.clear_todos()
             self.agent.save_todos_to_project()
             self._emit_plan_update_to_tui()
+            self._emit_aidlc_state_to_tui()
         return {"cleared": True}
+
+    async def session_compact(self, session_id: str):
+        """Compact the agent context to reduce token usage."""
+        if self.agent is None:
+            return {"level": "none", "tokens_before": 0, "tokens_after": 0}
+        tokens_before = self.agent.context._token_count
+        level = self.agent.context.compact()
+        tokens_after = self.agent.context._token_count
+        return {"level": level, "tokens_before": tokens_before, "tokens_after": tokens_after}
 
     # ── Terminal RPC stubs ──────────────────────────────────────────
     async def terminal_create(
@@ -2463,6 +2703,7 @@ class JSONRPCServer:
             "session/save": self._handle_session_save,
             "session/set_mode": self._handle_session_set_mode,
             "session/clear_todos": self._handle_session_clear_todos,
+            "session/compact": self._handle_session_compact,
             "session/load_earlier": self._handle_session_load_earlier,
             "session/ask_user_answer": self._handle_ask_user_answer,
             "terminal/create": self._handle_terminal_create,
@@ -2530,6 +2771,7 @@ class JSONRPCServer:
         return self.adapter.resolve_ask_user(
             params.get("answer", ""),
             params.get("cancelled", True),
+            params.get("rollback", False),
         )
 
     async def _handle_session_set_mode(self, params: dict):
@@ -2540,6 +2782,11 @@ class JSONRPCServer:
 
     async def _handle_session_clear_todos(self, params: dict):
         return await self.adapter.session_clear_todos(
+            params.get("sessionId"),
+        )
+
+    async def _handle_session_compact(self, params: dict):
+        return await self.adapter.session_compact(
             params.get("sessionId"),
         )
 
@@ -2733,6 +2980,9 @@ def main():
     import os
     from onecode.cli import setup_logging
     setup_logging(os.environ.get("CDH_LOG_LEVEL", "INFO"))
+    # Sync optimizer params from ~/.cdh/agent_config.yaml before starting
+    from onecode.config import sync_agent_config
+    sync_agent_config()
     info_log(
         "[ACP-INIT] cdh_acp adapter starting; log_level=%s pid=%d",
         os.environ.get("CDH_LOG_LEVEL", "INFO"), os.getpid(),

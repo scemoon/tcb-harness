@@ -311,6 +311,123 @@ class TestSkillManager:
             assert "not found" in err
 
 
+class TestMultiPathDiscovery:
+    """Verify .agents/skills/ and builtin_skills/ are in the search path."""
+
+    def test_search_dirs_includes_agents(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            agents_skills = root / ".agents" / "skills"
+            agents_skills.mkdir(parents=True)
+
+            loader = SkillLoader(workspace_root=root)
+            dirs = loader._get_search_dirs()
+
+            assert any(source == "agents" for source, _ in dirs)
+            assert any(path == agents_skills for _, path in dirs)
+
+    def test_search_dirs_includes_builtin(self):
+        from onecode.skills.loader import BUILTIN_SKILLS_DIR
+        loader = SkillLoader()
+        dirs = loader._get_search_dirs()
+        assert any(source == "builtin" for source, _ in dirs)
+        assert any(path == BUILTIN_SKILLS_DIR for _, path in dirs)
+
+    def test_agents_skills_discovered(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            skill_dir = root / ".agents" / "skills" / "test-agent-skill"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: test-agent-skill\ndescription: An agent skill\n---\n\n# Test\n"
+            )
+            (skill_dir / "skill.yaml").write_text(
+                yaml.dump({"name": "test-agent-skill", "description": "An agent skill"})
+            )
+
+            loader = SkillLoader(workspace_root=root)
+            loader.invalidate_cache()
+            skills = loader.get_all()
+
+            assert "test-agent-skill" in skills
+            assert skills["test-agent-skill"].description == "An agent skill"
+
+    def test_cloudbase_found_via_builtin(self):
+        from onecode.skills.loader import BUILTIN_SKILLS_DIR
+        assert BUILTIN_SKILLS_DIR.exists()
+        cloudbase_dir = BUILTIN_SKILLS_DIR / "cloudbase"
+        assert cloudbase_dir.is_dir()
+        assert (cloudbase_dir / "skill.yaml").exists()
+        assert (cloudbase_dir / "SKILL.md").exists()
+
+        loader = SkillLoader()
+        loader._get_search_dirs = lambda: [("builtin", BUILTIN_SKILLS_DIR)]
+        loader.invalidate_cache()
+        skills = loader.get_all()
+        assert "cloudbase" in skills, \
+            "cloudbase should be discoverable via builtin_skills path"
+        assert skills["cloudbase"].path == cloudbase_dir
+
+    def test_user_skill_overrides_agents_skill(self):
+        """同名技能：用户技能优先于 .agents/skills/."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            user_skills = Path(tmpdir) / "user-skills" / "overlap"
+            user_skills.mkdir(parents=True)
+            (user_skills / "SKILL.md").write_text(
+                "---\nname: overlap\ndescription: User version\n---\n\nUser\n"
+            )
+            (user_skills / "skill.yaml").write_text(
+                yaml.dump({"name": "overlap", "description": "User version"})
+            )
+
+            agents_skills = root / ".agents" / "skills" / "overlap"
+            agents_skills.mkdir(parents=True)
+            (agents_skills / "SKILL.md").write_text(
+                "---\nname: overlap\ndescription: Agent version\n---\n\nAgent\n"
+            )
+            (agents_skills / "skill.yaml").write_text(
+                yaml.dump({"name": "overlap", "description": "Agent version"})
+            )
+
+            loader = SkillLoader(workspace_root=root)
+            loader._get_search_dirs = lambda: [
+                ("onecode", Path(tmpdir) / "user-skills"),
+                ("agents", root / ".agents" / "skills"),
+            ]
+            loader.invalidate_cache()
+            skills = loader.get_all()
+
+            assert "overlap" in skills
+            assert skills["overlap"].description == "User version"
+
+    def test_agents_skill_overrides_builtin(self):
+        """.agents/skills/ 同名技能覆盖内置技能."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            agents_skills = root / ".agents" / "skills" / "git"
+            agents_skills.mkdir(parents=True)
+            (agents_skills / "SKILL.md").write_text(
+                "---\nname: git\ndescription: Custom git from .agents\n---\n\nCustom\n"
+            )
+            (agents_skills / "skill.yaml").write_text(
+                yaml.dump({"name": "git", "description": "Custom git from .agents"})
+            )
+
+            from onecode.skills.loader import BUILTIN_SKILLS_DIR
+
+            loader = SkillLoader(workspace_root=root)
+            loader._get_search_dirs = lambda: [
+                ("agents", root / ".agents" / "skills"),
+                ("builtin", BUILTIN_SKILLS_DIR),
+            ]
+            loader.invalidate_cache()
+            skills = loader.get_all()
+
+            assert "git" in skills
+            assert skills["git"].description == "Custom git from .agents"
+
+
 class TestBuiltinSkills:
     """Verify builtin skill files exist and are well-formed."""
 

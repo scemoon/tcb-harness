@@ -102,6 +102,26 @@ class AgentServer:
 
             _tc_args: dict[str, str] = {}
 
+            # SSE heartbeat — periodic comment lines to keep connection alive
+            # during long thinking/processing periods.
+            _heartbeat_interval = 15
+
+            async def _heartbeat():
+                while True:
+                    try:
+                        await asyncio.sleep(_heartbeat_interval)
+                        await send({
+                            "type": "http.response.body",
+                            "body": b": keepalive\n\n",
+                            "more_body": True,
+                        })
+                    except asyncio.CancelledError:
+                        return
+                    except Exception:
+                        return
+
+            _hb_task = asyncio.create_task(_heartbeat())
+
             def _on_tool_call_delta(call_id: str, name: str, args_delta: str) -> None:
                 if not args_delta:
                     return
@@ -121,67 +141,74 @@ class AgentServer:
             self._engine.on_tool_call_delta = _on_tool_call_delta
 
             text_buffer = []
-            async for event in self._engine.chat_stream(user_input):
-                if isinstance(event, StreamEvent):
-                    if event.type == StreamEventType.TEXT_DELTA and event.text:
-                        text_buffer.append(event.text)
-                        payload = json.dumps({"type": "delta", "text": event.text})
-                        await send({
-                            "type": "http.response.body",
-                            "body": f"data: {payload}\n\n".encode(),
-                            "more_body": True,
-                        })
-                    elif event.type == StreamEventType.THINKING and event.thinking:
-                        payload = json.dumps({"type": "thinking", "content": event.thinking})
-                        await send({
-                            "type": "http.response.body",
-                            "body": f"data: {payload}\n\n".encode(),
-                            "more_body": True,
-                        })
-                    elif event.type == StreamEventType.TOOL_CALL_START:
-                        payload = json.dumps({
-                            "type": "tool_call_start",
-                            "toolCallId": event.tool_id,
-                            "name": event.tool_name,
-                        })
-                        await send({
-                            "type": "http.response.body",
-                            "body": f"data: {payload}\n\n".encode(),
-                            "more_body": True,
-                        })
-                    elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
-                        payload = json.dumps({
-                            "type": "tool_call_complete",
-                            "toolCallId": event.tool_id,
-                            "name": event.tool_name,
-                            "args": event.tool_args,
-                        })
-                        await send({
-                            "type": "http.response.body",
-                            "body": f"data: {payload}\n\n".encode(),
-                            "more_body": True,
-                        })
-                    elif event.type == StreamEventType.TOOL_RESULT:
-                        payload = json.dumps({
-                            "type": "tool_result",
-                            "toolCallId": event.tool_id,
-                            "content": event.result_content,
-                            "isError": event.result_is_error,
-                        })
-                        await send({
-                            "type": "http.response.body",
-                            "body": f"data: {payload}\n\n".encode(),
-                            "more_body": True,
-                        })
-                    elif event.type == StreamEventType.ERROR:
-                        payload = json.dumps({"type": "error", "message": event.error_message})
-                        await send({
-                            "type": "http.response.body",
-                            "body": f"data: {payload}\n\n".encode(),
-                            "more_body": True,
-                        })
-                else:
-                    text_buffer.append(str(event))
+            try:
+                async for event in self._engine.chat_stream(user_input):
+                    if isinstance(event, StreamEvent):
+                        if event.type == StreamEventType.TEXT_DELTA and event.text:
+                            text_buffer.append(event.text)
+                            payload = json.dumps({"type": "delta", "text": event.text})
+                            await send({
+                                "type": "http.response.body",
+                                "body": f"data: {payload}\n\n".encode(),
+                                "more_body": True,
+                            })
+                        elif event.type == StreamEventType.THINKING and event.thinking:
+                            payload = json.dumps({"type": "thinking", "content": event.thinking})
+                            await send({
+                                "type": "http.response.body",
+                                "body": f"data: {payload}\n\n".encode(),
+                                "more_body": True,
+                            })
+                        elif event.type == StreamEventType.TOOL_CALL_START:
+                            payload = json.dumps({
+                                "type": "tool_call_start",
+                                "toolCallId": event.tool_id,
+                                "name": event.tool_name,
+                            })
+                            await send({
+                                "type": "http.response.body",
+                                "body": f"data: {payload}\n\n".encode(),
+                                "more_body": True,
+                            })
+                        elif event.type == StreamEventType.TOOL_CALL_COMPLETE:
+                            payload = json.dumps({
+                                "type": "tool_call_complete",
+                                "toolCallId": event.tool_id,
+                                "name": event.tool_name,
+                                "args": event.tool_args,
+                            })
+                            await send({
+                                "type": "http.response.body",
+                                "body": f"data: {payload}\n\n".encode(),
+                                "more_body": True,
+                            })
+                        elif event.type == StreamEventType.TOOL_RESULT:
+                            payload = json.dumps({
+                                "type": "tool_result",
+                                "toolCallId": event.tool_id,
+                                "content": event.result_content,
+                                "isError": event.result_is_error,
+                            })
+                            await send({
+                                "type": "http.response.body",
+                                "body": f"data: {payload}\n\n".encode(),
+                                "more_body": True,
+                            })
+                        elif event.type == StreamEventType.ERROR:
+                            payload = json.dumps({"type": "error", "message": event.error_message})
+                            await send({
+                                "type": "http.response.body",
+                                "body": f"data: {payload}\n\n".encode(),
+                                "more_body": True,
+                            })
+                    else:
+                        text_buffer.append(str(event))
+            finally:
+                _hb_task.cancel()
+                try:
+                    await _hb_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
             full_text = "".join(text_buffer)
             payload = json.dumps({"type": "done", "text": full_text})

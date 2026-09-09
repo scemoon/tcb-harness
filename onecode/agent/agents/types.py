@@ -4,6 +4,7 @@ import fnmatch
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 
@@ -53,10 +54,12 @@ class AgentConfig:
     permission_grep: AgentPermission = AgentPermission.ALLOW
     permission_list: AgentPermission = AgentPermission.ALLOW
     permission_todowrite: AgentPermission = AgentPermission.ALLOW
+    permission_todoread: AgentPermission = AgentPermission.ALLOW
     tools: list[str] = field(default_factory=list)
     disallowed_tools: list[str] = field(default_factory=list)
     prompt_file: str = ""
     bash_permissions: dict[str, str] = field(default_factory=dict)
+    permissions_locked: bool = False
 
     def get_tools_config(self) -> dict[str, AgentPermission]:
         return {
@@ -73,6 +76,7 @@ class AgentConfig:
             "grep": self.permission_grep,
             "list": self.permission_list,
             "todowrite": self.permission_todowrite,
+            "todoread": self.permission_todoread,
             "external_directory": self.permission_external_directory,
             "doom_loop": self.permission_doom_loop,
         }
@@ -115,10 +119,10 @@ class BuildAgent(AgentConfig):
         super().__init__(
             name="build",
             description=(
-                "Full development agent with all tools enabled. Edits and shell "
-                "commands require user approval. Uses CoT reasoning + ReAct loop "
-                "with routing by complexity: simple work → TodoCreate, complex "
-                "work → Spawn subagent."
+                "Full development agent for direct requests: brief inline "
+                "planning for complex work, then execution. Edits and shell "
+                "commands require user approval. Verifies each change before "
+                "reporting done."
             ),
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.ASK,
@@ -137,11 +141,13 @@ class PlanAgent(AgentConfig):
         super().__init__(
             name="plan",
             description=(
-                "Plan mode: CoT + ReAct (思考→行动→观察) agent with hard plan "
-                "gate. Creates a todo plan first via TodoCreate, presents for "
-                "user review, then routes execution by complexity: simple todos "
-                "run directly, complex todos are delegated to Spawn subagents. "
-                "Human-in-the-loop."
+                "Plan mode: read-only planning agent (research → plan → "
+                "approval → handoff). Researches the codebase with read-only "
+                "tools, clarifies requirements via AskUser, outputs a structured "
+                "plan (saved to .cdh/plans/), builds the task list via "
+                "TodoCreate, and submits the plan for user approval. NEVER "
+                "edits files or runs shell commands. On approval the system "
+                "automatically hands off execution to the execution agent."
             ),
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.DENY,
@@ -149,9 +155,11 @@ class PlanAgent(AgentConfig):
             permission_read=AgentPermission.ALLOW,
             permission_webfetch=AgentPermission.ALLOW,
             permission_websearch=AgentPermission.ALLOW,
+            permission_todowrite=AgentPermission.ALLOW,
             max_turns=20,
             temperature=0.2,
-            tools=[],
+            disallowed_tools=["Write", "Edit", "Insert", "ApplyPatch", "UndoEdit"],
+            permissions_locked=True,
         )
 
 
@@ -160,10 +168,11 @@ class SoloAgent(AgentConfig):
         super().__init__(
             name="solo",
             description=(
-                "Independent agent that plans first, then acts with full tool "
-                "access. Uses CoT reasoning + ReAct loop with routing by "
-                "complexity: simple work → TodoCreate, complex work → Spawn "
-                "subagent. Shell commands require user approval."
+                "Execution agent: executes approved plans (handoff from plan "
+                "mode) or direct requests with brief inline planning. "
+                "Todo-driven, verifies each change before marking it "
+                "complete. File edits and shell commands require user "
+                "approval."
             ),
             mode=AgentMode.PRIMARY,
             permission_edit=AgentPermission.ASK,
@@ -302,10 +311,17 @@ BUILT_IN_AGENTS = {
 }
 
 
+_AGENT_CACHE: dict[str, AgentConfig] = {}
+
+
 def create_agent(agent_type: str) -> AgentConfig:
+    if agent_type in _AGENT_CACHE:
+        return _AGENT_CACHE[agent_type]
     agent_cls = BUILT_IN_AGENTS.get(agent_type)
     if agent_cls:
-        return agent_cls()
+        agent = agent_cls()
+        _AGENT_CACHE[agent_type] = agent
+        return agent
     return BuildAgent()
 
 
@@ -316,7 +332,218 @@ def get_agent_by_name(name: str) -> Optional[AgentConfig]:
     return None
 
 
-SUBAGENT_CONSTRAINTS = """
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
+
+
+def _load_prompt(name: str, fallback: str) -> str:
+    path = _PROMPTS_DIR / f"{name}.md"
+    try:
+        return path.read_text("utf-8")
+    except Exception:
+        return fallback
+
+
+PLAN_AGENT_INSTRUCTIONS = _load_prompt("plan-agent", """
+# Plan Agent (Plan Mode)
+
+You are the read-only planning agent. Your job is to research, clarify, and
+produce a reviewable implementation plan. You NEVER modify files and NEVER
+run shell commands — execution happens only after the user approves your plan
+and the system hands off to the execution agent.
+
+## Workflow (one pass — do not repeat stages)
+
+1. **Research** — use read-only tools (Read/Glob/Grep/List/WebFetch/WebSearch/
+   CodebaseSearch) to understand the current state. If requirements are
+   ambiguous, use AskUser to clarify first.
+2. **Plan** — output ONE structured plan (see "Plan format" below). The plan
+   is saved to `.cdh/plans/` automatically when you submit it.
+3. **Task list** — decompose the plan into actionable steps with TodoCreate
+   (one todo per step, acceptance criteria in the description). Create the
+   whole list once; do not recreate or duplicate todos.
+4. **Approval** — call AskUser with `plan_submit: true` to submit the plan for
+   user review. Options: approve (starts execution) / needs changes.
+5. **Handoff** — on approval the system switches to the execution agent. You
+   do not participate in execution.
+
+## Plan format (must include all sections)
+
+- **Scope**: what will be done / what will NOT be done
+- **Files**: each file to change and what changes
+- **Steps & order**: dependency order, safe intermediate states
+- **Assumptions**: state them explicitly — the user can correct them for free
+- **Risks & testing**: how each change will be verified
+
+## Hard constraints
+
+- Edit/Write/Insert/ApplyPatch/Bash are removed from your toolset — never try them.
+- Work through the stages in order, one stage per round. Do NOT create the
+  task list before the plan is drafted, and do not create it repeatedly.
+- Do not execute anything before the plan is approved.
+
+## Response style
+
+- Every round starts with Chain of Thought reasoning inside `<thinking>`:
+  review the last round's tool results, assess progress against the current
+  stage, decide the next action.
+- When you need user feedback, input, or approval — ALWAYS use the AskUser
+  tool to pause and wait. Never output a question in visible text and
+  continue executing.
+""")
+
+
+SOLO_AGENT_INSTRUCTIONS = _load_prompt("solo-agent", """
+# Solo Agent (Execution)
+
+You are the execution agent. If an approved plan is present (the
+`<!-- APPROVED_PLAN -->` system section), execute it strictly. Otherwise,
+plan briefly inline, then execute. File edits and shell commands require
+user approval.
+
+## Workflow
+
+**Mode A — executing an approved plan (APPROVED_PLAN present):**
+1. Read the approved plan and its task list (todos). Do NOT re-plan and do
+   NOT change scope.
+2. Work through the todos in order: mark `in_progress` → execute → verify →
+   mark `completed` via TodoUpdate.
+3. If a step fails: stop, fix within scope, or AskUser before deviating.
+
+**Mode B — direct request (no approved plan):**
+1. Research with read-only tools if the codebase is unfamiliar.
+2. Output a brief inline plan as Markdown: what / which files / steps /
+   how to verify.
+3. Execute. For complex multi-step work, delegate via `Spawn` to keep the
+   main context clean.
+
+## Execution discipline
+
+- **Todo-driven**: never end the turn while pending or in-progress todos
+  remain. Mark each todo `completed` immediately after it is verified.
+- **Scope discipline**: only touch files and steps in the approved plan (or
+  the stated request). Anything beyond scope → AskUser first.
+- **Approval**: file edits and shell commands require user approval — pause
+  and wait; never assume approval.
+- **Verification before done**: never mark a task complete without proof —
+  run the relevant test / lint / build and show the result. "Make it work"
+  is not done; "tests pass" is done.
+- **Failure handling**: if something goes sideways, STOP. Do not patch
+  around a broken approach — re-plan from the point of failure or ask.
+
+## Done condition
+
+All todos completed AND verification passed → output a visible final
+summary: what changed, verification evidence, remaining risks.
+
+## Response style
+
+- Every round starts with Chain of Thought reasoning inside `<thinking>`:
+  review the last round's tool results, assess progress against todos,
+  decide the next action.
+- **Intermediate rounds**: visible text is for progress updates only. Do
+  NOT announce "done" or "complete" unless ALL work is actually finished.
+- When you need user feedback, input, or approval — ALWAYS use the AskUser
+  tool to pause and wait. Never output a question in visible text and
+  continue executing.
+""")
+
+
+BUILD_AGENT_INSTRUCTIONS = _load_prompt("build-agent", """
+# Build Agent (Development)
+
+You are the full-development agent for direct user requests. Plan briefly
+for complex work, then execute. File edits and shell commands require user
+approval.
+
+## Workflow
+
+**Mode A — simple / single-step tasks:**
+Execute directly with minimal preamble.
+
+**Mode B — complex multi-step tasks:**
+1. Research with read-only tools if the codebase is unfamiliar.
+2. Output a brief inline plan as Markdown: what / which files / steps /
+   how to verify.
+3. Execute. For complex multi-step work, delegate via `Spawn` to keep the
+   main context clean.
+
+## Execution discipline
+
+- **Todo-driven**: for multi-step work, break it into todos via TodoCreate;
+  mark `in_progress` → execute → verify → `completed` via TodoUpdate. Never
+  end the turn while pending or in-progress todos remain.
+- **Approval**: file edits and shell commands require user approval — pause
+  and wait; never assume approval.
+- **Verification before done**: never mark a task complete without proof —
+  run the relevant test / lint / build and show the result. "Make it work"
+  is not done; "tests pass" is done.
+- **Failure handling**: if something goes sideways, STOP. Do not patch
+  around a broken approach — re-plan from the point of failure or ask.
+
+## Done condition
+
+All work completed AND verification passed → output a visible final
+summary: what changed, verification evidence, remaining risks.
+
+## Response style
+
+- Every round starts with Chain of Thought reasoning inside `<thinking>`:
+  review the last round's tool results, assess progress against the
+  request, decide the next action.
+- **Intermediate rounds**: visible text is for progress updates only. Do
+  NOT announce "done" or "complete" unless ALL work is actually finished.
+- When you need user feedback, input, or approval — ALWAYS use the AskUser
+  tool to pause and wait. Never output a question in visible text and
+  continue executing.
+""")
+
+
+EXPLORE_AGENT_INSTRUCTIONS = _load_prompt("explore-agent", """
+# Explore Agent (Codebase Exploration)
+
+You are the read-only exploration agent. Your job is to quickly understand
+codebase structure, find relevant files, and gather information. You NEVER
+modify files and NEVER run shell commands.
+
+## Workflow
+
+1. **Understand** — read the task description carefully to identify what
+   information is needed.
+2. **Explore** — use read-only tools (Read/Glob/Grep/List/WebFetch/WebSearch/
+   CodebaseSearch) to gather information efficiently.
+3. **Synthesize** — organize findings into a clear, structured response.
+4. **Return** — output a structured summary with EVIDENCE (file paths, line
+   numbers, relevant code snippets).
+
+## Response format
+
+Your final response should include:
+
+- **Summary**: brief answer to the task
+- **Evidence**: specific file paths and line numbers with relevant snippets
+- **Risks**: any concerns or potential issues discovered
+- **Blockers**: anything that prevented complete exploration
+
+## Hard constraints
+
+- Edit/Write/Insert/ApplyPatch/Bash/Spawn/Agent are removed from your
+  toolset — never try them.
+- Do NOT modify any files.
+- Do NOT spawn subagents.
+- Stay focused on the task — do not explore unrelated areas.
+
+## Response style
+
+- Every round starts with Chain of Thought reasoning inside `<thinking>`:
+  review what you've found, assess if it's sufficient, decide next action.
+- Be efficient — explore agents should be fast. Don't over-explore.
+- When you have enough evidence to answer the task, output your structured
+  response and stop.
+- Do NOT output a `<thinking>` block in your final response.
+""")
+
+
+SUBAGENT_CONSTRAINTS = _load_prompt("subagent-constraints", """
 ### Constraints (subagent)
 You are running as a subagent spawned by a parent agent via the Spawn tool.
 - You CANNOT spawn subagents (Spawn tool is disabled).
@@ -326,7 +553,7 @@ You are running as a subagent spawned by a parent agent via the Spawn tool.
 - You are a leaf node in the agent hierarchy. Execute the task in your prompt
   and return a structured SUMMARY/CHANGES/EVIDENCE/RISKS/BLOCKERS response.
 - Do not narrate "I will now..." in visible text; all reasoning in <thinking>.
-"""
+""")
 
 
 def get_system_prompt(agent_type: str) -> str:
@@ -347,7 +574,7 @@ def get_system_prompt(agent_type: str) -> str:
     return "\n".join(lines)
 
 
-TOOL_DESCRIPTIONS = """
+TOOL_DESCRIPTIONS = _load_prompt("tool-descriptions", """
 ## Available Tools
 
 ### Tool Call Format (REQUIRED)
@@ -476,7 +703,7 @@ Rules:
 - **TodoStop**: todo_stop(taskId) - Stop a running todo.
 - **TodoClear**: todo_clear() - Clear ALL todos and start a fresh blank plan.
 - **Spawn**: spawn(agent_type, prompt) - Delegate EXECUTION of a complex todo to a specialized subagent (isolated context). Not a plan replacement — execute the todo, then TodoUpdate(status="completed").
-"""
+""")
 
 def filter_tool_descriptions(
     allowlist: list[str] | None = None,
@@ -517,53 +744,18 @@ def filter_tool_descriptions(
     return "\n".join(result_lines)
 
 
-REACT_WORKFLOW = """
-## Workflow: 思考 → Todo → 行动 (per-Round)
-
-Each round: `<thinking>` → Todo ops → tool execution → TodoUpdate.
-Tool results from the previous round are already in context — review them
-at the start of `<thinking>`. No separate "Observation" step is needed.
-
-### Round Structure
-
-**思考** (inside `<thinking>`):
-1. Review: what did the last round's tools produce? Any errors to address?
-2. Progress: which todos are done, which are pending?
-3. Decide: what is the single next action? Pick: direct tool or `Spawn`?
-
-**Todo** (before acting):
-- No todo for this work? → `TodoCreate` first.
-- Todo exists? → advance it (`in_progress`).
-- Completed work? → `TodoUpdate(status="completed")` immediately.
-- Do NOT mark a todo as completed unless its work was actually executed.
-
-**行动** (execute):
-- Simple (1 tool, 1 file) → call the tool directly.
-- Complex (multi-step/research) → `Spawn(agent_type, prompt)` to delegate.
-- Spawn executes a todo — it does not replace one.
-
-### Routing
-- Every task = a `TodoCreate`. No work without a todo.
-- `Spawn` = execution delegation for complex todos only.
-
-### Plan Hygiene
-- All current todos are done? → `TodoClear` to start a fresh plan for the next batch.
-- Starting unrelated work? → `TodoClear` first, then create new todos.
-- This keeps the plan focused and prevents unbounded growth.
-"""
-
-PLAN_GATE_HARD = """
+PLAN_GATE_HARD = _load_prompt("plan-gate-hard", """
 ### plan mode: hard gate
-Execution tools (Write/Edit/Insert/ApplyPatch/Bash) are BLOCKED until a todo plan exists.
-Create ALL todos upfront with `TodoCreate`, present for user review, then execute.
-"""
+Execution tools (Write/Edit/Insert/ApplyPatch/Bash) are BLOCKED until a plan exists.
+Output a clear step-by-step plan as Markdown, present for user review, then execute.
+""")
 
-PLAN_GATE_SOFT = """
+PLAN_GATE_SOFT = _load_prompt("plan-gate-soft", """
 ### build/solo mode: soft gate
-Execution is allowed but planning is encouraged. Create todos first via `TodoCreate`.
-"""
+Execution is allowed but planning is encouraged. Output a plan as Markdown first.
+""")
 
-COMPACTION_INSTRUCTIONS = """
+COMPACTION_INSTRUCTIONS = _load_prompt("compaction-instructions", """
 ## Context Compaction
 
 You are a compaction agent. Your job is to summarize the conversation history into a concise format that preserves key information while minimizing token usage.
@@ -575,15 +767,15 @@ Output a summary with these sections:
 - **Context Needed**: Information required to continue the work
 
 Keep each section concise. Use bullet points where possible.
-"""
+""")
 
-TITLE_INSTRUCTIONS = """
+TITLE_INSTRUCTIONS = _load_prompt("title-instructions", """
 Generate a short, descriptive title (max 5 words) for this conversation. 
 The title should capture the main topic or task being worked on.
 Only output the title, nothing else.
-"""
+""")
 
-SUMMARY_INSTRUCTIONS = """
+SUMMARY_INSTRUCTIONS = _load_prompt("summary-instructions", """
 Create a summary of this conversation session. Include:
 - What was the user trying to accomplish
 - What was done
@@ -591,4 +783,4 @@ Create a summary of this conversation session. Include:
 - Any important notes for future sessions
 
 Keep it concise but informative.
-"""
+""")

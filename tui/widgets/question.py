@@ -136,25 +136,25 @@ class Question(containers.VerticalGroup, can_focus=True):
         Binding(
             "a",
             "select_kind(('allow_once', 'allow'))",
-            "Allow once",
+            "1×",
             group=ALLOW_GROUP,
         ),
         Binding(
             "A",
             "select_kind('allow_always')",
-            "Allow always",
+            "∞",
             group=ALLOW_GROUP,
         ),
         Binding(
             "r",
             "select_kind(('reject_once', 'reject'))",
-            "Reject once",
+            "1×",
             group=REJECT_GROUP,
         ),
         Binding(
             "R",
             "select_kind('reject_always')",
-            "Reject always",
+            "∞",
             group=REJECT_GROUP,
         ),
     ]

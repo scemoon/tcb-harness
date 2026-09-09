@@ -37,6 +37,8 @@ class MemoryBackend:
             db_path = ONECODE_DIR / "memory" / "memory.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA journal_mode=WAL")
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 
@@ -109,6 +111,24 @@ class MemoryBackend:
                 .all()
             )
 
+    def get_all_entries(self, layer: Optional[str] = None) -> list[dict]:
+        with self.session() as s:
+            query = s.query(MemoryRecord).order_by(MemoryRecord.timestamp.desc())
+            if layer:
+                query = query.filter_by(layer=layer)
+            return [
+                {
+                    "id": r.id,
+                    "layer": r.layer,
+                    "content": r.content,
+                    "timestamp": r.timestamp.isoformat() if r.timestamp else "",
+                    "metadata_json": r.metadata_json or {},
+                    "parent_id": r.parent_id,
+                    "result_ref": r.result_ref,
+                }
+                for r in query.all()
+            ]
+
     def get_recent_entries(self, layer: Optional[str] = None, limit: int = 20) -> list[MemoryRecord]:
         with self.session() as s:
             query = s.query(MemoryRecord).order_by(MemoryRecord.timestamp.desc())
@@ -141,8 +161,8 @@ class MemoryBackend:
             results = s.query(MemoryRecord.layer, func.count(MemoryRecord.id)).group_by(MemoryRecord.layer).all()
             return {layer: count for layer, count in results}
 
-    def clear_old_entries(self, layer: str, keep_last: int = 100) -> int:
-        removed = 0
+    def clear_old_entries(self, layer: str, keep_last: int = 100) -> tuple[int, list[str]]:
+        removed_ids = []
         with self.session() as s:
             count = s.query(MemoryRecord).filter_by(layer=layer).count()
             if count > keep_last:
@@ -154,6 +174,6 @@ class MemoryBackend:
                     .all()
                 )
                 for entry in old_entries:
+                    removed_ids.append(entry.id)
                     s.delete(entry)
-                    removed += 1
-        return removed
+        return len(removed_ids), removed_ids

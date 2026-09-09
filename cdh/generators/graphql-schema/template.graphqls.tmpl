@@ -1,0 +1,12 @@
+# Auto-generated from {{.SourceFile}}
+scalar JSON
+
+type Query {
+  schema: String!
+}
+
+{{range .Types}}type {{.Name}} {
+{{range .Properties}}  {{.JsonName}}: {{.GraphQLType}}
+{{end}}}
+
+{{end}}

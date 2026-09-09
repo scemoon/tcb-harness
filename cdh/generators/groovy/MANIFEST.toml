@@ -1,0 +1,14 @@
+# Plugin manifest for groovy
+[plugin]
+name = "groovy"
+display_name = "Groovy"
+file_extension = ".groovy"
+mime_type = "text/x-groovy"
+default_outdir = "groovy"
+output_filename_template = "{name}}.groovy"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

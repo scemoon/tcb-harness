@@ -1,0 +1,14 @@
+# Plugin manifest for zig
+[plugin]
+name = "zig"
+display_name = "Zig"
+file_extension = ".zig"
+mime_type = "text/x-zig"
+default_outdir = "zig"
+output_filename_template = "{name}}.zig"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

@@ -1,0 +1,20 @@
+# Auto-generated from {{.SourceFile}}
+using module Newtonsoft.Json
+
+{{range .Types}}
+class {{.Name}} {
+{{range .Properties}}    [{{if .IsNullable}}string{{else}}string{{end}}]${{.Name}}
+{{end}}
+
+    {{.Name}}() {}
+
+    static [{{.Name}}] FromJson([string]$json) {
+        $obj = [JsonConvert]::DeserializeObject($json, [{{.Name}}]::class)
+        return $obj
+    }
+
+    [string] ToJson() {
+        return [JsonConvert]::SerializeObject($this)
+    }
+}
+{{end}}

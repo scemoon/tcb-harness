@@ -1,0 +1,14 @@
+# Plugin manifest for clojure
+[plugin]
+name = "clojure"
+display_name = "Clojure"
+file_extension = ".clj"
+mime_type = "text/x-clojure"
+default_outdir = "clojure"
+output_filename_template = "{name}.clj"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

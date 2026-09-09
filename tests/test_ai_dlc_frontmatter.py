@@ -30,7 +30,7 @@ def test_frontmatter_present():
 
     assert fm["name"] == "ai-dlc-skill"
     assert "Understand" in fm["description"]
-    assert set(fm["phases"]) == {"understand", "plan", "verify", "deliver"}
+    assert set(fm["phases"]) == {"understand", "plan", "verify", "deliver", "brownfield"}
 
     for trigger in ("ai-dlc", "lifecycle", "BDD", "INT-FR"):
         assert trigger in fm["triggers"], \

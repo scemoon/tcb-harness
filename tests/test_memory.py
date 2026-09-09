@@ -47,6 +47,36 @@ def test_bm25_score_order():
     assert scores == sorted(scores, reverse=True)
 
 
+def test_bm25_incremental_add():
+    bm25 = BM25()
+    bm25.index(["hello world", "goodbye world"])
+    bm25.add_docs(["python code"])
+    assert bm25.num_docs == 3
+    results = bm25.search("python", top_k=3)
+    doc_indices = [idx for idx, _ in results]
+    assert 2 in doc_indices
+
+
+def test_bm25_remove_doc():
+    bm25 = BM25()
+    bm25.index(["hello world", "goodbye world", "python code"])
+    bm25.remove_doc_at(1)
+    assert bm25.num_docs == 2
+    results = bm25.search("hello", top_k=2)
+    assert len(results) >= 1
+    assert results[0][0] == 0
+
+
+def test_bm25_remove_and_search():
+    bm25 = BM25()
+    bm25.index(["apple fruit", "banana fruit", "cherry fruit", "date fruit"])
+    bm25.remove_doc_at(1)
+    results = bm25.search("fruit", top_k=4)
+    doc_indices = [idx for idx, _ in results]
+    assert 0 in doc_indices
+    assert 2 in doc_indices
+
+
 # ---------------------------------------------------------------------------
 # HybridRecall (used by AgentMemory)
 # ---------------------------------------------------------------------------
@@ -70,6 +100,21 @@ def test_hybrid_recall_clear():
     hr.add_documents(["hello world"])
     hr.clear()
     assert hr.keyword_recall("hello") == []
+
+
+def test_hybrid_recall_remove_documents():
+    hr = HybridRecall()
+    hr.add_documents(
+        ["hello world", "goodbye world", "python code"],
+        ["id0", "id1", "id2"],
+    )
+    hr.remove_documents(["id1"])
+    result_ids = [r.entry_id for r in hr.keyword_recall("goodbye", top_k=5)]
+    assert "id1" not in result_ids
+    result_ids = [r.entry_id for r in hr.keyword_recall("hello", top_k=5)]
+    assert "id0" in result_ids
+    assert "id1" not in result_ids
+    assert "id2" in result_ids
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +180,19 @@ def test_pyramid_get_content(tmp_path: Path):
     assert "content" in content
 
 
+def test_pyramid_remove(tmp_path: Path):
+    pyramid = MemoryPyramid(tmp_path / "mem")
+    entry1 = pyramid.add(MemoryLayer.L0_CONVERSATION, "first")
+    entry2 = pyramid.add(MemoryLayer.L0_CONVERSATION, "second")
+    entries = pyramid.list_by_layer(MemoryLayer.L0_CONVERSATION)
+    assert len(entries) == 2
+    removed = pyramid.remove(MemoryLayer.L0_CONVERSATION, entry1.id)
+    assert removed is True
+    entries = pyramid.list_by_layer(MemoryLayer.L0_CONVERSATION)
+    assert len(entries) == 1
+    assert entries[0].id == entry2.id
+
+
 # ---------------------------------------------------------------------------
 # MemoryBackend
 # ---------------------------------------------------------------------------
@@ -176,8 +234,9 @@ def test_backend_clear_old_entries(tmp_path: Path):
     backend = MemoryBackend(tmp_path / "test.db")
     for i in range(10):
         backend.add_entry(f"id{i}", "l0_conversation", f"msg {i}")
-    removed = backend.clear_old_entries("l0_conversation", keep_last=3)
-    assert removed == 7
+    removed_count, removed_ids = backend.clear_old_entries("l0_conversation", keep_last=3)
+    assert removed_count == 7
+    assert len(removed_ids) == 7
     counts = backend.count_by_layer()
     assert counts.get("l0_conversation") == 3
 
@@ -212,3 +271,68 @@ def test_agent_memory_multi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     results = am.search_memories("python", top_k=5)
     assert len(results) >= 1
     assert "python" in results[0].content
+
+
+def test_agent_memory_forget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("onecode.config.ONECODE_DIR", tmp_path)
+    am = AgentMemory()
+    entry1 = am.remember(MemoryLayer.L0_CONVERSATION, "remember this", {"source": "test1"})
+    entry2 = am.remember(MemoryLayer.L0_CONVERSATION, "forget this", {"source": "test2"})
+    results = am.search_memories("remember", top_k=5)
+    assert len(results) >= 1
+    am.forget(MemoryLayer.L0_CONVERSATION, entry1.id)
+    results = am.search_memories("remember", top_k=5)
+    assert all(r.entry_id != entry1.id for r in results)
+    results = am.search_memories("forget", top_k=5)
+    assert len(results) >= 1
+    assert results[0].entry_id == entry2.id
+
+
+def test_agent_memory_clear_old_memories(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("onecode.config.ONECODE_DIR", tmp_path)
+    am = AgentMemory()
+    for i in range(10):
+        am.remember(MemoryLayer.L0_CONVERSATION, f"message {i}")
+    counts = am.backend.count_by_layer()
+    assert counts.get("l0_conversation") == 10
+    removed = am.clear_old_memories(MemoryLayer.L0_CONVERSATION, keep_last=3)
+    assert removed == 7
+    counts = am.backend.count_by_layer()
+    assert counts.get("l0_conversation") == 3
+    results = am.search_memories("message", top_k=10)
+    assert len(results) <= 3
+
+
+def test_agent_memory_incremental_indexing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("onecode.config.ONECODE_DIR", tmp_path)
+    am = AgentMemory()
+    for i in range(100):
+        am.remember(MemoryLayer.L0_CONVERSATION, f"document number {i}")
+    results = am.search_memories("document number 50", top_k=5)
+    assert len(results) >= 1
+    assert "50" in results[0].content
+
+
+def test_bm25_serialization():
+    bm25 = BM25()
+    bm25.index(["hello world", "goodbye world", "python code"])
+    data = bm25.serialize()
+    restored = BM25.deserialize(data)
+    assert restored.num_docs == 3
+    assert restored.doc_lengths == bm25.doc_lengths
+    results = restored.search("python", top_k=3)
+    doc_indices = [idx for idx, _ in results]
+    assert 2 in doc_indices
+
+
+def test_hybrid_recall_serialization():
+    hr = HybridRecall()
+    hr.add_documents(["hello world", "goodbye world"], ["id0", "id1"], {"id0": {"a": 1}})
+    data = hr.serialize()
+    restored = HybridRecall.deserialize(data)
+    assert len(restored._documents) == 2
+    assert restored._entry_ids == ["id0", "id1"]
+    assert restored._metadata == {"id0": {"a": 1}}
+    results = restored.keyword_recall("hello", top_k=5)
+    assert len(results) >= 1
+    assert results[0].entry_id == "id0"

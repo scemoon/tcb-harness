@@ -1,0 +1,14 @@
+# Plugin manifest for nim
+[plugin]
+name = "nim"
+display_name = "Nim"
+file_extension = ".nim"
+mime_type = "text/x-nim"
+default_outdir = "nim"
+output_filename_template = "{name}}.nim"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

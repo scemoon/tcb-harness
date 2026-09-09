@@ -1,0 +1,14 @@
+# Plugin manifest for hack
+[plugin]
+name = "hack"
+display_name = "Hack"
+file_extension = ".hh"
+mime_type = "text/x-hack"
+default_outdir = "hack"
+output_filename_template = "{name}}.hh"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

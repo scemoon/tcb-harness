@@ -1,0 +1,14 @@
+# Plugin manifest for nix
+[plugin]
+name = "nix"
+display_name = "Nix"
+file_extension = ".nix"
+mime_type = "text/x-nix"
+default_outdir = "nix"
+output_filename_template = "{name}}.nix"
+package_name_default = "types"
+
+[features]
+enums = false
+nullable = true
+format_hints = ["date-time", "uuid"]

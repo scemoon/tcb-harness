@@ -134,15 +134,15 @@ class TestAskUserReask:
 
     def test_ask_user_uses_default_on_second_timeout(self):
         """On second timeout (after 2 minutes total), use the default option
-        rather than cancelling, so the agent can continue with a sensible
-        choice."""
+        for prompts that have options; cancel free-text prompts."""
         from onecode.agent.onecode_agent_acp import CDHACPAdapter
         import inspect
         src = inspect.getsource(CDHACPAdapter.session_prompt)
-        # On second timeout, the adapter must call the default-picker and
-        # NOT set cancelled = True.
         assert "_pick_default_ask_user_answer" in src, (
-            "Expected _pick_default_ask_user_answer helper for 3rd-attempt default"
+            "Expected _pick_default_ask_user_answer for options-based prompts"
+        )
+        assert "cancelled = True" in src, (
+            "Expected cancelled = True for free-text prompts"
         )
 
     def test_pick_default_uses_marked_default(self):

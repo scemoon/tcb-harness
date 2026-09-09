@@ -1,0 +1,13 @@
+// Auto-generated from {{.SourceFile}}
+package {{.PackageName}}
+
+import java.time.Instant
+import java.util.UUID
+import io.circe.{Codec, Decoder, Encoder}
+import io.circe.generic.semiauto._
+
+{{range .Types}}
+case class {{.Name}}(
+{{range .Properties}}  {{.Name}}: {{if .IsNullable}}Option[String]{{else}}String{{end}},
+{{end}})
+{{end}}

@@ -234,12 +234,14 @@ class StoreScreen(Screen):
             "tab",
             "app.focus_next",
             "Focus Next",
+            show=False,
             group=FOCUS_GROUP,
         ),
         Binding(
             "shift+tab",
             "app.focus_previous",
             "Focus Previous",
+            show=False,
             group=FOCUS_GROUP,
         ),
         Binding(
@@ -252,10 +254,10 @@ class StoreScreen(Screen):
         Binding(
             "ctrl+d",
             "directory",
-            "Directory",
+            "Dir",
             tooltip="Change project directory",
         ),
-        Binding("escape", "dismiss", "Dismiss"),
+        Binding("escape", "dismiss", "Dismiss", show=False),
     ]
 
     agents_view = getters.query_one("#agents-view", GridSelect)

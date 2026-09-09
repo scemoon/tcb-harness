@@ -20,6 +20,10 @@ ProjectsScreen {
         text-style: italic;
     }
 
+    .instructions.-hidden {
+        display: none;
+    }
+
     #actions {
         height: auto;
         align-horizontal: center;

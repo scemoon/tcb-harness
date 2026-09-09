@@ -1,0 +1,24 @@
+! Auto-generated from {{.SourceFile}}
+module types
+  implicit none
+
+{{range .Types}}  type :: {{.Name}}
+{{range .Properties}}    character(len=100) :: {{.Name}}
+{{end}}  end type {{.Name}}
+{{end}}
+
+contains
+
+{{range .Types}}  subroutine {{.Name}}_from_json(json_str, obj)
+    character(len=*), intent(in) :: json_str
+    type({{.Name}}), intent(out) :: obj
+    ! JSON parsing would go here
+  end subroutine {{.Name}}_from_json
+
+  subroutine {{.Name}}_to_json(obj, json_str)
+    type({{.Name}}), intent(in) :: obj
+    character(len=*), intent(out) :: json_str
+    ! JSON serialization would go here
+  end subroutine {{.Name}}_to_json
+{{end}}
+end module types

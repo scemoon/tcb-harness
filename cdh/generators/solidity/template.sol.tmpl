@@ -1,0 +1,24 @@
+// Auto-generated from {{.SourceFile}}
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+{{range .Types}}
+struct {{.Name}} {
+{{range .Properties}}    {{.Type}} {{.Name}};
+{{end}}}
+{{end}}
+
+library Types {
+{{range .Types}}    function toStruct({{.Name}} memory self) internal pure returns ({{.Name}} memory) {
+        return self;
+    }
+
+    function toJson({{.Name}} memory self) internal pure returns (bytes memory) {
+        return abi.encode(self);
+    }
+
+    function fromJson(bytes memory data) internal pure returns ({{.Name}} memory) {
+        return abi.decode(data, ({{.Name}}));
+    }
+{{end}}
+}

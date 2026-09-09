@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sys
+import time
 
 logger = logging.getLogger("tui.acp.agent")
 
@@ -25,6 +26,8 @@ from tui.acp import protocol
 from tui.acp import api
 from tui.acp.api import API
 from tui.acp import messages
+from tui.acp.event_tap import AcpEventTap
+from cdh.trace import add_trace as _add_trace
 from tui.acp.prompt import build as build_prompt
 from tui import messages as tui_messages
 from tui.db import DB
@@ -32,6 +35,50 @@ from tui import constants
 from tui.answer import Answer
 
 PROTOCOL_VERSION = 1
+
+# Tool names that add/modify file contents and therefore contribute to
+# "lines of code added" accounting.
+_LOC_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit", "NotebookWrite")
+
+
+def _extract_lines_added(update: dict) -> int | None:
+    """Estimate lines of code added for a file-writing tool call.
+
+    Returns the number of newlines (+1) found in the new content of an
+    ``Edit``/``Write`` tool call, or ``None`` if the update is not a
+    recognised file-writing tool or no content is available.
+
+    The ACP ``_tool_args`` payload carries the new content under
+    ``new_string`` (Edit) or ``content`` (Write).  A fallback scans any
+    attached content blocks for text.
+    """
+    tool = str(update.get("title") or update.get("kind") or "")
+    base = tool.split(":", 1)[0].strip()
+    if base not in _LOC_TOOLS:
+        return None
+    args = (
+        update.get("_tool_args")
+        or update.get("input")
+        or update.get("arguments")
+        or {}
+    )
+    if not isinstance(args, dict):
+        args = {}
+    text = args.get("new_string") or args.get("newText") or args.get("content")
+    if not text:
+        for blk in update.get("content") or []:
+            if not isinstance(blk, dict):
+                continue
+            c = blk.get("content")
+            if isinstance(c, dict):
+                text = c.get("text", "")
+            elif isinstance(c, str):
+                text = c
+            if text:
+                break
+    if not isinstance(text, str) or not text:
+        return None
+    return text.count("\n") + 1
 
 
 class Mode(NamedTuple):
@@ -52,16 +99,21 @@ class Agent(AgentBase):
         agent: AgentData,
         session_id: str | None,
         session_pk: int | None = None,
+        default_model: str | None = None,
     ) -> None:
         """
 
         Args:
             project_root: Project root path.
-            command: Command to launch agent.
+            agent: Agent data.
+            session_id: Session ID.
+            session_pk: Session primary key.
+            default_model: Default model to use when _current_model is not set.
         """
         super().__init__(project_root)
 
         self._agent_data = agent
+        self._default_model = default_model
         self.session_id = session_id
 
         self.server = jsonrpc.Server()
@@ -89,10 +141,21 @@ class Agent(AgentBase):
         self._terminal_count: int = 0
         self.session_load_info: dict = {}
 
+        self.event_tap = AcpEventTap()
+        self._current_model: str | None = None
+        self._tool_call_start: dict[str, float] = {}
+
+    @property
+    def _effective_model(self) -> str | None:
+        """Return current model or fallback to default model."""
+        return self._current_model or self._default_model
+
     @property
     def command(self) -> str | None:
         """The command used to launch the agent, or `None` if there isn't one."""
         acp_command = tui.get_os_matrix(self._agent_data["run_command"])
+        if acp_command and acp_command.startswith("python3 "):
+            acp_command = f"{sys.executable} {acp_command[7:]}"
         return acp_command
 
     @property
@@ -204,6 +267,13 @@ class Agent(AgentBase):
             case {"sessionUpdate": "plan", "entries": entries}:
                 self.post_message(messages.Plan(entries))
 
+            case {"sessionUpdate": "aidlc_state", **state}:
+                self.post_message(messages.AIDLCState(
+                    current_phase=state.get("current_phase", ""),
+                    completed_phases=state.get("completed_phases", []),
+                    gate_results=state.get("gate_results", {}),
+                ))
+
             case {
                 "sessionUpdate": "tool_call_update",
                 "toolCallId": tool_call_id,
@@ -260,6 +330,7 @@ class Agent(AgentBase):
                     options=update.get("options", []),
                     questions=update.get("questions", []),
                     tool_id=update.get("toolId", ""),
+                    checkpoint_id=update.get("checkpointId", ""),
                 ))
 
             case {
@@ -270,6 +341,7 @@ class Agent(AgentBase):
                     questions=questions,
                     context=update.get("context", ""),
                     tool_id=update.get("toolId", ""),
+                    checkpoint_id=update.get("checkpointId", ""),
                 ))
 
             case {
@@ -277,6 +349,13 @@ class Agent(AgentBase):
                 "availableCommands": available_commands,
             }:
                 self.post_message(messages.AvailableCommandsUpdate(available_commands))
+
+            case {
+                "sessionUpdate": "awaiting_user_input",
+            }:
+                self.post_message(messages.AwaitingUserInput(
+                    prompt_preview=update.get("promptPreview", ""),
+                ))
 
             case {
                 "sessionUpdate": "subagent_start",
@@ -315,8 +394,95 @@ class Agent(AgentBase):
                     error=rest.get("error", ""),
                 ))
 
+        self.event_tap.on_session_update(update)
+
+        update_type = update.get("sessionUpdate", "")
+        agent_name = self._agent_data.get("name", "") if self._agent_data else ""
+        tags = {"agent": agent_name, "update_type": update_type}
+
+        trace_kw: dict[str, Any] = {
+            "session_id": sessionId,
+            "tags": tags,
+        }
+        if self._effective_model:
+            trace_kw["model"] = self._effective_model
+
+        tool_call_id = update.get("toolCallId")
+        subagent_id = update.get("subagentId")
+
+        if update_type == "tool_call" and tool_call_id:
+            self._tool_call_start[tool_call_id] = time.time()
+            trace_kw["tool_name"] = update.get("title", "")
+            trace_kw["tool_kind"] = update.get("kind")
+            trace_kw["parent_span_id"] = "session_root"
+            loc = _extract_lines_added(update)
+            if loc is not None:
+                trace_kw["lines_added"] = loc
+
+        elif update_type == "tool_call_update" and tool_call_id:
+            status = update.get("status", "")
+            trace_kw["tool_name"] = update.get("title")
+            trace_kw["status"] = "error" if status in ("error", "failed") else "success"
+            if tool_call_id in self._tool_call_start:
+                trace_kw["duration"] = time.time() - self._tool_call_start[tool_call_id]
+
+        elif update_type == "usage_update":
+            trace_kw["token_count"] = update.get("used", 0)
+            cost = update.get("cost")
+            if cost:
+                trace_kw["cost_amount"] = cost.get("amount")
+                trace_kw["cost_currency"] = cost.get("currency")
+
+        elif update_type == "subagent_start":
+            trace_kw["agent_type"] = update.get("agentType")
+            if subagent_id:
+                trace_kw["subagent_id"] = subagent_id
+            trace_kw["parent_span_id"] = "session_root"
+
+        elif update_type in ("subagent_chunk", "subagent_thinking"):
+            trace_kw["parent_span_id"] = f"subagent:{subagent_id}" if subagent_id else "session_root"
+
+        elif update_type == "subagent_end":
+            trace_kw["parent_span_id"] = f"subagent:{subagent_id}" if subagent_id else "session_root"
+            trace_kw["status"] = update.get("status", "completed")
+            trace_kw["error"] = update.get("error", "")
+            trace_kw["agent_type"] = update.get("agentType")
+
+        elif update_type in ("agent_message_chunk", "agent_thought_chunk", "user_message_chunk", "ask_user"):
+            trace_kw["parent_span_id"] = "session_root"
+
+        _add_trace("ACP", update_type, **trace_kw)
+
         if status_line is not None:
             self.post_message(messages.UpdateStatusLine(status_line))
+
+    @jsonrpc.expose("session/event")
+    def rpc_session_event(
+        self,
+        sessionId: str,
+        event: dict,
+        metrics: dict | None = None,
+        _meta: dict[str, Any] | None = None,
+    ):
+        """Handle structured session/event notification (onecode enhancement).
+
+        See docs/loop.md §9.2 for protocol spec.
+        """
+        self.event_tap.on_session_event(event)
+        event_type = event.get("type", "")
+        agent_name = self._agent_data.get("name", "") if self._agent_data else ""
+        tags = {"agent": agent_name, "event_type": event_type}
+        trace_kw: dict[str, Any] = {
+            "session_id": sessionId,
+            "tags": tags,
+        }
+        if self._effective_model:
+            trace_kw["model"] = self._effective_model
+        if "status" in event:
+            trace_kw["status"] = event["status"]
+        if "error" in event:
+            trace_kw["error"] = event["error"]
+        _add_trace("ACP_EVENT", event_type, **trace_kw)
 
     @jsonrpc.expose("session/request_permission")
     async def rpc_request_permission(
@@ -367,14 +533,14 @@ class Agent(AgentBase):
         }
         return result
 
-    def send_ask_user_answer(self, answer: str, cancelled: bool) -> None:
+    def send_ask_user_answer(self, answer: str, cancelled: bool, rollback: bool = False) -> None:
         """Send the user's answer back to the CDHA agent."""
         import uuid
 
         request = {
             "jsonrpc": "2.0",
             "method": "session/ask_user_answer",
-            "params": {"answer": answer, "cancelled": cancelled},
+            "params": {"answer": answer, "cancelled": cancelled, "rollback": rollback},
             "id": str(uuid.uuid4()),
         }
         if self._process is not None and self._process.stdin is not None:
@@ -587,10 +753,6 @@ class Agent(AgentBase):
                     logger.error("Invalid JSON from agent: %r", agent_data)
                     continue
 
-                if not isinstance(agent_data, dict):
-                    logger.error("Invalid JSON from agent: %r", agent_data)
-                    continue
-
                 # By this point we know it is a JSON RPC call
                 assert isinstance(agent_data, dict)
                 tasks.add(asyncio.create_task(call_jsonrpc(agent_data)))
@@ -636,6 +798,14 @@ class Agent(AgentBase):
         if self._process is not None:
             try:
                 self._process.terminate()
+                try:
+                    await asyncio.wait_for(self._process.wait(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    try:
+                        self._process.kill()
+                        await asyncio.wait_for(self._process.wait(), timeout=2.0)
+                    except (OSError, asyncio.TimeoutError):
+                        pass
             except OSError:
                 pass
 
@@ -671,7 +841,7 @@ class Agent(AgentBase):
                     )
                 else:
                     reason = "Failed to initialize agent"
-                    details = ""
+                    details = str(error)
                 self.post_message(AgentFail(reason, details))
         elif self.session_id is None:
             await self.acp_new_session()
@@ -707,7 +877,7 @@ class Agent(AgentBase):
         if self.session_id is None:
             return
         try:
-            from onecode.agent.cdh_loader import CdhProjectLoader
+            from cdh.project_loader import CdhProjectLoader
 
             cdh_dir = CdhProjectLoader.find_cdh_dir(self.project_root_path)
             if cdh_dir is None:
@@ -774,6 +944,7 @@ class Agent(AgentBase):
             )
         response = await session_new_response.wait()
         assert response is not None
+        print(f"[DEBUG acp_new_session] response keys={list(response.keys())!r}, modes={response.get('modes')!r}", flush=True)
         self.session_id = response["sessionId"]
 
         if self.supports_load_session:
@@ -799,6 +970,12 @@ class Agent(AgentBase):
                 for mode in available_modes
             }
             self.post_message(messages.SetModes(current_mode, modes_update))
+
+        models_state = response.get("models")
+        if models_state and (current_model_id := models_state.get("currentModelId")):
+            self._current_model = current_model_id
+        elif models_state and (available := models_state.get("availableModels")):
+            self._current_model = available[0].get("modelId") if available else None
 
     async def acp_load_session(self) -> None:
         assert self.session_id is not None, "Session id must be set"
@@ -927,7 +1104,31 @@ class Agent(AgentBase):
             return None
 
         assert result is not None
-        return result.get("stopReason")
+        stop_reason = result.get("stopReason")
+
+        if session_id := self.session_id:
+            usage = result.get("usage") or {}
+            usage_kw: dict[str, Any] = {
+                "session_id": session_id,
+                "status": stop_reason,
+                "tags": {
+                    "agent": self._agent_data.get("name", "") if self._agent_data else "",
+                    "update_type": "session_prompt",
+                },
+            }
+            if self._effective_model:
+                usage_kw["model"] = self._effective_model
+            if total := usage.get("total_tokens"):
+                usage_kw["token_count"] = total
+            if inp := usage.get("input_tokens"):
+                usage_kw["input_tokens"] = inp
+            if out := usage.get("output_tokens"):
+                usage_kw["output_tokens"] = out
+            if cached := usage.get("cached_read_tokens"):
+                usage_kw["cached_input_tokens"] = cached
+            _add_trace("ACP", "session_prompt", **usage_kw)
+
+        return stop_reason
 
     async def acp_session_set_mode(self, mode_id: str) -> str | None:
         """Update the current mode with the agent."""
@@ -955,13 +1156,22 @@ class Agent(AgentBase):
         result = await response.wait()
         return result or {"cleared": False}
 
+    async def compact(self) -> dict | None:
+        """Compact the context via the session/compact RPC."""
+        if self.session_id is None:
+            return None
+        with self.request():
+            response = api.session_compact(self.session_id)
+        result = await response.wait()
+        return result
+
     async def set_session_name(self, name: str) -> None:
         if self.session_pk is None:
             return
         db = DB()
         await db.session_update_title(self.session_pk, name)
         if self.session_id:
-            from onecode.agent.session import AgentSession
+            from cdh.session_store import AgentSession
             session = AgentSession(self.session_id)
             if session.load():
                 session.name = name

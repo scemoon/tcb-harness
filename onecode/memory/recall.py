@@ -72,6 +72,52 @@ class BM25:
             for token in all_tokens
         }
 
+    def add_docs(self, documents: list[str]) -> None:
+        if not documents:
+            return
+        if self.num_docs + len(documents) > self._MAX_DOCS:
+            import logging
+            logging.getLogger(__name__).warning(
+                "BM25.add_docs refused: total %d docs would exceed cap=%d; "
+                "falling back to full index rebuild.", self.num_docs + len(documents), self._MAX_DOCS,
+            )
+            self.index(self.doc_tokens + documents)
+            return
+
+        new_tokens = [self._tokenize(doc) for doc in documents]
+        new_token_sets = [set(t) for t in new_tokens]
+        new_lengths = [len(tokens) for tokens in new_tokens]
+
+        for token_set in new_token_sets:
+            for token in token_set:
+                self.doc_freqs[token] = self.doc_freqs.get(token, 0) + 1
+
+        self.doc_tokens.extend(new_tokens)
+        self._doc_token_sets.extend(new_token_sets)
+        self.doc_lengths.extend(new_lengths)
+
+        total_len = self.avgdl * self.num_docs + sum(new_lengths)
+        self.num_docs += len(documents)
+        self.avgdl = total_len / self.num_docs if self.num_docs > 0 else 0
+
+    def remove_doc_at(self, doc_index: int) -> None:
+        if doc_index < 0 or doc_index >= self.num_docs:
+            return
+        removed_token_set = self._doc_token_sets[doc_index]
+        for token in removed_token_set:
+            self.doc_freqs[token] = self.doc_freqs.get(token, 1) - 1
+            if self.doc_freqs[token] <= 0:
+                del self.doc_freqs[token]
+
+        total_len = self.avgdl * self.num_docs - self.doc_lengths[doc_index]
+        self.num_docs -= 1
+
+        del self.doc_tokens[doc_index]
+        del self._doc_token_sets[doc_index]
+        del self.doc_lengths[doc_index]
+
+        self.avgdl = total_len / self.num_docs if self.num_docs > 0 else 0
+
     def _tokenize(self, text: str) -> list[str]:
         text = text.lower()
         tokens = re.findall(r"\b\w+\b", text)
@@ -79,6 +125,9 @@ class BM25:
 
     def score(self, query: str, doc_index: int) -> float:
         query_tokens = self._tokenize(query)
+        return self._score_with_tokens(query_tokens, doc_index)
+
+    def _score_with_tokens(self, query_tokens: list[str], doc_index: int) -> float:
         doc_tokens = self.doc_tokens[doc_index]
         doc_len = self.doc_lengths[doc_index]
         score = 0.0
@@ -94,9 +143,33 @@ class BM25:
         return score
 
     def search(self, query: str, top_k: int = 5) -> list[tuple[int, float]]:
-        scores = [(i, self.score(query, i)) for i in range(self.num_docs)]
+        query_tokens = self._tokenize(query)
+        scores = [(i, self._score_with_tokens(query_tokens, i)) for i in range(self.num_docs)]
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:top_k]
+
+    def serialize(self) -> dict:
+        return {
+            "k1": self.k1,
+            "b": self.b,
+            "doc_lengths": self.doc_lengths,
+            "avgdl": self.avgdl,
+            "doc_freqs": self.doc_freqs,
+            "num_docs": self.num_docs,
+            "doc_tokens": self.doc_tokens,
+            "_doc_token_sets": [list(s) for s in self._doc_token_sets],
+        }
+
+    @classmethod
+    def deserialize(cls, data: dict) -> "BM25":
+        bm25 = cls(k1=data["k1"], b=data["b"])
+        bm25.doc_lengths = data["doc_lengths"]
+        bm25.avgdl = data["avgdl"]
+        bm25.doc_freqs = data["doc_freqs"]
+        bm25.num_docs = data["num_docs"]
+        bm25.doc_tokens = data["doc_tokens"]
+        bm25._doc_token_sets = [set(s) for s in data["_doc_token_sets"]]
+        return bm25
 
 
 class HybridRecall:
@@ -121,12 +194,39 @@ class HybridRecall:
             if metadata and eid in metadata:
                 self._metadata[eid] = metadata[eid]
 
-        self.bm25.index(self._documents)
+        if start_idx == 0:
+            self.bm25.index(self._documents)
+        else:
+            self.bm25.add_docs(documents)
 
         if self.embedding_fn:
             for doc in documents:
                 emb = self.embedding_fn(doc)
                 self._embeddings.append(emb)
+
+    def remove_documents(self, entry_ids: list[str]) -> None:
+        ids_to_remove = set(entry_ids)
+        kept_docs = []
+        kept_ids = []
+        kept_embs = []
+
+        for i, eid in enumerate(self._entry_ids):
+            if eid not in ids_to_remove:
+                kept_docs.append(self._documents[i])
+                kept_ids.append(eid)
+                if i < len(self._embeddings):
+                    kept_embs.append(self._embeddings[i])
+
+        for eid in ids_to_remove:
+            self._metadata.pop(eid, None)
+
+        self._documents = kept_docs
+        self._entry_ids = kept_ids
+        self._embeddings = kept_embs
+
+        self.bm25 = BM25()
+        if self._documents:
+            self.bm25.index(self._documents)
 
     def keyword_recall(self, query: str, top_k: int = 5) -> list[RecallResult]:
         bm25_results = self.bm25.search(query, top_k * 2)
@@ -201,3 +301,22 @@ class HybridRecall:
         self._entry_ids = []
         self._metadata = {}
         self.bm25 = BM25()
+
+    def serialize(self) -> dict:
+        return {
+            "bm25": self.bm25.serialize() if hasattr(self.bm25, "serialize") else {},
+            "_documents": self._documents,
+            "_embeddings": self._embeddings,
+            "_entry_ids": self._entry_ids,
+            "_metadata": self._metadata,
+        }
+
+    @classmethod
+    def deserialize(cls, data: dict) -> "HybridRecall":
+        hr = cls()
+        hr.bm25 = BM25.deserialize(data["bm25"]) if data.get("bm25") else BM25()
+        hr._documents = data.get("_documents", [])
+        hr._embeddings = data.get("_embeddings", [])
+        hr._entry_ids = data.get("_entry_ids", [])
+        hr._metadata = data.get("_metadata", {})
+        return hr

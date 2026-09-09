@@ -295,6 +295,13 @@ class SessionModelState(SchemaDict, total=False, extra_items=Any):
 
 
 # https://agentclientprotocol.com/protocol/schema#param-plan
+class AIDLCState(SchemaDict, total=False, extra_items=Any):
+    current_phase: Required[str]
+    completed_phases: Required[list[str]]
+    gate_results: Required[dict]
+    sessionUpdate: Required[Literal["aidlc_state"]]
+
+
 class Plan(SchemaDict, total=False, extra_items=Any):
     entries: Required[list[PlanEntry]]
     sessionUpdate: Required[Literal["plan"]]
@@ -318,6 +325,46 @@ class AvailableCommandsUpdate(SchemaDict, total=False, extra_items=Any):
 class CurrentModeUpdate(SchemaDict, total=False, extra_items=Any):
     currentModeId: Required[str]
     sessionUpdate: Required[Literal["current_mode_update"]]
+
+
+class AwaitingUserInputUpdate(SchemaDict, total=False, extra_items=Any):
+    """The agent is waiting for user input but did not invoke AskUser.
+
+    Used when the agent asks a question via plain text output. The TUI
+    switches turn to "client" so the next user_input_submitted is treated
+    as a reply, not queued as a fresh prompt.
+    """
+    sessionUpdate: Required[Literal["awaiting_user_input"]]
+    promptPreview: str
+
+
+class AskUserUpdate(SchemaDict, total=False, extra_items=Any):
+    """The agent is asking the user a question (AskUser tool or auto-detected).
+
+    The server sends either ``question`` (single question, optional
+    ``options``) or ``questions`` (multi-question form). Missing members
+    are tolerated so every payload shape validates.
+    """
+    sessionUpdate: Required[Literal["ask_user"]]
+    question: str
+    context: str
+    options: list
+    questions: list
+    toolId: str
+
+
+class AskUserRemindUpdate(SchemaDict, total=False, extra_items=Any):
+    """Brief reminder that an AskUser prompt is still waiting for an answer."""
+    sessionUpdate: Required[Literal["ask_user_remind"]]
+    text: str
+    toolId: str
+
+
+class AskUserDefaultUsedUpdate(SchemaDict, total=False, extra_items=Any):
+    """Notify the TUI that the AskUser prompt timed out and a default was used."""
+    sessionUpdate: Required[Literal["ask_user_default_used"]]
+    answer: str
+    toolId: str
 
 
 class UsageUpdate(SchemaDict, total=False, extra_items=object):
@@ -368,6 +415,11 @@ type SessionUpdate = (
     | SubAgentChunk
     | SubAgentThinking
     | SubAgentEnd
+    | AIDLCState
+    | AwaitingUserInputUpdate
+    | AskUserUpdate
+    | AskUserRemindUpdate
+    | AskUserDefaultUsedUpdate
 )
 
 

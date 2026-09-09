@@ -1,0 +1,14 @@
+# Plugin manifest for fsharp
+[plugin]
+name = "fsharp"
+display_name = "F#"
+file_extension = ".fs"
+mime_type = "text/x-fsharp"
+default_outdir = "fsharp"
+output_filename_template = "{name}.fs"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

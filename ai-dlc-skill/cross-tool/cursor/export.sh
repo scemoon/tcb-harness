@@ -1,32 +1,53 @@
-#!/usr/bin/env bash
-# cursor/export.sh — Export AI-DLC rules to Cursor format (.cursor/rules/*.mdc)
+#!/bin/bash
+# Generates .cursor/rules/ai-dlc-core.mdc from ai-dlc-skill/SKILL.md
+
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PROJECT_ROOT="$(cd "$SKILL_DIR/.." && pwd)"
-CURSOR_DIR="$PROJECT_ROOT/.cursor/rules"
+CANONICAL_SKILL_DIR="${HOME}/.cdh/skills/ai-dlc-skill"
+DEV_SKILL_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+PROJECT_ROOT="$(cd "$DEV_SKILL_DIR/.." && pwd)"
 
-mkdir -p "$CURSOR_DIR"
+if [ -d "$CANONICAL_SKILL_DIR" ]; then
+    SKILL_DIR="$CANONICAL_SKILL_DIR"
+else
+    SKILL_DIR="$DEV_SKILL_DIR"
+fi
 
-# Core rules
-cat > "$CURSOR_DIR/ai-dlc-core.mdc" << 'EOF'
+SKILL_FILE="$SKILL_DIR/SKILL.md"
+OUTPUT_DIR="$PROJECT_ROOT/.cursor/rules"
+OUTPUT_FILE="$OUTPUT_DIR/ai-dlc-core.mdc"
+
+mkdir -p "$OUTPUT_DIR"
+
+cat > "$OUTPUT_FILE" << 'MDCFRONT'
 ---
 description: AI-DLC Core Lifecycle Rules
 globs: ["*"]
 ---
-# AI-DLC Core Rules
 
-See `.opencode/skills/ai-dlc-skill/SKILL.md` for full methodology.
+MDCFRONT
 
-Key rules:
-1. Intent → Spec → BDD → Code pipeline
-2. Contract-first for cross-component changes
-3. 3-phase minimum (L1 bug fix: Verify only; L2 feature: Understand→Verify)
-4. All tests must fail before code (TDD Red phase)
-5. Coverage ≥80%, BDD 100%, 0 vulns, no TODO
+awk '
+  BEGIN { found=0; count=0; }
+  /^---$/ { count++; if (count == 1) next; if (count == 2) { found=1; next; } }
+  found { print }
+' "$SKILL_FILE" >> "$OUTPUT_FILE"
 
-FR namespaces: NATIVE-*, DESKTOP-*, WEB-*, BE-*, WXA-*, MYA-*, TTA-*, INT-*
-EOF
+cat >> "$OUTPUT_FILE" << 'RULES'
+<!-- ═══════════════════════════════════════════════════════════
+     Project Rules
+     ═══════════════════════════════════════════════════════════ -->
 
-echo "  ✓ $CURSOR_DIR/ai-dlc-core.mdc"
+## Project Rules
+
+1. Intent → Spec (EARS) → BDD → Design (DAG) → TDD Red-Green-Refactor → Deploy
+2. Contract-first for cross-component changes (`aidlc/contracts/`)
+3. FR namespaces: NATIVE|DESKTOP|WEB|BE|WXA|MYA|TTA (apps/) + INT (aidlc/contracts/)
+4. Quality gates: coverage ≥80%, BDD 100%, 0 vulns, no TODO, backward-compat contracts
+5. Cross-stack e2e mandatory for changes affecting ≥2 components
+6. Never commit secrets; never force-push to main/master
+7. Chinese for user communication, English for code
+8. Run lint/typecheck/test after non-trivial edits
+RULES
+
+echo "Generated $OUTPUT_FILE from $SKILL_DIR/SKILL.md"

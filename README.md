@@ -2,7 +2,7 @@
 
 AI-powered terminal-based development framework for cloud-native applications, featuring a Textual TUI, multi-provider LLM support, MCP integration, and sandboxed execution.
 
-**Version 1.0.0**
+**Version 1.0.6**
 
 ## Features
 
@@ -17,7 +17,6 @@ AI-powered terminal-based development framework for cloud-native applications, f
 - **Observability** — Distributed tracing with local JSON export or OTLP
 - **Task Management** — Task dependency tracking, cron scheduling
 - **ACP Protocol** — Agent Communication Protocol for inter-agent messaging
-- **HTTP/SSE Server** — Remote agent access via web interface
 - **Codebase Indexing** — BM25-based code search, chunking, and retrieval
 - **Memory Systems** — Pyramid, recall, and symbolic memory for long-term context
 - **Multi-Cloud Abstraction** — Vendor-neutral cloud resource management (TCB, Aliyun, AWS)
@@ -104,8 +103,8 @@ cdh onecode codebase index   # Build the codebase index
 cdh onecode codebase search "query"
 cdh onecode skill list
 cdh onecode mcp list
-cdh project                  # List projects
-cdh project show <name>      # Show project details
+cdh aidlc project            # Open project management TUI
+cdh aidlc project list       # List projects
 cdh session list             # List sessions
 cdh session load <id>        # Load session
 cdh help                     # Show help
@@ -125,9 +124,11 @@ Logs live at `~/.cdh/logs/cdh.log` (daily-rotated) and can be inspected with
 | `/onecode:skill list` | List installed skills with status |
 | `/onecode:skill enable\|disable <name\|n>` | Toggle a skill (number from the list) |
 | `/onecode:skill add\|remove <name>` | Scaffold or delete a skill |
-| `/onecode:mcp list` | List configured MCP servers |
+| `/onecode:mcp list` | List configured MCP servers (opencode-style `~/.onecode/mcp.json`) |
 | `/onecode:mcp enable\|disable\|remove <name\|n>` | Manage a server |
-| `/onecode:mcp add <name> <url>` | Add an SSE MCP server |
+| `/onecode:mcp add <name> [URL]` | Smart add (local/remote) with `{env:VAR}` and `{file:PATH:KEY}` templates |
+| `/onecode:mcp auth\|logout\|debug\|migrate <name>` | OAuth, diagnostics, and `mcps.yaml` -> `mcp.json` migration |
+| `/onecode:cloudbase init\|status\|logout` | Tencent CloudBase MCP shortcut |
 | `/clear` | Clear chat log |
 | `/theme` | Toggle dark/light theme |
 
@@ -324,21 +325,17 @@ Skills are markdown-based instruction sets with YAML frontmatter, injected into 
 
 ### Platform Discovery Architecture
 
-CDH uses a **layered discovery** approach: the cdh platform owns the shared skill pool, while each engine discovers its own skills independently.
+CDH uses a **layered discovery** approach: each engine discovers its own skills independently.
 
 ```
 ai-dlc-skill/SKILL.md  ←  single source of truth (repository root)
          │
-         ├── cdh bootstrap → ~/.cdh/skills/ai-dlc-skill/   (cdh platform pool)
-         ├── cross-tool/opencode/export.sh                  (symlink to opencode's dir)
-         ├── cross-tool/claude/export.sh                    (symlink to Claude Code's dir)
-         └── cross-tool/cursor/export.sh                    (symlink to Cursor's dir)
+         ├── cross-tool/opencode/export.sh
+         ├── cross-tool/claude/export.sh
+         └── cross-tool/cursor/export.sh
 ```
 
 ### Discovery Paths
-
-**cdh platform** (shared pool, injected to all engines at runtime):
-- `~/.cdh/skills/<name>/SKILL.md` — Platform-level skills installed by `cdh skill install`
 
 **Engine-specific** (managed by each engine independently):
 - `~/.onecode/skills/<name>/SKILL.md` — onecode user skills (engine-private)
@@ -366,7 +363,7 @@ The **adaptive flow** (`core/adaptive-flow.md`) automatically selects phases bas
 - L4 full-stack + deploy → Understand → Plan → Verify → Deliver
 - L5 architecture refactoring → Plan → Verify
 
-When you run `cdh`, cdh platform bootstrap automatically installs and syncs ai-dlc-skill to `~/.cdh/skills/ai-dlc-skill/` and injects it into the active engine (onecode / opencode / claude / cursor …) — no manual activation needed. Each engine may also discover the skill independently via its own `export.sh` in `ai-dlc-skill/cross-tool/`.
+The `ai-dlc-skill` is available as a skill in the repository at `ai-dlc-skill/`. Each engine may discover it via its own `export.sh` in `ai-dlc-skill/cross-tool/`.
 
 ### Skill Frontmatter
 

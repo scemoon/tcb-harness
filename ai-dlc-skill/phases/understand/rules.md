@@ -35,3 +35,15 @@
 **Description:** When a feature introduces or changes a public API or event consumed by another component, a contract file MUST be added or updated in `aidlc/contracts/` before any per-component implementation.
 **Valid:** `aidlc/contracts/api/auth.yaml` defines `POST /auth/login` before any code.
 **Invalid:** Per-component code that depends on a contract not in `aidlc/contracts/`.
+
+## Gate Automation
+
+以下 CDH 命令可用于自动化部分 gate 检查：
+
+| Gate | CDH Command | Checks |
+|------|-------------|--------|
+| UND-002 | `cdh aidlc validate --ears` | EARS 语法格式 |
+| UND-003 | `cdh aidlc validate --bdd` | BDD scenario 覆盖率 |
+| FR Namespace | `cdh aidlc validate --fr` | FR prefix 一致性 |
+
+**注意**：这些是辅助工具，最终 gate 仍需人工审查。

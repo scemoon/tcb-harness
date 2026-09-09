@@ -202,3 +202,59 @@ For each contract change, list:
 - [ ] Test plans name the layer (`unit` / `integration` / `e2e` / `cross-stack`) per scenario
 - [ ] Contract plan identifies breaking vs. additive
 - [ ] Human reviewed and approved
+
+## Design System Integration
+
+For UI-intensive components (web/native/desktop/wxa/mya/tta), the design doc MUST include:
+
+### Design Tokens Output
+```markdown
+### Design Tokens (WEB-FR-001)
+| Token | Value |
+|-------|-------|
+| --color-primary | #3B82F6 |
+| --space-4 | 16px |
+| --radius-md | 6px |
+```
+
+### Component Hierarchy
+```markdown
+### Component Hierarchy (WEB-FR-001)
+- Atom: Button, Input, Badge, Icon
+- Molecule: SearchBar, FormField, CardHeader
+- Organism: DataTable, Header, FilterPanel
+```
+
+### Platform UI Spec Reference
+```markdown
+### Platform Compliance (WEB-FR-001)
+- Web: Responsive (sm/md/lg/xl) per platform_ui/web.md
+- Native: SafeArea per platform_ui/native.md
+- WXA: Vant Weapp per platform_ui/wxa.md
+```
+
+### Accessibility Checklist
+```markdown
+### Accessibility (WEB-FR-001)
+- [ ] Focus ring visible on interactive elements
+- [ ] Icon buttons have aria-label
+- [ ] Color contrast ≥ 4.5:1 (AA)
+- [ ] Keyboard navigation functional
+```
+
+## Design System Reference Files
+
+| 规范 | 路径 |
+|------|------|
+| Design Tokens | `phases/plan/design_system/design_tokens.md` |
+| Atomic Design | `phases/plan/design_system/atomic_design.md` |
+| Component Spec | `phases/plan/design_system/component_spec.md` |
+| Accessibility | `phases/plan/design_system/accessibility.md` |
+| Theme System | `phases/plan/design_system/theme_system.md` |
+| Iconography | `phases/plan/design_system/iconography.md` |
+| Web UI | `phases/plan/design_system/platform_ui/web.md` |
+| Native UI | `phases/plan/design_system/platform_ui/native.md` |
+| Desktop UI | `phases/plan/design_system/platform_ui/desktop.md` |
+| WXA UI | `phases/plan/design_system/platform_ui/wxa.md` |
+| MYA UI | `phases/plan/design_system/platform_ui/mya.md` |
+| TTA UI | `phases/plan/design_system/platform_ui/tta.md` |

@@ -150,6 +150,17 @@ class Server:
         try:
             return await self._dispatch_object_call(request_id, json)
         except JSONRPCError as error:
+            if request_id is None:
+                # Notification: the JSON-RPC spec forbids a response, and
+                # replying would start an error-response loop with the peer.
+                # Log instead so protocol drift (e.g. a sessionUpdate type
+                # missing from a union) is visible rather than silent.
+                log.warning(
+                    "JSONRPC notification %r failed: %s",
+                    json.get("method"),
+                    error.message,
+                )
+                return None
             return {
                 "jsonrpc": "2.0",
                 "id": error.id,
@@ -159,6 +170,16 @@ class Server:
                 },
             }
         except Exception as error:
+            if request_id is None:
+                # Notification: the JSON-RPC spec forbids a response (see the
+                # JSONRPCError branch above). Log instead of echoing an error
+                # object the peer would misinterpret as a request.
+                log.warning(
+                    "JSONRPC notification %r failed with unexpected error: %s",
+                    json.get("method"),
+                    error,
+                )
+                return None
             log.exception("Error dispatching JSONRPC request")
             return {
                 "jsonrpc": "2.0",

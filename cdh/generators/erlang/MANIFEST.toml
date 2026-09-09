@@ -1,0 +1,14 @@
+# Plugin manifest for erlang
+[plugin]
+name = "erlang"
+display_name = "Erlang"
+file_extension = ".erl"
+mime_type = "text/x-erlang"
+default_outdir = "erlang"
+output_filename_template = "{name}}.erl"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

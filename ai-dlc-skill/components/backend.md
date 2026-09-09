@@ -2,10 +2,21 @@
 
 ## 技术栈
 - 语言: Python / Node.js / Go
-- 框架: FastAPI / Express / Gin
+- 框架: FastAPI / Express / Gin (传统 server)
+- 云函数: CloudBase Functions (SCF) / CloudBase Run (container)
 - 构建: poetry / pnpm / go build
 - 测试: pytest / vitest / go test
 - BDD: pytest-bdd
+
+## 计算模式
+
+| 模式 | 类型 | 说明 | 超时 | 内存 |
+|------|------|------|------|------|
+| cloudbase-functions | FaaS | CloudBase Functions (SCF)，事件驱动云函数 | 60s | 1536MB |
+| cloudbase-run | CaaS | CloudBase Run，容器托管 | 3600s | 4096MB |
+| server | 传统 | FastAPI / Express / Gin 等框架运行在服务器上 | — | — |
+
+默认模式: `cloudbase-functions`（TCB 平台）。
 
 ## 关键命令
 - 构建: `pnpm --filter backend build`
@@ -13,6 +24,8 @@
 - BDD: `pytest-bdd apps/backend/features/`
 - Lint: `pnpm --filter backend lint`
 - DB 迁移: `tcb db migrate` / `rds migrate`
+- 部署云函数: `tcb fn deploy --env {env}`
+- 部署容器: `tcb run deploy --env {env}`
 
 ## 目录约定
 - `src/` → 组件源码（按模块组织）

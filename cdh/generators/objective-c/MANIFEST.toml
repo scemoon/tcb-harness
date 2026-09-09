@@ -1,0 +1,14 @@
+# Plugin manifest for objective-c
+[plugin]
+name = "objective-c"
+display_name = "Objective-C"
+file_extension = ".m"
+mime_type = "text/x-objective-c"
+default_outdir = "objc"
+output_filename_template = "{name}}.h"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

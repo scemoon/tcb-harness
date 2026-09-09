@@ -1,0 +1,17 @@
+# Auto-generated from {{.SourceFile}}
+# distutils: language = c
+# cython: language_level = 3
+
+{{range .Types}}cdef class {{.Name}}:
+{{range .Properties}}    cdef public object {{.Name}}
+{{end}}
+
+    def __init__(self{{range .Properties}}, {{.Name}}=None{{end}}):
+{{range .Properties}}        self.{{.Name}} = {{.Name}}
+{{end}}
+
+    def to_dict(self):
+        return {
+{{range .Properties}}            "{{.JsonName}}": self.{{.Name}},
+{{end}}        }
+{{end}}

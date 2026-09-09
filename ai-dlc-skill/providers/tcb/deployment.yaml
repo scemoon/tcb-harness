@@ -16,9 +16,9 @@ Production deployment pipeline for TCB. The default is the unified `deploy_stack
 staging:
   orchestrator: deploy_stack
   steps:
-    - tcb fn deploy --env staging            # backend
-    - tcb db migrate --env staging           # backend
-    - tcb hosting deploy --env staging \
+    - tcb fn deploy --all -e staging         # backend (all functions)
+    - tcb fn deploy <functionName> -e staging # or deploy single function
+    - tcb hosting deploy -e staging \
         --build-env BACKEND_URL=${STACK_URL}  # web
     - native build with BACKEND_URL injected  # native
     - desktop build with BACKEND_URL injected # desktop
@@ -32,9 +32,9 @@ production:
   pre_conditions:
     - human-approval-gate
   steps:
-    - tcb fn deploy --env production
-    - tcb db migrate --env production
-    - tcb hosting deploy --env production \
+    - tcb fn deploy --all -e production
+    - tcb fn deploy <functionName> -e production
+    - tcb hosting deploy -e production \
         --build-env BACKEND_URL=${STACK_URL}
     - native build with BACKEND_URL injected
     - desktop build with BACKEND_URL injected
@@ -46,13 +46,55 @@ production:
     - bvt ${PRODUCTION_URL}
 ```
 
+## tcb fn deploy Command Reference
+
+Deploy cloud functions using `tcb fn deploy [options] [name]`
+
+### Key Options
+
+| Option |说明 |
+|--------|-----|
+| `-e, --env-id <envId>` | Environment Id |
+| `--httpFn` | Deploy as HTTP function |
+| `--ws` | Enable WebSocket protocol for HTTP function |
+| `--code-secret <codeSecret>` | Code encryption (36 char alphanumeric) |
+| `--force` | Overwrite existing function with same name |
+| `--path <path>` | Auto-create HTTP access path |
+| `--dir <dir>` | Specify function folder path |
+| `--all` | Deploy all functions in config file |
+| `--deployMode <mode>` | Upload mode: `cos` (default), `zip` (≤1.5MB), `image` (mirror) |
+| `--yes` | Skip confirmation prompts |
+
+### Deployment Patterns
+
+```bash
+# Standard workspace (with cloudbaserc.json)
+tcb fn deploy <functionName> -e <envId>
+tcb fn deploy --all -e <envId>
+
+# From function directory (auto-reads package.json)
+cd my-function && tcb fn deploy
+
+# HTTP function
+tcb fn deploy <functionName> --httpFn
+
+# Image deployment
+tcb fn deploy <functionName> --deployMode image
+
+# With code encryption
+tcb fn deploy <functionName> --code-secret 7sGLwMnhgEfKmkqg2dMjB6xWk2hCxsAgGR6w
+
+# CI/CD (skip confirmation)
+tcb fn deploy <functionName> --yes --force
+```
+
 ## Per-Component Dev Sandbox (allowed)
 
 ```bash
 # Personal dev sandbox — one user, one component
 tcb env create dev-${USER}
-tcb fn deploy --name hello --dir ./functions --env dev-${USER}
-tcb hosting deploy --env dev-${USER}
+tcb fn deploy <functionName> --dir ./functions -e dev-${USER}
+tcb hosting deploy -e dev-${USER}
 # Per-component deploys to shared envs (preview/staging/production) are forbidden
 ```
 

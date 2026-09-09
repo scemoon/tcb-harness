@@ -9,8 +9,24 @@ import yaml
 logger = logging.getLogger("onecode.config")
 
 
+# NOTE: ``ONECODE_DIR`` and ``GLOBAL_CONFIG_PATH`` are resolved at
+# *import time* using ``Path.home()``. They are kept as module-level
+# constants for backward compatibility, but code that runs inside tests
+# with a patched ``$HOME`` should prefer the ``onecode_dir()`` and
+# ``global_config_path()`` helpers below so the values are re-evaluated
+# at call time.
 ONECODE_DIR = Path.home() / ".onecode"
 GLOBAL_CONFIG_PATH = ONECODE_DIR / "onecode.config.yaml"
+
+
+def onecode_dir() -> Path:
+    """Return ``~/.onecode`` resolved at call time (test-friendly)."""
+    return Path.home() / ".onecode"
+
+
+def global_config_path() -> Path:
+    """Return the path to the onecode global config at call time."""
+    return Path.home() / ".onecode" / "onecode.config.yaml"
 
 
 @dataclass
@@ -18,6 +34,8 @@ class ProviderConfig:
     api_key: Optional[str] = None
     endpoint: Optional[str] = None
     models: list[str] = field(default_factory=list)
+    auto_download: bool = True
+    auto_select: bool = True
 
 
 @dataclass
@@ -46,10 +64,14 @@ class AttachmentsConfig:
 
 @dataclass
 class AgentConfig:
-    max_iterations: int = 100
+    max_iterations: int = 500
     timeout_seconds: int = 600
     allow_shell_commands: bool = True
     shell_command_whitelist: list[str] = field(default_factory=list)
+    temperature: float = 0.7
+    max_subagent_depth: int = 1
+    max_subagent_timeout: int = 600
+    max_empty_turns: int = 10
 
 
 @dataclass
@@ -97,6 +119,70 @@ class MemoryConfig:
 
 
 @dataclass
+class PerAgentVerificationConfig:
+    enabled: bool = True
+    gates: list[str] = field(default_factory=lambda: ["lint", "type", "test"])
+    policy: str = "conditional"
+
+
+@dataclass
+class VerificationConfig:
+    enabled: bool = True
+    policy: str = "conditional"
+    gates: list[str] = field(default_factory=lambda: ["lint", "type", "test"])
+    plan_gate_mode: str = "adaptive"
+    per_agent: dict[str, PerAgentVerificationConfig] = field(default_factory=dict)
+
+    def for_agent(self, agent_type: str) -> PerAgentVerificationConfig:
+        return self.per_agent.get(agent_type, PerAgentVerificationConfig(
+            enabled=self.enabled,
+            gates=self.gates,
+            policy=self.policy,
+        ))
+
+
+@dataclass
+class EventLoopConfig:
+    enabled: bool = False
+    sources: list[str] = field(default_factory=lambda: ["cron", "filewatch"])
+
+
+@dataclass
+class MCPConfig:
+    timeout: float = 60.0
+    heartbeat_interval: float = 15.0
+    reconnect_enabled: bool = True
+    disabled: list[str] = field(default_factory=list)  # glob patterns of MCP server names to skip
+
+
+@dataclass
+class RetryConfig:
+    max_attempts: int = 5
+    backoff_max: float = 60.0
+    backoff_jitter: float = 0.5
+
+
+@dataclass
+class HillclimbConfig:
+    enabled: bool = False
+    min_sessions: int = 10
+
+
+@dataclass
+class AskUserConfig:
+    timeout_seconds: int = 10
+    timeout_behavior: str = "use_default"
+    unsupported_behavior: str = "use_default"
+
+
+@dataclass
+class LoopConfig:
+    verification: VerificationConfig = field(default_factory=VerificationConfig)
+    event: EventLoopConfig = field(default_factory=EventLoopConfig)
+    hillclimb: HillclimbConfig = field(default_factory=HillclimbConfig)
+
+
+@dataclass
 class GlobalConfig:
     default_mode: str = "build"
     default_provider: str = "minimaxi"
@@ -113,6 +199,10 @@ class GlobalConfig:
     session_auto_save: bool = True
     codebase: CodebaseConfig = field(default_factory=CodebaseConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    loops: LoopConfig = field(default_factory=LoopConfig)
+    ask_user: AskUserConfig = field(default_factory=AskUserConfig)
+    mcp: MCPConfig = field(default_factory=MCPConfig)
+    retry: RetryConfig = field(default_factory=RetryConfig)
 
 
 def _dict_to_dataclass(cls, data: dict):
@@ -143,16 +233,17 @@ def _dict_to_dataclass(cls, data: dict):
 
 
 def ensure_dirs():
+    base = onecode_dir()
     dirs = [
-        ONECODE_DIR,
-        ONECODE_DIR / "sessions",
-        ONECODE_DIR / "skills",
-        ONECODE_DIR / "mcps",
-        ONECODE_DIR / "traces",
-        ONECODE_DIR / "logs",
-        ONECODE_DIR / "models",
-        ONECODE_DIR / "codebase" / "indexes",
-        ONECODE_DIR / "memory",
+        base,
+        base / "sessions",
+        base / "skills",
+        base / "mcps",
+        base / "traces",
+        base / "logs",
+        base / "models",
+        base / "codebase" / "indexes",
+        base / "memory",
     ]
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
@@ -169,17 +260,116 @@ def ensure_dirs():
 
 def load_config() -> GlobalConfig:
     ensure_dirs()
-    if not GLOBAL_CONFIG_PATH.exists():
+    config_path = global_config_path()
+    if not config_path.exists():
         _write_default_config()
-    # Bootstrap ai-dlc-skill from source into cdh platform pool
     try:
-        from onecode.skills.bootstrap import ensure_ai_dlc_skill, ensure_onecode_default_skills
+        from onecode.skills.bootstrap import ensure_onecode_default_skills
         ensure_onecode_default_skills()
-        ensure_ai_dlc_skill()
     except Exception:
         pass
-    raw = yaml.safe_load(GLOBAL_CONFIG_PATH.read_text()) or {}
-    return _dict_to_dataclass(GlobalConfig, raw)
+    raw = yaml.safe_load(config_path.read_text()) or {}
+    cfg = _dict_to_dataclass(GlobalConfig, raw)
+    # If the on-disk config has no provider entries (e.g. an older
+    # install or a hand-edited file with ``providers: {}``), populate
+    # the dict from the registered provider classes plus the built-in
+    # default templates so the config editor can show and edit them.
+    if not cfg.providers:
+        cfg.providers = _default_providers()
+    # Make sure every provider entry is a proper ``ProviderConfig``
+    # instance — the on-disk YAML may have been hand-edited or
+    # produced by a version that skipped dataclass conversion for
+    # nested dicts, and the UI relies on attribute access.
+    cfg.providers = {
+        name: pcfg if isinstance(pcfg, ProviderConfig) else _dict_to_dataclass(ProviderConfig, pcfg)
+        for name, pcfg in cfg.providers.items()
+    }
+    return cfg
+
+
+def _default_providers() -> dict:
+    """Return the default provider config templates.
+
+    Combines the default YAML block (kept for backwards-compat) with
+    any providers that the ``ProviderRegistry`` knows about but that
+    are missing from the default block.
+    """
+    from onecode.models.provider import ProviderRegistry
+
+    # Trigger provider registration side-effects.
+    try:
+        from onecode.models import providers as _providers_mod  # noqa: F401
+    except ImportError:
+        pass
+
+    # Pull the default block out of _write_default_config's literal so
+    # we keep a single source of truth.
+    default: dict = {}
+    try:
+        # We re-derive the default dict by inlining the same templates
+        # used in _write_default_config; this keeps both paths aligned
+        # without exposing the literal as a module attribute.
+        from onecode.config import _PROVIDER_DEFAULT_TEMPLATES  # type: ignore
+        import copy as _copy
+        default = {k: _copy.deepcopy(v) for k, v in _PROVIDER_DEFAULT_TEMPLATES.items()}
+    except ImportError:
+        # Fall back to an empty seed; the registry merge below will
+        # still produce a useful result.
+        default = {}
+
+    # Merge in any registered provider that isn't in the default block,
+    # so newly added providers (e.g. aliyun) show up automatically.
+    for name in ProviderRegistry.list():
+        if name not in default:
+            default[name] = {
+                "api_key": "${" + name.upper() + "_API_KEY}",
+                "endpoint": "",
+                "models": [],
+            }
+    return default
+
+
+_PROVIDER_DEFAULT_TEMPLATES: dict = {
+    "anthropic": {
+        "api_key": "${ANTHROPIC_API_KEY}",
+        "endpoint": "https://api.anthropic.com/v1",
+        "models": [
+            "claude-opus-4.7",
+            "claude-opus-4.7-fast"
+        ],
+    },
+    "openai": {
+        "api_key": "${OPENAI_API_KEY}",
+        "endpoint": "https://api.openai.com/v1",
+        "models": ["gpt-5.5-pro", "gpt-5.5"],
+    },
+    "ollama": {
+        "endpoint": "http://localhost:11434",
+        "models": ["llama2", "codellama", "qwen3.5-2b", "qwen3.5-4b"],
+        "auto_download": True,
+        "auto_select": True,
+    },
+    "deepseek": {
+        "api_key": "${DEEPSEEK_API_KEY}",
+        "endpoint": "https://api.deepseek.com/v1",
+        "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
+    },
+    "minimax": {
+        "api_key": "${MINIMAX_API_KEY}",
+        "endpoint": "https://api.minimax.com/v1",
+        "models": ["MiniMax-M2.7", "MiniMax-M2.5"],
+    },
+    "minimaxi": {
+        "api_key": "${MINMAXI_API_KEY}",
+        "endpoint": "https://api.minimaxi.com/v1",
+        "models": ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
+    },
+    "glm": {
+        "api_key": "${GLM_API_KEY}",
+        "endpoint": "https://open.bigmodel.cn/api/paas/v4",
+        "models": ["glm-5.1", "glm-5"],
+    },
+}
 
 
 def _write_default_config():
@@ -187,45 +377,7 @@ def _write_default_config():
         "default_mode": "build",
         "default_provider": "minimaxi",
         "default_model": "MiniMax-M2.7",
-        "providers": {
-            "anthropic": {
-                "api_key": "${ANTHROPIC_API_KEY}",
-                "endpoint": "https://api.anthropic.com/v1",
-                "models": [
-                    "claude-opus-4.7",
-                    "claude-opus-4.7-fast"
-                ],
-            },
-            "openai": {
-                "api_key": "${OPENAI_API_KEY}",
-                "endpoint": "https://api.openai.com/v1",
-                "models": ["gpt-5.5-pro", "gpt-5.5"],
-            },
-            "ollama": {
-                "endpoint": "http://localhost:11434",
-                "models": ["llama2", "codellama"],
-            },
-            "deepseek": {
-                "api_key": "${DEEPSEEK_API_KEY}",
-                "endpoint": "https://api.deepseek.com/v1",
-                "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
-            },
-            "minimax": {
-                "api_key": "${MINIMAX_API_KEY}",
-                "endpoint": "https://api.minimax.com/v1",
-                "models": ["MiniMax-M2.7", "MiniMax-M2.5"],
-            },
-            "minimaxi": {
-                "api_key": "${MINMAXI_API_KEY}",
-                "endpoint": "https://api.minimaxi.com/v1",
-                "models": ["MiniMax-M2.7", "MiniMax-M2.5"],
-            },
-            "glm": {
-                "api_key": "${GLM_API_KEY}",
-                "endpoint": "https://open.bigmodel.cn/api/paas/v4",
-                "models": ["glm-5.1", "glm-5"],
-            },
-        },
+        "providers": _PROVIDER_DEFAULT_TEMPLATES,
         "observability": {
             "trace_enabled": True,
             "trace_exporter": "file",
@@ -278,14 +430,26 @@ def _write_default_config():
                 ".tf", ".tfvars",
             ],
         },
+        "mcp": {
+            "timeout": 60.0,
+            "heartbeat_interval": 15.0,
+            "reconnect_enabled": True,
+            "disabled": [],
+        },
+        "retry": {
+            "max_attempts": 5,
+            "backoff_max": 60.0,
+            "backoff_jitter": 0.5,
+        },
     }
-    GLOBAL_CONFIG_PATH.write_text(yaml.dump(default, default_flow_style=False))
+    global_config_path().write_text(yaml.dump(default, default_flow_style=False))
 
 
 def save_config(cfg: GlobalConfig):
-    GLOBAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    path = global_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     raw = _dataclass_to_dict(cfg)
-    GLOBAL_CONFIG_PATH.write_text(yaml.dump(raw, default_flow_style=False))
+    path.write_text(yaml.dump(raw, default_flow_style=False))
 
 
 def _dataclass_to_dict(obj):
@@ -312,3 +476,64 @@ def resolve_env(value: str) -> str:
         env_var = value[2:-1]
         return os.environ.get(env_var, "")
     return value
+
+
+CDH_AGENT_CONFIG_PATH = Path.home() / ".cdh" / "agent_config.yaml"
+
+
+def sync_agent_config() -> None:
+    """Read ``~/.cdh/agent_config.yaml`` and sync applicable params to ``onecode.config.yaml``.
+
+    Maps optimizer-evolved params to ``GlobalConfig`` fields:
+      - ``engine.onecode.max_iterations`` → ``agent.max_iterations``
+      - ``engine.onecode.temperature``    → ``agent.temperature``
+      - ``engine.onecode.plan_gate_mode`` → ``loops.verification.plan_gate_mode``
+      - ``platform.verification.policy``  → ``loops.verification.policy``
+      - ``platform.verification.gates``   → ``loops.verification.gates``
+
+    Silently no-ops if the agent config does not exist.
+    """
+    if not CDH_AGENT_CONFIG_PATH.exists():
+        return
+    try:
+        raw = yaml.safe_load(CDH_AGENT_CONFIG_PATH.read_text()) or {}
+    except Exception:
+        logger.warning("Failed to read %s", CDH_AGENT_CONFIG_PATH)
+        return
+
+    cfg = load_config()
+    changed = False
+
+    # Platform-level params → loops.verification
+    platform = raw.get("platform", {})
+    if "verification.policy" in platform:
+        cfg.loops.verification.policy = str(platform["verification.policy"])
+        changed = True
+    if "verification.gates" in platform:
+        gates = platform["verification.gates"]
+        if isinstance(gates, list):
+            cfg.loops.verification.gates = [str(g) for g in gates]
+            changed = True
+
+    # Engine-level params (onecode-specific)
+    engine = raw.get("engine", {})
+    onecode_params = engine.get("onecode", {})
+    if "max_iterations" in onecode_params:
+        val = int(onecode_params["max_iterations"])
+        if val >= 5:
+            cfg.agent.max_iterations = val
+            changed = True
+    if "temperature" in onecode_params:
+        val = float(onecode_params["temperature"])
+        if 0.0 <= val <= 2.0:
+            cfg.agent.temperature = val
+            changed = True
+    if "plan_gate_mode" in onecode_params:
+        val = str(onecode_params["plan_gate_mode"])
+        if val in ("strict", "adaptive", "relaxed"):
+            cfg.loops.verification.plan_gate_mode = val
+            changed = True
+
+    if changed:
+        save_config(cfg)
+        logger.info("Synced %s → onecode.config.yaml", CDH_AGENT_CONFIG_PATH)

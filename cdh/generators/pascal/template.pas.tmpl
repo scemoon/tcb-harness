@@ -1,0 +1,5 @@
+{{range .Types}}type
+  {{.Name}} = class
+{{range .Properties}}    F{{.Name}}: string;
+{{end}}  end;
+{{end}}

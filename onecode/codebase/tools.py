@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Optional
 
-from onecode.agent.tools.registry import ToolResult, ToolSpec
+from onecode.agent.tools.registry import Tool, ToolResult, ToolSpec
 
 if TYPE_CHECKING:
     from onecode.codebase import CodebaseEngine
 
 
-class CodebaseSearchTool:
+class CodebaseSearchTool(Tool):
     def __init__(self, engine_factory: Callable[[], Optional[CodebaseEngine]]):
         self._engine_factory = engine_factory
 

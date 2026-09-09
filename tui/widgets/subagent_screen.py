@@ -106,6 +106,7 @@ class SubAgentScreen(Screen):
         height: 1fr;
         overflow-y: auto;
         scrollbar-gutter: stable;
+        padding-bottom: 1;
     }
 
     #content-grid {
@@ -250,10 +251,8 @@ class SubAgentScreen(Screen):
     # ── Lifecycle ──
 
     async def on_mount(self) -> None:
-        # Subscribe first so we don't miss events during replay
         self.subagent._screen_handler = self._on_event
-        # Replay all existing events with yields so the UI can render progressively
-        await self._replay_all()
+        self.run_worker(self._replay_all(), exit_on_error=False)
         try:
             self.query_one("#scroll", VerticalScroll).focus()
         except Exception:
@@ -281,17 +280,14 @@ class SubAgentScreen(Screen):
     # ── Event processing ──
 
     async def _replay_all(self) -> None:
-        """Process every event already in ``subagent._events``.
-
-        Each event is followed by ``await asyncio.sleep(0)`` so the layout
-        can settle between mounts – this avoids a long blocking stall
-        before the screen becomes visible.
-        """
+        """Process every event already in ``subagent._events``."""
         try:
             container = self.query_one("#content", VerticalGroup)
-            for event_type, data in self.subagent._events:
+            events = list(self.subagent._events)
+            for i, (event_type, data) in enumerate(events):
                 await self._handle_one(container, event_type, data)
-                await asyncio.sleep(0)
+                if i > 0 and i % 50 == 0:
+                    await asyncio.sleep(0)
             await self._flush_streams()
             self._post_process()
         except Exception:
@@ -333,11 +329,21 @@ class SubAgentScreen(Screen):
                     self._current_thought = None
             self._update_title()
             self._update_footer()
-            self._refresh_block_cursor()
+            self._schedule_cursor_refresh()
             if self._auto_follow:
                 self.call_after_refresh(self._scroll_to_end)
         except Exception:
             _sa_logger.exception("_post_process failed")
+
+    def _schedule_cursor_refresh(self) -> None:
+        if getattr(self, "_cursor_refresh_pending", False):
+            return
+        self._cursor_refresh_pending = True
+        self.call_after_refresh(self._do_cursor_refresh)
+
+    def _do_cursor_refresh(self) -> None:
+        self._cursor_refresh_pending = False
+        self._refresh_block_cursor()
 
     async def _handle_thinking(self, container: VerticalGroup, fragment: str) -> None:
         if self._current_thought is None:

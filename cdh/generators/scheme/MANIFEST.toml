@@ -1,0 +1,14 @@
+# Plugin manifest for scheme
+[plugin]
+name = "scheme"
+display_name = "Scheme"
+file_extension = ".scm"
+mime_type = "text/x-scheme"
+default_outdir = "scheme"
+output_filename_template = "{name}}.scm"
+package_name_default = "types"
+
+[features]
+enums = false
+nullable = true
+format_hints = ["date-time", "uuid"]

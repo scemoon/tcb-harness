@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -18,6 +19,14 @@ logger = logging.getLogger("onecode.provider.minimaxi")
 
 LOG_DIR = Path.home() / ".cdh" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _redact_key(key: str | None, keep: int = 4) -> str:
+    if not key:
+        return "None"
+    if len(key) <= keep + 4:
+        return key[:keep] + "..." if key else "None"
+    return key[:keep] + "..." + key[-4:]
 
 
 def _raise_for_status(resp: httpx.Response, body_text: str = "") -> None:
@@ -84,7 +93,7 @@ def _finalize_stream_tool_calls(
 
 
 
-def _log_request(model: str, messages: list, response_data: dict = None, error: str = None):
+async def _log_request(model: str, messages: list, response_data: dict = None, error: str = None):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     log_file = LOG_DIR / f"minimaxi_{timestamp}.json"
     log_entry = {
@@ -94,13 +103,20 @@ def _log_request(model: str, messages: list, response_data: dict = None, error: 
         "response": response_data,
         "error": error,
     }
+    loop = asyncio.get_event_loop()
     try:
-        with open(log_file, "w") as f:
-            json.dump(log_entry, f, indent=2, ensure_ascii=False)
+        await loop.run_in_executor(
+            None, lambda: _write_log_sync(log_file, log_entry),
+        )
         logger.info(f"Request logged to {log_file}")
     except Exception as e:
         logger.error(f"Failed to write log: {e}")
     return log_file
+
+
+def _write_log_sync(path: Path, entry: dict) -> None:
+    with open(path, "w") as f:
+        json.dump(entry, f, indent=2, ensure_ascii=False)
 
 
 class MiniMaxiProvider(Provider):
@@ -140,11 +156,11 @@ class MiniMaxiProvider(Provider):
         logger.info(f"[{req_id}] chat() called with model={model}, messages={len(messages)}")
 
         key = self.resolve_api_key(self.api_key)
-        logger.info(f"[{req_id}] API key resolved: {'Yes' if key else 'No'}, key_prefix: '{key[:15]}...' if key else 'None'")
+        logger.info(f"[{req_id}] API key resolved: {'Yes' if key else 'No'}, key: '{_redact_key(key)}'")
 
         if not key:
             error_msg = "API key not configured. Set MINMAXI_API_KEY."
-            _log_request(model, messages, error=error_msg)
+            await _log_request(model, messages, error=error_msg)
             raise ProviderError(error_msg)
 
         start_time = time.time()
@@ -154,12 +170,8 @@ class MiniMaxiProvider(Provider):
                 outgoing_payload = {
                     "model": model,
                     "messages": self.prepare_messages(messages),
-                    **kwargs,
+                    **{k: v for k, v in kwargs.items() if k != "stream"},
                 }
-                # Debug-only: log the post-`prepare_messages` wire payload
-                # so we can see exactly which messages reach the gateway
-                # when the upstream returns (2013) or any other 400.
-                # Disabled at INFO/WARN — set log_level: debug to enable.
                 logger.debug(
                     "[%s] OUTGOING PAYLOAD (chat):\n%s",
                     req_id,
@@ -179,7 +191,7 @@ class MiniMaxiProvider(Provider):
                 if resp.status_code != 200:
                     error_text = resp.text
                     logger.error(f"[{req_id}] Non-2xx HTTP {resp.status_code}: {error_text[:500]}")
-                    _log_request(model, messages, error=f"HTTP {resp.status_code}: {error_text[:500]}")
+                    await _log_request(model, messages, error=f"HTTP {resp.status_code}: {error_text[:500]}")
                     classified = Provider.classify_http_error(
                         resp.status_code, error_text,
                         retry_after=retry_after_seconds(resp),
@@ -193,7 +205,7 @@ class MiniMaxiProvider(Provider):
                 choice = data.get("choices", [{}])[0]
                 content = choice.get("message", {}).get("content", "")
 
-                _log_request(model, messages, response_data=data)
+                await _log_request(model, messages, response_data=data)
                 logger.info(f"[{req_id}] Response content length: {len(content)}")
 
                 return ModelResponse(
@@ -207,12 +219,12 @@ class MiniMaxiProvider(Provider):
         except httpx.ConnectError as e:
             error_msg = f"Connection error: {e}"
             logger.error(f"[{req_id}] {error_msg}")
-            _log_request(model, messages, error=error_msg)
+            await _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e
         except Exception as e:
             error_msg = f"Error: {safe_error_msg(e)}"
             logger.exception(f"[{req_id}] {error_msg}")
-            _log_request(model, messages, error=error_msg)
+            await _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e
 
     async def chat_stream_response(
@@ -221,8 +233,11 @@ class MiniMaxiProvider(Provider):
         model: str,
         on_text_chunk: Optional[Callable[[str], None]] = None,
         on_tool_call_delta: Optional[Callable[[str, str, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
         **kwargs,
     ) -> ChatResponse:
+        if cancel_check and cancel_check():
+            raise asyncio.CancelledError("cancelled before chat_stream_response")
         self._request_count += 1
         req_id = f"req_{self._request_count}_{int(time.time())}"
         logger.info(f"[{req_id}] chat_stream_response() called with model={model}, messages={len(messages)}")
@@ -233,10 +248,6 @@ class MiniMaxiProvider(Provider):
 
         start_time = time.time()
         content_parts: list[str] = []
-        # OpenAI-compatible tool calls are streamed as a sequence of
-        # ``delta.tool_calls`` deltas.  Accumulate by ``index`` so the
-        # final ``arguments`` string can be parsed back into a dict
-        # that the engine passes to ``_build_tool_call_content``.
         stream_tool_calls: dict[int, dict] = {}
 
         try:
@@ -245,12 +256,8 @@ class MiniMaxiProvider(Provider):
                     "model": model,
                     "messages": self.prepare_messages(messages),
                     "stream": True,
-                    **kwargs,
+                    **{k: v for k, v in kwargs.items() if k != "stream"},
                 }
-                # Debug-only: log the post-`prepare_messages` wire payload
-                # so we can see exactly which messages reach the gateway
-                # when the upstream returns (2013) or any other 400.
-                # Disabled at INFO/WARN — set log_level: debug to enable.
                 logger.debug(
                     "[%s] OUTGOING PAYLOAD (chat_stream_response):\n%s",
                     req_id,
@@ -269,6 +276,8 @@ class MiniMaxiProvider(Provider):
                         error_body = (await resp.aread()).decode("utf-8", errors="replace")
                         _raise_for_status(resp, body_text=error_body)
                     async for line in resp.aiter_lines():
+                        if cancel_check and cancel_check():
+                            raise asyncio.CancelledError("cancelled during streaming")
                         if line.startswith("data: ") and line[6:] != "[DONE]":
                             try:
                                 chunk = json.loads(line[6:])
@@ -301,24 +310,25 @@ class MiniMaxiProvider(Provider):
                 f"chars: {sum(len(p) for p in content_parts)}, "
                 f"tool_calls: {len(stream_tool_calls)}"
             )
+        except asyncio.CancelledError:
+            raise
         except ProviderError:
-            # Already classified — propagate verbatim.
-            _log_request(model, messages, error="provider error (see exception)")
+            await _log_request(model, messages, error="provider error (see exception)")
             raise
         except httpx.ConnectError as e:
             error_msg = f"Connection error: {e}"
             logger.error(f"[{req_id}] {error_msg}")
-            _log_request(model, messages, error=error_msg)
+            await _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e
         except Exception as e:
             error_msg = f"Error: {safe_error_msg(e)}"
             logger.exception(f"[{req_id}] {error_msg}")
-            _log_request(model, messages, error=error_msg)
+            await _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e
 
         tool_uses = _finalize_stream_tool_calls(stream_tool_calls)
 
-        _log_request(model, messages, response_data={"stream": True})
+        await _log_request(model, messages, response_data={"stream": True})
         return ChatResponse(content="".join(content_parts), tool_uses=tool_uses)
 
     async def chat_stream(
@@ -330,11 +340,11 @@ class MiniMaxiProvider(Provider):
         logger.info(f"[{req_id}] chat_stream() called with model={model}, messages={len(messages)}")
 
         key = self.resolve_api_key(self.api_key)
-        logger.info(f"[{req_id}] API key resolved: {'Yes' if key else 'No'}, key_prefix: '{key[:15]}...' if key else 'None'")
+        logger.info(f"[{req_id}] API key resolved: {'Yes' if key else 'No'}, key: '{_redact_key(key)}'")
 
         if not key:
             error_msg = "API key not configured."
-            _log_request(model, messages, error=error_msg)
+            await _log_request(model, messages, error=error_msg)
             raise ProviderError(error_msg)
 
         start_time = time.time()
@@ -351,7 +361,6 @@ class MiniMaxiProvider(Provider):
                     "messages": self.prepare_messages(messages),
                     "stream": True,
                 }
-                # Debug-only: same wire-payload log as chat() — see comment above.
                 logger.debug(
                     "[%s] OUTGOING PAYLOAD (chat_stream):\n%s",
                     req_id,
@@ -371,7 +380,7 @@ class MiniMaxiProvider(Provider):
                         error_body = await resp.aread()
                         error_text = error_body.decode("utf-8", errors="replace")
                         logger.error(f"[{req_id}] Stream error HTTP {resp.status_code}: {error_text[:1000]}")
-                        _log_request(model, messages, error=f"HTTP {resp.status_code}: {error_text[:500]}")
+                        await _log_request(model, messages, error=f"HTTP {resp.status_code}: {error_text[:500]}")
                         classified = Provider.classify_http_error(
                             resp.status_code, error_text,
                             retry_after=retry_after_seconds(resp),
@@ -403,15 +412,15 @@ class MiniMaxiProvider(Provider):
         except httpx.ConnectError as e:
             error_msg = f"Connection error: {e}"
             logger.error(f"[{req_id}] {error_msg}")
-            _log_request(model, messages, error=error_msg)
+            await _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e
         except Exception as e:
             error_msg = f"Error: {safe_error_msg(e)}"
             logger.exception(f"[{req_id}] {error_msg}")
-            _log_request(model, messages, error=error_msg)
+            await _log_request(model, messages, error=error_msg)
             raise TransientProviderError(error_msg) from e
 
-        _log_request(model, messages, response_data=response_data)
+        await _log_request(model, messages, response_data=response_data)
 
 
 ProviderRegistry.register("minimaxi", MiniMaxiProvider)

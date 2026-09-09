@@ -47,7 +47,11 @@ stack:
       fr_prefix: WEB
     - id: backend
       kind: service
-      tech: python | node | go
+      tech: python | node | go | cloud-function
+      compute_modes:
+        - cloudbase-functions (FaaS, default)
+        - cloudbase-run (CaaS)
+        - server (traditional)
       owns: apps/backend
       fr_prefix: BE
     - id: wxa
@@ -129,19 +133,3 @@ quality_gates:
   no_todo: true
   no_secrets_in_diff: true
 
-agents:
-  - name: ai-dlc-master
-    entry: SKILL.md
-    mode: primary
-  - name: ai-dlc-understand
-    entry: phases/understand/entry.md
-    mode: subagent
-  - name: ai-dlc-plan
-    entry: phases/plan/entry.md
-    mode: subagent
-  - name: ai-dlc-verify
-    entry: phases/verify/entry.md
-    mode: subagent
-  - name: ai-dlc-deliver
-    entry: phases/deliver/entry.md
-    mode: subagent

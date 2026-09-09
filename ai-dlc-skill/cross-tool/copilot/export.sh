@@ -1,47 +1,41 @@
-#!/usr/bin/env bash
-# copilot/export.sh — Export AI-DLC rules to GitHub Copilot format (.github/copilot-instructions.md)
+#!/bin/bash
+# Generates .github/copilot-instructions.md from ai-dlc-skill/SKILL.md
+
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PROJECT_ROOT="$(cd "$SKILL_DIR/.." && pwd)"
+CANONICAL_SKILL_DIR="${HOME}/.cdh/skills/ai-dlc-skill"
+DEV_SKILL_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 
-mkdir -p "$PROJECT_ROOT/.github"
+if [ -d "$CANONICAL_SKILL_DIR" ]; then
+    SKILL_DIR="$CANONICAL_SKILL_DIR"
+else
+    SKILL_DIR="$DEV_SKILL_DIR"
+fi
 
-cat > "$PROJECT_ROOT/.github/copilot-instructions.md" << 'EOF'
-# AI-DLC Copilot Instructions
+SKILL_FILE="$SKILL_DIR/SKILL.md"
+PROJECT_ROOT="$(cd "$DEV_SKILL_DIR/.." && pwd)"
+OUTPUT_DIR="$PROJECT_ROOT/.github"
+OUTPUT_FILE="$OUTPUT_DIR/copilot-instructions.md"
 
-## Development Workflow
-Follow the AI-Driven Development Lifecycle:
-1. Understand (SDD+BDD): Intent → EARS Spec → BDD Features
-2. Plan (SDD+TDD): Design Doc → Task DAG → Test Plan
-3. Verify (BDD+TDD): TDD Red→Green→Refactor per scenario
-4. Deliver (SDD+Cloud): Stack Preview → e2e → Production + BVT
+mkdir -p "$OUTPUT_DIR"
 
-## Component FR Mapping
-- NATIVE-FR-* → apps/native/
-- DESKTOP-FR-* → apps/desktop/
-- WEB-FR-* → apps/web/
-- BE-FR-* → apps/backend/
-- WXA-FR-* → apps/wxa/
-- MYA-FR-* → apps/mya/
-- TTA-FR-* → apps/tta/
-- INT-FR-* → aidlc/contracts/ + aidlc/packages/shared/
+awk '
+  BEGIN { count=0; }
+  /^---$/ { count++; next; }
+  count >= 2 { print }
+' "$SKILL_FILE" > "$OUTPUT_FILE"
 
-## Quality Gates
-- Coverage ≥80%
-- BDD 100% pass
-- 0 security violations
-- No TODO/FIXME in src/
-- Contract backward-compatible
-- Cross-stack e2e for multi-component changes
+cat >> "$OUTPUT_FILE" << 'RULES'
 
-## Security
-- Secrets: secure storage, no hardcoding
-- Input: validate type/length/format/range
-- SQL: parameterized queries only
-- CORS: explicit origins, no wildcard in prod
-- HTTPS only in production
-EOF
+## Project Rules
 
-echo "  ✓ $PROJECT_ROOT/.github/copilot-instructions.md"
+1. Intent → Spec (EARS) → BDD → Design (DAG) → TDD Red-Green-Refactor → Deploy
+2. Contract-first for cross-component changes (`aidlc/contracts/`)
+3. FR namespaces: NATIVE|DESKTOP|WEB|BE|WXA|MYA|TTA (apps/) + INT (aidlc/contracts/)
+4. Quality gates: coverage ≥80%, BDD 100%, 0 vulns, no TODO, backward-compat contracts
+5. Cross-stack e2e mandatory for changes affecting ≥2 components
+6. Never commit secrets; never force-push to main/master
+7. Chinese for user communication, English for code
+RULES
+
+echo "Generated $OUTPUT_FILE from $SKILL_DIR/SKILL.md"

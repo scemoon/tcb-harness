@@ -93,8 +93,20 @@ SettingsScreen {
         text-style: bold;
     }
     .help {
-        color: $text-muted;        
+        color: $text-muted;
         padding: 0 0 0 1;
+    }
+
+    .ollama-status-container {
+        display: none;
+        padding: 1 2;
+        margin: 1 0;
+        background: $background 40%;
+        border: solid $secondary-muted;
+    }
+
+    .ollama-status-container:focus-within {
+        border: solid $secondary;
     }
 
 }

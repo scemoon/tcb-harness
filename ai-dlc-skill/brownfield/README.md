@@ -22,9 +22,15 @@
 3. 跨组件依赖 Mermaid 图
 4. 架构速览
 
+模板文件位于 `templates/brownfield/context.md`（用于参考格式）。
+
 ## 在 Phase 中的应用
 
-Master Agent 在 `affects` 声明后自动触发 Brownfield Phase：
-```
-L2+ 且有存量代码 → Task(agent_type="explore", prompt="...brownfield/scripts/...")
-```
+Brownfield 是可选的第 0 阶段，在以下情况触发：
+- L2+ 复杂度且有存量代码
+- Master Agent 自动调用 `Task(agent_type="explore", prompt="...brownfield/scripts/...")`
+
+Brownfield Phase 输出用于：
+1. 确认 `affects` 声明的准确性
+2. 发现潜在的跨组件依赖
+3. 为后续 Phase 提供上下文

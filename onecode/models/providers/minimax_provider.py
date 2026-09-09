@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
-from onecode.models.errors import safe_error_msg
+from onecode.models.errors import (
+    ProviderError, TransientProviderError, retry_after_seconds, safe_error_msg,
+)
 from onecode.models.provider import ChatResponse, Message, ModelResponse, Provider, ProviderRegistry
 
 
@@ -27,10 +30,7 @@ class MiniMaxProvider(Provider):
     ) -> ModelResponse:
         key = self.resolve_api_key(self.api_key)
         if not key:
-            return ModelResponse(
-                content="API key not configured. Set MINIMAX_API_KEY.",
-                model=model,
-            )
+            raise ProviderError("API key not configured. Set MINIMAX_API_KEY.")
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 f"{self._endpoint}/chat/completions",
@@ -41,9 +41,14 @@ class MiniMaxProvider(Provider):
                 json={
                     "model": model,
                     "messages": self.prepare_messages(messages),
-                    **kwargs,
+                    **{k: v for k, v in kwargs.items() if k != "stream"},
                 },
             )
+            if resp.status_code != 200:
+                raise Provider.classify_http_error(
+                    resp.status_code, resp.text,
+                    retry_after=retry_after_seconds(resp),
+                )
             data = resp.json()
             choice = data.get("choices", [{}])[0]
             return ModelResponse(
@@ -58,8 +63,7 @@ class MiniMaxProvider(Provider):
     ) -> AsyncIterator[str]:
         key = self.resolve_api_key(self.api_key)
         if not key:
-            yield "API key not configured."
-            return
+            raise ProviderError("API key not configured.")
         async with httpx.AsyncClient(timeout=300) as client:
             async with client.stream(
                 "POST",
@@ -75,9 +79,14 @@ class MiniMaxProvider(Provider):
                     **{k: v for k, v in kwargs.items() if k != "stream"},
                 },
             ) as resp:
+                if resp.status_code != 200:
+                    error_body = await resp.aread()
+                    raise Provider.classify_http_error(
+                        resp.status_code, error_body.decode("utf-8", errors="replace"),
+                        retry_after=retry_after_seconds(resp),
+                    )
                 async for line in resp.aiter_lines():
                     if line.startswith("data: ") and line[6:] != "[DONE]":
-                        import json
                         chunk = json.loads(line[6:])
                         delta = chunk.get("choices", [{}])[0].get("delta", {})
                         yield delta.get("content", "")
@@ -88,11 +97,14 @@ class MiniMaxProvider(Provider):
         model: str,
         on_text_chunk: Optional[Callable[[str], None]] = None,
         on_tool_call_delta: Optional[Callable[[str, str, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
         **kwargs,
     ) -> ChatResponse:
         key = self.resolve_api_key(self.api_key)
         if not key:
-            return ChatResponse(content="API key not configured.")
+            raise ProviderError("API key not configured.")
+        if cancel_check and cancel_check():
+            raise asyncio.CancelledError("cancelled before chat_stream_response")
         content_parts: list[str] = []
         stream_tool_calls: dict[int, dict] = {}
         try:
@@ -108,10 +120,18 @@ class MiniMaxProvider(Provider):
                         "model": model,
                         "messages": self.prepare_messages(messages),
                         "stream": True,
-                        **kwargs,
+                        **{k: v for k, v in kwargs.items() if k != "stream"},
                     },
                 ) as resp:
+                    if resp.status_code != 200:
+                        error_body = await resp.aread()
+                        raise Provider.classify_http_error(
+                            resp.status_code, error_body.decode("utf-8", errors="replace"),
+                            retry_after=retry_after_seconds(resp),
+                        )
                     async for line in resp.aiter_lines():
+                        if cancel_check and cancel_check():
+                            raise asyncio.CancelledError("cancelled during streaming")
                         if line.startswith("data: ") and line[6:] != "[DONE]":
                             chunk = json.loads(line[6:])
                             delta = chunk.get("choices", [{}])[0].get("delta", {})
@@ -135,8 +155,12 @@ class MiniMaxProvider(Provider):
                                 slot["arguments"] += args_delta
                                 if on_tool_call_delta:
                                     on_tool_call_delta(slot.get("id", ""), slot.get("name", ""), args_delta)
+        except asyncio.CancelledError:
+            raise
+        except ProviderError:
+            raise
         except Exception as e:
-            return ChatResponse(content=f"Error: {safe_error_msg(e)}")
+            raise TransientProviderError(f"Error: {safe_error_msg(e)}") from e
         tool_uses = []
         for slot in stream_tool_calls.values():
             name = slot.get("name") or ""

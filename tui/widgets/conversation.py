@@ -303,14 +303,14 @@ class Conversation(containers.Vertical):
         Binding(
             "ctrl+j",
             "cursor_down",
-            "Block cursor down",
+            "Down",
             priority=True,
             group=CURSOR_BINDING_GROUP,
         ),
         Binding(
             "ctrl+k",
             "cursor_up",
-            "Block cursor up",
+            "Up",
             priority=True,
             group=CURSOR_BINDING_GROUP,
         ),
@@ -319,11 +319,12 @@ class Conversation(containers.Vertical):
             "select_block",
             "Select",
             tooltip="Select this block",
+            show=False,
         ),
         Binding(
             "ctrl+x",
             "toggle_expand",
-            "Toggle expand",
+            "Toggle",
             tooltip="Toggle expand/collapse cursor block",
             priority=True,
         ),
@@ -333,6 +334,7 @@ class Conversation(containers.Vertical):
             "Cancel",
             tooltip="Cancel agent's turn",
             priority=True,
+            show=False,
         ),
         Binding(
             "ctrl+f",
@@ -350,7 +352,7 @@ class Conversation(containers.Vertical):
         Binding(
             "ctrl+n",
             "fullscreen_block",
-            "Full screen",
+            "Full",
             tooltip="Open full-screen view of the cursor block",
         ),
         Binding(
@@ -412,7 +414,7 @@ class Conversation(containers.Vertical):
         self._replay: bool = False
         self._replay_buffer: list[dict] = []
         self._active_subagents: dict = {}
-        self._last_escape_time: float = monotonic()
+        self._last_escape_time: float = 0.0
         self._agent_data = agent
         self._agent_session_id = agent_session_id
         self._session_pk = session_pk
@@ -432,6 +434,7 @@ class Conversation(containers.Vertical):
         self._turn_count = 0
         self._shell_count = 0
         self._tool_call_total = 0
+
         self._tool_call_success = 0
         self._tool_call_failed = 0
         self._tool_call_finalized: set[str] = set()
@@ -446,6 +449,8 @@ class Conversation(containers.Vertical):
 
         self._post_lock = asyncio.Lock()
         self._auto_named_session = False
+        self._pending_prompts: list[str] = []
+        self._pending_ask_user: bool = False
 
         self._total_messages: int = 0
         self._visible_count: int = 0
@@ -674,11 +679,11 @@ class Conversation(containers.Vertical):
     async def on_terminal_cancel_requested(self, event: Terminal.CancelRequested) -> None:
         event.stop()
         if (agent := self.agent) is not None:
-            cancelled = await agent.cancel()
-            if cancelled:
-                self.flash("Turn cancelled", style="success")
-            else:
-                self.flash("Cancel requested", style="success")
+            await agent.cancel()
+            # Don't claim success yet — the agent only stops once the
+            # session/prompt response arrives with stopReason="cancelled",
+            # which is surfaced as a "Turn cancelled" flash in agent_turn_over.
+            self.flash("Cancel requested…", style="success")
 
     @on(messages.Flash)
     def on_flash(self, event: messages.Flash) -> None:
@@ -707,6 +712,8 @@ class Conversation(containers.Vertical):
         if action == "mode_switcher":
             return bool(self.modes)
         if action == "cancel":
+            if self._pending_ask_user:
+                return True
             return True if (self.agent and self.turn == "agent") else None
         if action in {"expand_block", "collapse_block", "toggle_expand"}:
             if (cursor_block := self.cursor_block) is None:
@@ -852,14 +859,14 @@ class Conversation(containers.Vertical):
 
         if self._agent_data is not None and self.session_start_time is not None:
             session_time = monotonic() - self.session_start_time
-            await self.app.capture_event(
+            self.app.capture_event(
                 "agent-session-end",
                 agent=self._agent_data["identity"],
                 duration=session_time,
                 agent_session_fail=self._agent_fail,
                 shell_count=self._shell_count,
                 turn_count=self._turn_count,
-            ).wait()
+            )
 
             session_id = getattr(self.agent, "session_id", None) or self._agent_session_id or ""
             self.app._exit_metrics = {
@@ -947,6 +954,29 @@ class Conversation(containers.Vertical):
             if text.startswith("/") and await self.slash_command(text):
                 # A2TUI has processed the slash command.
                 return
+
+            if self._pending_ask_user:
+                self._pending_ask_user = False
+                self.turn = "agent"
+                self.prompt.display = True
+                self.agent.send_ask_user_answer(text, cancelled=False)
+                await self.post(UserInput(text))
+                self.focus_prompt()
+                return
+
+            if self.turn == "agent":
+                self._pending_ask_user = False
+                self.prompt.display = True
+                self._pending_prompts.append(text)
+                self.prompt.pending_prompts = list(self._pending_prompts)
+                await self.post(UserInput(text))
+                self.window.scroll_end(animate=False)
+                self._loading = await self.post(Loading("Please wait..."), loading=True)
+                await asyncio.sleep(0)
+                if self._msg_log is not None:
+                    self._msg_log.user_input(text, self._turn_count)
+                return
+
             await self.post(UserInput(text))
             self.window.scroll_end(animate=False)
             self._loading = await self.post(Loading("Please wait..."), loading=True)
@@ -1058,6 +1088,10 @@ class Conversation(containers.Vertical):
                         classes="-stop-reason",
                     )
                 )
+            elif stop_reason == "cancelled":
+                # The agent genuinely stopped — only now is the earlier
+                # "Cancel requested…" flash confirmed.
+                self.flash("Turn cancelled", style="success")
 
         if self.app.settings.get("notifications.turn_over", bool):
             self.app.system_notify(
@@ -1065,6 +1099,17 @@ class Conversation(containers.Vertical):
                 title="Waiting for input",
                 sound="turn-over",
             )
+
+        if self._pending_prompts:
+            next_prompt = self._pending_prompts.pop(0)
+            self.prompt.pending_prompts = list(self._pending_prompts)
+            await self.post(UserInput(next_prompt))
+            self.window.scroll_end(animate=False)
+            self._loading = await self.post(Loading("Please wait..."), loading=True)
+            await asyncio.sleep(0)
+            if self._msg_log is not None:
+                self._msg_log.user_input(next_prompt, self._turn_count)
+            self.send_prompt_to_agent(next_prompt)
 
     @on(Menu.OptionSelected)
     async def on_menu_option_selected(self, event: Menu.OptionSelected) -> None:
@@ -1164,6 +1209,8 @@ class Conversation(containers.Vertical):
         created_subagents: dict[str, SubAgent] = {}
         current_thought: AgentThought | None = None
         widgets: list[Widget] = []
+        seen_tool_ids: set[str] = set()
+        seen_ask_user_ids: set[str] = set()
 
         for entry in self._replay_buffer:
             match entry["kind"]:
@@ -1187,9 +1234,13 @@ class Conversation(containers.Vertical):
                         current_thought.append_fragment(entry["text"])
 
                 case "tool_call":
+                    tool_id = entry["tool_id"]
+                    if tool_id in seen_tool_ids:
+                        continue
+                    seen_tool_ids.add(tool_id)
                     current_thought = None
                     self.new_block()
-                    widgets.append(ToolCall(entry["tool_call"], id=entry["tool_id"]))
+                    widgets.append(ToolCall(entry["tool_call"], id=tool_id))
 
                 case "plan":
                     current_thought = None
@@ -1229,10 +1280,14 @@ class Conversation(containers.Vertical):
                         )
 
                 case "ask_user":
+                    ask_id = entry["tool_id"]
+                    if ask_id in seen_ask_user_ids:
+                        continue
+                    seen_ask_user_ids.add(ask_id)
                     current_thought = None
                     self.new_block()
                     widgets.append(AskUserWidget(
-                        entry["tool_id"],
+                        ask_id,
                         question=entry["question"],
                         options=entry.get("options", []),
                         questions=entry.get("questions", []),
@@ -1302,34 +1357,126 @@ class Conversation(containers.Vertical):
     async def on_acp_ask_user(self, message: acp_messages.AskUser):
         message.stop()
         if self._replay:
+            tool_id = message.tool_id
+            for existing in self._replay_buffer:
+                if existing.get("kind") == "ask_user" and existing.get("tool_id") == tool_id:
+                    return
             self._replay_buffer.append({
                 "kind": "ask_user",
-                "tool_id": message.tool_id,
+                "tool_id": tool_id,
                 "question": message.question,
                 "options": message.options or [],
                 "questions": message.questions or [],
             })
             return
+
+        # Single free-text question (no options, no questions) → skip widget,
+        # let user type directly in the Prompt Input.
+        has_options = bool(message.options) or bool(message.questions)
+        if not has_options:
+            self.turn = "client"
+            self._pending_ask_user = True
+            self.prompt.display = True
+            self.window.scroll_end(animate=False)
+            return
+
+        # If a previous ask_user is still open, remove it before posting the
+        # new one — otherwise widgets stack up and the user's answer becomes
+        # ambiguous about which question it targets.
+        if self._pending_ask_user:
+            try:
+                existing = self.contents.get_child_by_id(
+                    message.tool_id, AskUserWidget
+                )
+            except Exception:
+                existing = None
+            if existing is not None:
+                try:
+                    await existing.remove()
+                except Exception:
+                    pass
+
         self.window.scroll_end(animate=False)
+
+        # Hand control back to the user: switch turn out of "agent" so that
+        # on_user_input_submitted routes the next input to send_ask_user_answer
+        # rather than appending it to _pending_prompts as a brand-new task.
+        self.turn = "client"
+        if self._loading is not None:
+            try:
+                await self._loading.remove()
+            except Exception:
+                pass
+            self._loading = None
+
+        self._pending_ask_user = True
+        self.busy_count -= 1
 
         widget = AskUserWidget(
             message.tool_id,
             question=message.question,
             options=message.options or [],
             questions=message.questions or [],
+            checkpoint_id=message.checkpoint_id,
         )
         await self.post(widget, new_block=True)
+        self.prompt.display = False
         self._agent_response = None
+        self._complete_thought()
+        self.call_after_refresh(lambda: self.window.scroll_end(animate=False))
+
+    @on(acp_messages.AwaitingUserInput)
+    async def on_acp_awaiting_user_input(self, message: acp_messages.AwaitingUserInput):
+        """The agent yielded control to the user without invoking AskUser.
+
+        Switch turn out of "agent" so the next user_input_submitted is treated
+        as a reply to the question currently on screen rather than queued as a
+        fresh prompt. Streaming output is intentionally NOT cancelled.
+        """
+        message.stop()
+        if self._replay:
+            return
+        self.turn = "client"
+        if self._loading is not None:
+            try:
+                await self._loading.remove()
+            except Exception:
+                pass
+            self._loading = None
         self._complete_thought()
 
     @on(AskUserSubmitted)
-    def on_ask_user_submitted(self, message: AskUserSubmitted) -> None:
+    async def on_ask_user_submitted(self, message: AskUserSubmitted) -> None:
         message.stop()
-        if self.agent is not None:
-            cancelled = message.value == "__cancel__"
-            self.agent.send_ask_user_answer(
-                message.value if not cancelled else "", cancelled=cancelled
+        self._pending_ask_user = False
+        self.busy_count += 1
+
+        # Widget already removed by _finish() in ask_user.py
+        try:
+            existing = self.contents.get_child_by_id(
+                message.tool_id, AskUserWidget
             )
+            if existing is not None:
+                await existing.remove()
+        except Exception:
+            pass
+
+        rollback = message.value == "__rollback__"
+
+        # Post answer to conversation as a user message
+        if not rollback:
+            await self.post(UserInput(message.value))
+
+        if self.agent is not None:
+            self.agent.send_ask_user_answer(
+                "" if rollback else message.value,
+                cancelled=False,
+                rollback=rollback,
+            )
+
+        self.prompt.display = True
+        self.focus_prompt()
+        self.turn = "agent"
 
     @on(acp_messages.Plan)
     async def on_acp_plan(self, message: acp_messages.Plan):
@@ -1395,10 +1542,17 @@ class Conversation(containers.Vertical):
 
         if self._replay:
             if isinstance(message, acp_messages.ToolCall):
-                self._replay_buffer.append({"kind": "tool_call", "tool_call": tool_call, "tool_id": tool_id})
+                # Avoid duplicate tool_call entries with the same tool_id.
+                for existing in self._replay_buffer:
+                    if existing.get("kind") == "tool_call" and existing.get("tool_id") == tool_id:
+                        break
+                else:
+                    self._replay_buffer.append({"kind": "tool_call", "tool_call": tool_call, "tool_id": tool_id})
             else:
                 # ToolCallUpdate during replay: merge result content/status/title
-                # into the corresponding buffered tool_call entry.
+                # into the corresponding buffered tool_call entry. If no match,
+                # create a new entry from the update data.
+                matched = False
                 for entry in self._replay_buffer:
                     if entry.get("kind") == "tool_call" and entry.get("tool_id") == tool_id:
                         new_content = tool_call.get("content", [])
@@ -1409,7 +1563,10 @@ class Conversation(containers.Vertical):
                         new_title = tool_call.get("title", "")
                         if new_title:
                             entry["tool_call"]["title"] = new_title
+                        matched = True
                         break
+                if not matched:
+                    self._replay_buffer.append({"kind": "tool_call", "tool_call": tool_call, "tool_id": tool_id})
             return
 
         content = tool_call.get("content", None) or []
@@ -1693,8 +1850,10 @@ class Conversation(containers.Vertical):
 
     @on(acp_messages.SetModes)
     async def on_acp_set_modes(self, message: acp_messages.SetModes):
+        print(f"[DEBUG on_acp_set_modes] current_mode={message.current_mode!r}, modes={list(message.modes.keys())!r}", flush=True)
         self.modes = message.modes
         self.current_mode = self.modes[message.current_mode]
+        print(f"[DEBUG on_acp_set_modes] done. self.modes={list(self.modes.keys())!r}", flush=True)
 
     @on(messages.HistoryMove)
     async def on_history_move(self, message: messages.HistoryMove) -> None:
@@ -1881,9 +2040,31 @@ class Conversation(containers.Vertical):
                 "<list|load|new|close|rename> [args]",
             ),
             SlashCommand(
-                "/project",
-                "Project commands: list, load, new",
-                "<list|load|new> [args]",
+                "/aidlc",
+                "AIDLC commands: project, phase, gate, sync, update",
+                "<project|phase|gate|sync|update> [args]",
+            ),
+            SlashCommand(
+                "/trace",
+                "Open the structured trace viewer",
+            ),
+            SlashCommand(
+                "/engine",
+                "Open the agent/engine selection screen",
+            ),
+            SlashCommand(
+                "/cls",
+                "Search TCB/SCF logs via CLS (requestId tracing)",
+                "<--request-id ID --function NAME>",
+            ),
+            SlashCommand(
+                "/diff",
+                "Show project diff (git working tree changes)",
+            ),
+            SlashCommand(
+                "/ide",
+                "Open built-in code editor",
+                "[filepath]",
             ),
         ]
 
@@ -1936,6 +2117,7 @@ class Conversation(containers.Vertical):
                     self._agent_data,
                     self._agent_session_id,
                     self._session_pk,
+                    default_model=self.app.settings.get("model", str),
                 )
                 await self.agent.start(self)
 
@@ -2008,6 +2190,17 @@ class Conversation(containers.Vertical):
             return
         try:
             widget.query_ancestor(Prompt)
+        except NoMatches:
+            pass
+        else:
+            return
+
+        # AskUserWidget is an interactive block (Input/Buttons): clicking
+        # inside it must not move the block cursor, because
+        # refresh_block_cursor() would call window.focus() and steal focus
+        # from the ask-user input the user just clicked on.
+        try:
+            widget.query_ancestor(AskUserWidget)
         except NoMatches:
             pass
         else:
@@ -2277,16 +2470,35 @@ class Conversation(containers.Vertical):
 
     async def action_cancel(self) -> None:
         now = monotonic()
+
+        # If AskUser is showing (simple question path), single ESC closes it
+        if self._pending_ask_user:
+            self._pending_ask_user = False
+            try:
+                for child in self.contents.children:
+                    if isinstance(child, AskUserWidget):
+                        await child.remove()
+                        break
+            except Exception:
+                pass
+            if self.agent is not None and self.agent._process is not None:
+                self.agent.send_ask_user_answer("", cancelled=True)
+            self.prompt.display = True
+            self.flash("AskUser closed")
+            self.focus_prompt()
+            self._last_escape_time = 0.0
+            self.turn = "agent"
+            return
+
+        # Normal double-ESC logic for session cancellation
         if now - self._last_escape_time < 3:
             if (agent := self.agent) is not None:
                 self._last_escape_time = 0.0
-                if await agent.cancel():
-                    self.flash("Turn cancelled", style="success")
-                else:
-                    self.flash("Agent declined to cancel. Please wait.", style="error")
+                await agent.cancel()
+                self.flash("Cancel requested…", style="success")
         else:
             self.flash("Press [b]esc[/] again to cancel agent's turn")
-            self._last_escape_time = now
+        self._last_escape_time = now
 
     def focus_prompt(self, reset_cursor: bool = True, scroll_end: bool = True) -> None:
         """Focus the prompt input.
@@ -2453,8 +2665,26 @@ class Conversation(containers.Vertical):
                     severity="error",
                 )
                 return True
-            await self.prune_window(line_count, line_count)
+            if line_count == 0:
+                contents = self.contents
+                self.cursor_offset = -1
+                self.cursor.visible = False
+                self.cursor.follow(None)
+                contents.refresh()
+                await contents.remove_children(list(contents.children))
+                if self.window.scroll_y >= self.window.max_scroll_y:
+                    self.call_later(self.window.anchor)
+            else:
+                await self.prune_window(line_count, line_count)
             return True
+        elif command == "trace":
+            self.app.action_trace()
+            return True
+        elif command == "engine":
+            self.app.push_screen("store")
+            return True
+        elif command == "cls":
+            return await self._handle_cls_command(parameters)
         elif command == "exit":
             if self.session_start_time is not None:
                 session_time = monotonic() - self.session_start_time
@@ -2469,13 +2699,176 @@ class Conversation(containers.Vertical):
                     "wall_time": session_time,
                     "agent_title": self.agent_title or "Agent",
                 }
+            if self.agent is not None:
+                await self.agent.stop()
             self.app.exit()
             return True
         elif command == "session":
             return await self._handle_session_command(parameters)
-        elif command == "project":
-            return await self._handle_project_command(parameters)
+        elif command == "aidlc":
+            return await self._handle_aidlc_command(parameters)
+        elif command == "diff":
+            return await self._handle_diff_command()
+        elif command == "ide":
+            return await self._handle_ide_command(parameters)
         return await self._handle_tui_session_project_dispatch(command, parameters)
+
+    async def _handle_diff_command(self) -> bool:
+        from tui.screens.diff_explorer_screen import DiffExplorerScreen
+        self.app.push_screen(DiffExplorerScreen(project_dir=self.project_path))
+        return True
+
+    async def _handle_ide_command(self, parameters: str) -> bool:
+        from tui.screens.ide_screen import IdeScreen
+        filepath = parameters.strip() if parameters.strip() else None
+        self.app.push_screen(
+            IdeScreen(project_dir=self.project_path, filepath=filepath)
+        )
+        return True
+
+    async def _handle_cls_command(self, parameters: str) -> bool:
+        import asyncio
+        import re
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        parts = parameters.strip().split()
+        args = ["cdh", "cls", "search", "--json"]
+        has_request_id = False
+        has_function = False
+
+        i = 0
+        while i < len(parts):
+            part = parts[i]
+            if part in ("--request-id", "--rid"):
+                if i + 1 < len(parts):
+                    args.extend(["--request-id", parts[i + 1]])
+                    has_request_id = True
+                    i += 2
+                else:
+                    self.notify("Missing value for --request-id", title="/cls", severity="error")
+                    return True
+            elif part == "--function":
+                if i + 1 < len(parts):
+                    args.extend(["--function", parts[i + 1]])
+                    has_function = True
+                    i += 2
+                else:
+                    self.notify("Missing value for --function", title="/cls", severity="error")
+                    return True
+            elif part == "--keyword":
+                if i + 1 < len(parts):
+                    args.extend(["--keyword", parts[i + 1]])
+                    i += 2
+                else:
+                    self.notify("Missing value for --keyword", title="/cls", severity="error")
+                    return True
+            elif part == "--limit":
+                if i + 1 < len(parts):
+                    args.extend(["--limit", parts[i + 1]])
+                    i += 2
+                else:
+                    self.notify("Missing value for --limit", title="/cls", severity="error")
+                    return True
+            elif part == "--region":
+                if i + 1 < len(parts):
+                    args.extend(["--region", parts[i + 1]])
+                    i += 2
+                else:
+                    self.notify("Missing value for --region", title="/cls", severity="error")
+                    return True
+            elif part == "--env":
+                if i + 1 < len(parts):
+                    args.extend(["--env", parts[i + 1]])
+                    i += 2
+                else:
+                    self.notify("Missing value for --env", title="/cls", severity="error")
+                    return True
+            elif part.startswith("-"):
+                self.notify(f"Unknown option: {part}", title="/cls", severity="error")
+                return True
+            else:
+                self.notify(f"Unexpected argument: {part}", title="/cls", severity="error")
+                return True
+
+        if not has_request_id and not has_function:
+            self.notify(
+                "/cls requires --request-id or --function\n"
+                "Usage: /cls --request-id <ID> --function <NAME>\n"
+                "       /cls --function <NAME> --keyword <KW>",
+                title="/cls",
+                severity="error"
+            )
+            return True
+
+        try:
+            self.app.push_screen("terminal", run=f"cdh cls search --help")
+
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                self.notify(f"CLS search failed: {error_msg}", title="/cls", severity="error")
+                return True
+
+            import json
+            results = json.loads(stdout.decode()) if stdout else []
+
+            if not results:
+                self.notify("No logs found", title="/cls")
+                return True
+
+            lines = [f"Found {len(results)} log entries:"]
+            for log in results[:20]:
+                time_str = log.get("time", "?")
+                msg = log.get("message", "")
+                req_id = log.get("request_id", "")
+                func = log.get("function", "")
+                level = log.get("level", "INFO")
+                duration = log.get("duration_ms", 0)
+
+                header = f"[{time_str}]"
+                if req_id:
+                    header += f" {req_id[:20]}..."
+                if func:
+                    header += f" {func}"
+                header += f" [{level}]"
+                if duration:
+                    header += f" {duration}ms"
+
+                lines.append(header)
+                if msg:
+                    lines.append(f"  {msg[:200]}")
+
+            if len(results) > 20:
+                lines.append(f"... and {len(results) - 20} more entries")
+
+            from tui.widgets.markdown_note import MarkdownNote
+            content = "```\n" + "\n".join(lines) + "\n```"
+            await self.post(MarkdownNote(content, classes="cls-results"))
+            self.app.copy_to_clipboard(content)
+            self.notify(
+                f"Found {len(results)} logs — copied to clipboard",
+                title="/cls"
+            )
+
+        except FileNotFoundError:
+            self.notify(
+                "cdh command not found. Install with: pip install -e .",
+                title="/cls",
+                severity="error"
+            )
+        except json.JSONDecodeError:
+            self.notify("Failed to parse CLS output", title="/cls", severity="error")
+        except Exception as e:
+            self.notify(f"Error: {e}", title="/cls", severity="error")
+
+        return True
 
     async def _handle_tui_session_project_dispatch(
         self, command: str, parameters: str
@@ -2490,19 +2883,7 @@ class Conversation(containers.Vertical):
         arg = parts[1] if len(parts) > 1 else ""
 
         if sub_cmd == "list":
-            from tui.db import DB
-            db = DB()
-            recent = await db.session_get_recent(max_results=20)
-            if not recent:
-                self.notify("No sessions found", title="/session list")
-                return True
-            lines = ["Recent sessions:"]
-            for s in recent:
-                title = s.get("title", "Untitled") or "Untitled"
-                aid = s.get("agent_identity", "unknown")
-                sid = s.get("agent_session_id", "")[:8]
-                lines.append(f"  [{s['id']}] {title} ({aid[:20]}... {sid})")
-            self.notify("\n".join(lines), title="/session list")
+            self.app.push_screen("sessions")
             return True
         elif sub_cmd == "load":
             if not arg:
@@ -2555,85 +2936,298 @@ class Conversation(containers.Vertical):
             )
             return True
 
-    async def _handle_project_command(self, parameters: str) -> bool:
-        parts = parameters.strip().split(maxsplit=2)
-        sub_cmd = parts[0] if parts else ""
-        name = parts[1] if len(parts) > 1 else ""
-        path = parts[2] if len(parts) > 2 else ""
+    def _emit_aidlc_state(self, target: Path) -> None:
+        from cdh.project_loader import CdhProjectLoader
 
-        if sub_cmd == "list":
+        cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+        if cdh_dir is None:
+            return
+        state = CdhProjectLoader.load_project_state(cdh_dir)
+        self.post_message(acp_messages.AIDLCState(
+            current_phase=state.get("current_phase", ""),
+            completed_phases=state.get("completed_phases", []),
+            gate_results=state.get("gate_results", {}),
+        ))
+
+    def _current_aidlc_phase(self) -> str:
+        from pathlib import Path
+        from cdh.project_loader import CdhProjectLoader
+
+        target = self.app.project_dir or Path.cwd()
+        cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+        if cdh_dir is None:
+            return "—"
+        state = CdhProjectLoader.load_project_state(cdh_dir)
+        return state.get("current_phase", "—")
+
+    async def _handle_aidlc_command(self, parameters: str) -> bool:
+        parts = parameters.strip().split(maxsplit=1)
+        sub_cmd = parts[0] if parts else ""
+        rest = parts[1] if len(parts) > 1 else ""
+
+        # --- /aidlc project <list|new|init|check|load> ---
+        if sub_cmd == "project":
+            sub_parts = rest.strip().split(maxsplit=3)
+            sub_sub = sub_parts[0] if sub_parts else ""
+            sub_name = sub_parts[1] if len(sub_parts) > 1 else ""
+            sub_path = sub_parts[2] if len(sub_parts) > 2 else ""
+            sub_extra = sub_parts[3] if len(sub_parts) > 3 else ""
+
+            if not sub_sub:
+                self.app.action_projects()
+                return True
+
+            if sub_sub == "list":
+                from pathlib import Path
+                projects_dir = Path.home() / ".cdh" / "projects"
+                if not projects_dir.exists():
+                    self.notify("No projects found", title="/aidlc project list")
+                    return True
+                project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
+                if not project_files:
+                    self.notify("No projects found", title="/aidlc project list")
+                    return True
+                lines = ["Projects:"]
+                for pf in sorted(project_files):
+                    lines.append(f"  {pf.stem}")
+                self.notify("\n".join(lines), title="/aidlc project list")
+                return True
+
+            elif sub_sub == "load":
+                if not sub_name:
+                    self.notify("Project name required", title="/aidlc project load", severity="error")
+                    return True
+                from pathlib import Path
+                from cdh.config import write_active_project
+                projects_dir = Path.home() / ".cdh" / "projects"
+                project_file = None
+                for ext in ["yaml", "yml", "json"]:
+                    pf = projects_dir / f"{sub_name}.{ext}"
+                    if pf.exists():
+                        project_file = pf
+                        break
+                if not project_file:
+                    self.notify(f"Project '{sub_name}' not found", title="/aidlc project load", severity="error")
+                    return True
+                import yaml
+                proj_data = yaml.safe_load(project_file.read_text()) if project_file.suffix in [".yaml", ".yml"] else __import__("json").loads(project_file.read_text())
+                project_path = proj_data.get("path", ".")
+                write_active_project(sub_name, project_path)
+                new_project_dir = Path(project_path) if project_path else Path.cwd()
+                self.app.project_dir = new_project_dir
+                self._emit_aidlc_state(new_project_dir)
+                self.post_message(messages.ProjectDirectoryUpdated(project_dir=new_project_dir))
+                launched = self.app._launch_new_session_for_project(new_project_dir)
+                suffix = " (new session opened)" if launched else ""
+                self.flash(f"Switched to project: {sub_name}{suffix}", style="success")
+                return True
+
+            elif sub_sub == "new":
+                if not sub_name:
+                    self.notify(
+                        "Usage: /aidlc project new <name> [path] [components]\n"
+                        "  components: comma-separated ids (web,backend,native,etc.) or 'all'",
+                        title="/aidlc project new", severity="error",
+                    )
+                    return True
+                from pathlib import Path
+                from cdh.config import write_active_project
+                from cdh.project_loader import CdhProjectLoader
+                from cdh.scaffold import scaffold_dlc_project, COMPONENT_BY_ID
+                import yaml
+                projects_dir = Path.home() / ".cdh" / "projects"
+                projects_dir.mkdir(parents=True, exist_ok=True)
+                project_path = sub_path or str(Path.cwd())
+                ws = Path(project_path).expanduser().resolve()
+
+                selected = []
+                if sub_extra:
+                    if sub_extra == "all":
+                        selected = list(COMPONENT_BY_ID.keys())
+                    else:
+                        selected = [c.strip() for c in sub_extra.split(",") if c.strip()]
+                        unknown = [c for c in selected if c not in COMPONENT_BY_ID]
+                        if unknown:
+                            valid = ", ".join(sorted(COMPONENT_BY_ID.keys()))
+                            self.notify(
+                                f"Unknown components: {', '.join(unknown)}. Valid: {valid}",
+                                title="/aidlc project new", severity="error",
+                            )
+                            return True
+
+                scaffold_dlc_project(ws, sub_name, components=selected if selected else None)
+                CdhProjectLoader.init_project(ws, sub_name)
+                proj_data = {"name": sub_name, "path": str(ws), "description": ""}
+                project_file = projects_dir / f"{sub_name}.yaml"
+                project_file.write_text(yaml.dump(proj_data))
+                write_active_project(sub_name, str(ws))
+                self.app.project_dir = ws
+                self._emit_aidlc_state(ws)
+                self.post_message(messages.ProjectDirectoryUpdated(project_dir=ws))
+                launched = self.app._launch_new_session_for_project(ws)
+                session_suffix = " (new session opened)" if launched else ""
+                components_suffix = f" (components: {', '.join(selected)})" if selected else ""
+                self.flash(
+                    f"Created and switched to AIDLC project: {sub_name}{components_suffix}{session_suffix}",
+                    style="success",
+                )
+                return True
+
+            elif sub_sub == "init":
+                from pathlib import Path
+                from cdh.config import write_active_project
+                from cdh.project_loader import CdhProjectLoader
+                from cdh.scaffold import init_dlc_project as _init_dlc_project
+                import yaml
+                target = Path(sub_name or ".").expanduser().resolve()
+                project_name = target.name
+                projects_dir = Path.home() / ".cdh" / "projects"
+                projects_dir.mkdir(parents=True, exist_ok=True)
+                proj_file = projects_dir / f"{project_name}.yaml"
+                if proj_file.exists():
+                    self.notify(
+                        f"Project '{project_name}' already exists",
+                        title="/aidlc project init",
+                        severity="error",
+                    )
+                    return True
+                _init_dlc_project(target, project_name)
+                CdhProjectLoader.init_project(target, project_name)
+                proj_data = {"name": project_name, "path": str(target), "description": ""}
+                proj_file.write_text(yaml.dump(proj_data))
+                write_active_project(project_name, str(target))
+                self.app.project_dir = target
+                self._emit_aidlc_state(target)
+                self.post_message(messages.ProjectDirectoryUpdated(project_dir=target))
+                launched = self.app._launch_new_session_for_project(target)
+                session_suffix = " (new session opened)" if launched else ""
+                self.flash(f"Initialized AIDLC project in: {target}{session_suffix}", style="success")
+                return True
+
+            elif sub_sub == "check":
+                from pathlib import Path
+                from cdh.scaffold import check_dlc_project as _check_dlc_project
+                target = Path(sub_name or ".").expanduser().resolve()
+                result = _check_dlc_project(target)
+                if result["valid"]:
+                    lines = [f"\u2713 Valid AIDLC project: {result['name']}"]
+                    lines.append(f"  Location: {result['path']}")
+                    if result["components"]:
+                        lines.append(f"  Components: {', '.join(result['components'])}")
+                    else:
+                        lines.append("  Components: (none)")
+                    lines.append(
+                        f"  CDH state: \u2713 initialized" if result["has_cdh"]
+                        else "  CDH state: \u2717 not initialized"
+                    )
+                else:
+                    lines = [f"\u2717 Not a valid AIDLC project: {target}"]
+                for s in result["suggestions"]:
+                    lines.append(f"  \u2022 {s}")
+                self.notify("\n".join(lines), title="/aidlc project check")
+                return True
+
+            else:
+                self.notify(
+                    "Usage: /aidlc project <list|new|init|check|load> [args]",
+                    title="/aidlc project",
+                    severity="error",
+                )
+                return True
+
+        # --- /aidlc phase <phase> ---
+        elif sub_cmd == "phase":
             from pathlib import Path
-            projects_dir = Path.home() / ".cdh" / "projects"
-            if not projects_dir.exists():
-                self.notify("No projects found", title="/project list")
+            from cdh.project_loader import CdhProjectLoader
+
+            rest_parts = rest.strip().split(maxsplit=1)
+            target_phase = rest_parts[0] if rest_parts else ""
+            valid_phases = {"init", "understand", "plan", "verify", "deliver"}
+            if not target_phase or target_phase not in valid_phases:
+                phases_list = "|".join(sorted(valid_phases))
+                self.notify(
+                    f"Usage: /aidlc phase <{phases_list}>\nCurrent: {self._current_aidlc_phase()}",
+                    title="/aidlc phase",
+                    severity="error",
+                )
                 return True
-            project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
-            if not project_files:
-                self.notify("No projects found", title="/project list")
-                return True
-            lines = ["Projects:"]
-            for pf in sorted(project_files):
-                lines.append(f"  {pf.stem}")
-            self.notify("\n".join(lines), title="/project list")
+            target = self.app.project_dir or Path.cwd()
+            ok = CdhProjectLoader.advance_phase(target, target_phase)
+            if ok:
+                self.flash(f"Phase: {target_phase}", style="success")
+                self._emit_aidlc_state(target)
+            else:
+                self.notify(
+                    "No .cdh/ directory found or invalid phase transition. "
+                    "Phases must advance forward in sequence "
+                    "(init\u2192understand\u2192plan\u2192verify\u2192deliver). "
+                    "Use 'init' to reset.\n"
+                    f"Current: {self._current_aidlc_phase()}",
+                    title="/aidlc phase",
+                    severity="error",
+                )
             return True
-        elif sub_cmd == "load":
-            if not name:
-                self.notify("Project name required", title="/project load", severity="error")
-                return True
+
+        # --- /aidlc gate <name> <passed|failed> ---
+        elif sub_cmd == "gate":
             from pathlib import Path
-            from onecode.config import load_config, save_config
-            projects_dir = Path.home() / ".cdh" / "projects"
-            project_file = None
-            for ext in ["yaml", "yml", "json"]:
-                pf = projects_dir / f"{name}.{ext}"
-                if pf.exists():
-                    project_file = pf
-                    break
-            if not project_file:
-                self.notify(f"Project '{name}' not found", title="/project load", severity="error")
+            from cdh.project_loader import CdhProjectLoader
+
+            rest_parts = rest.strip().split(maxsplit=1)
+            gate_name = rest_parts[0] if rest_parts else ""
+            gate_status = rest_parts[1] if len(rest_parts) > 1 else ""
+            if not gate_name or gate_status not in ("passed", "failed"):
+                self.notify(
+                    "Usage: /aidlc gate <name> <passed|failed>",
+                    title="/aidlc gate",
+                    severity="error",
+                )
                 return True
-            import yaml
-            proj_data = yaml.safe_load(project_file.read_text()) if project_file.suffix in [".yaml", ".yml"] else __import__("json").loads(project_file.read_text())
-            project_path = proj_data.get("path", ".")
-            cfg = load_config()
-            cfg.current_project = name
-            cfg.current_project_path = project_path
-            save_config(cfg)
-            new_project_dir = Path(project_path) if project_path else Path.cwd()
-            self.app.project_dir = new_project_dir
-            self.post_message(messages.ProjectDirectoryUpdated(project_dir=new_project_dir))
-            self.flash(f"Switched to project: {name}", style="success")
+            target = self.app.project_dir or Path.cwd()
+            ok = CdhProjectLoader.record_gate_result(target, gate_name, gate_status)
+            if ok:
+                self.flash(f"Gate '{gate_name}': {gate_status}", style="success")
+                self._emit_aidlc_state(target)
+            else:
+                self.notify(
+                    "No .cdh/ directory found. Run /aidlc project init first.",
+                    title="/aidlc gate",
+                    severity="error",
+                )
             return True
-        elif sub_cmd == "new":
-            if not name:
-                self.notify("Usage: /project new <name> [path]", title="/project new", severity="error")
-                return True
+
+        # --- /aidlc sync  or  /aidlc update ---
+        elif sub_cmd in ("sync", "update"):
             from pathlib import Path
-            from onecode.config import load_config, save_config
-            from onecode.agent.cdh_loader import CdhProjectLoader
-            from cdh.scaffold import scaffold_dlc_project
-            import yaml
-            projects_dir = Path.home() / ".cdh" / "projects"
-            projects_dir.mkdir(parents=True, exist_ok=True)
-            project_path = path or str(Path.cwd())
-            ws = Path(project_path).expanduser().resolve()
-            scaffold_dlc_project(ws, name)
-            CdhProjectLoader.init_project(ws, name)
-            proj_data = {"name": name, "path": str(ws), "description": ""}
-            project_file = projects_dir / f"{name}.yaml"
-            project_file.write_text(yaml.dump(proj_data))
-            cfg = load_config()
-            cfg.current_project = name
-            cfg.current_project_path = str(ws)
-            save_config(cfg)
-            self.app.project_dir = ws
-            self.post_message(messages.ProjectDirectoryUpdated(project_dir=ws))
-            self.flash(f"Created and switched to project: {name}", style="success")
+            from cdh.scaffold import (
+                _regenerate_agents_and_claude_md,
+                scaffold_dlc_project as _scaffold_dlc_project,
+            )
+            from cdh.project_loader import CdhProjectLoader
+
+            target = self.app.project_dir or Path.cwd()
+            project_yaml = target / "aidlc" / "project.yaml"
+            if project_yaml.exists():
+                _regenerate_agents_and_claude_md(target)
+                self.flash("Regenerated AGENTS.md and CLAUDE.md", style="success")
+            else:
+                project_name = target.name
+                _scaffold_dlc_project(target, project_name)
+                CdhProjectLoader.init_project(target, project_name)
+                self.flash(
+                    "Initialized AIDLC project and regenerated AGENTS.md/CLAUDE.md",
+                    style="success",
+                )
+            self._emit_aidlc_state(target)
             return True
+
         else:
             self.notify(
-                "Usage: /project <list|load|new> [name] [path]",
-                title="/project",
+                "Usage: /aidlc project <list|new|init|check|load> [args]\n"
+                "       /aidlc phase <phase>\n"
+                "       /aidlc gate <name> <passed|failed>\n"
+                "       /aidlc sync|update",
+                title="/aidlc",
                 severity="error",
             )
             return True

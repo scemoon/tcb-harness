@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
+from onecode.models.errors import (
+    ProviderError, TransientProviderError, retry_after_seconds, safe_error_msg,
+)
 from onecode.models.provider import ChatResponse, Message, ModelResponse, Provider, ProviderRegistry
 
 
@@ -53,10 +57,7 @@ class AnthropicProvider(Provider):
     ) -> ModelResponse:
         key = self.resolve_api_key(self.api_key)
         if not key:
-            return ModelResponse(
-                content="API key not configured. Set ANTHROPIC_API_KEY.",
-                model=model,
-            )
+            raise ProviderError("API key not configured. Set ANTHROPIC_API_KEY.")
         async with httpx.AsyncClient(timeout=120) as client:
             prepared = self.prepare_messages(messages)
             system_content = None
@@ -86,6 +87,11 @@ class AnthropicProvider(Provider):
                 },
                 json=api_body,
             )
+            if resp.status_code != 200:
+                raise Provider.classify_http_error(
+                    resp.status_code, resp.text,
+                    retry_after=retry_after_seconds(resp),
+                )
             data = resp.json()
             return ModelResponse(
                 content=[{"type": "text", "text": data.get("content", [{}])[0].get("text", "")}],
@@ -99,8 +105,7 @@ class AnthropicProvider(Provider):
     ) -> AsyncIterator[str]:
         key = self.resolve_api_key(self.api_key)
         if not key:
-            yield "API key not configured."
-            return
+            raise ProviderError("API key not configured.")
         async with httpx.AsyncClient(timeout=300) as client:
             prepared_cs = self.prepare_messages(messages)
             system_content_cs = None
@@ -132,6 +137,12 @@ class AnthropicProvider(Provider):
                 },
                 json=body_cs,
             ) as resp:
+                if resp.status_code != 200:
+                    error_body = await resp.aread()
+                    raise Provider.classify_http_error(
+                        resp.status_code, error_body.decode("utf-8", errors="replace"),
+                        retry_after=retry_after_seconds(resp),
+                    )
                 async for line in resp.aiter_lines():
                     if line.startswith("data: ") and line[6:] != "[DONE]":
                         chunk = json.loads(line[6:])
@@ -145,14 +156,14 @@ class AnthropicProvider(Provider):
         model: str,
         on_text_chunk: Optional[Callable[[str], None]] = None,
         on_tool_call_delta: Optional[Callable[[str, str, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
         **kwargs,
     ) -> ChatResponse:
-        from onecode.models.errors import (
-            ProviderError, TransientProviderError, retry_after_seconds, safe_error_msg,
-        )
         key = self.resolve_api_key(self.api_key)
         if not key:
             raise ProviderError("API key not configured.")
+        if cancel_check and cancel_check():
+            raise asyncio.CancelledError("cancelled before chat_stream_response")
 
         content_parts: list[str] = []
         tool_uses: list[dict] = []
@@ -161,8 +172,6 @@ class AnthropicProvider(Provider):
 
         try:
             async with httpx.AsyncClient(timeout=300) as client:
-                # Extract system message for Anthropic's separate ``system``
-                # parameter (enables prompt caching).
                 prepared = self.prepare_messages(messages)
                 system_content = None
                 filtered_messages = []
@@ -207,6 +216,8 @@ class AnthropicProvider(Provider):
                         )
 
                     async for line in resp.aiter_lines():
+                        if cancel_check and cancel_check():
+                            raise asyncio.CancelledError("cancelled during streaming")
                         if line.startswith("data: ") and line[6:] != "[DONE]":
                             chunk = json.loads(line[6:])
                             chunk_type = chunk.get("type", "")
@@ -256,6 +267,8 @@ class AnthropicProvider(Provider):
 
                             elif chunk_type == "message_delta":
                                 usage = chunk.get("usage", {})
+        except asyncio.CancelledError:
+            raise
         except ProviderError:
             raise
         except httpx.ConnectError as e:

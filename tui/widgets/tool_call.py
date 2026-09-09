@@ -75,6 +75,35 @@ class ViewMore(Static):
     """
 
 
+_READ_AUTO_EXPAND_CHARS = 5000
+
+
+def _tool_content_chars(content: list[protocol.ToolCallContent]) -> int:
+    """Total visible text length of a tool call's content blocks."""
+    total = 0
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "diff":
+            total += len(str(block.get("oldText", "") or ""))
+            total += len(str(block.get("newText", "") or ""))
+            continue
+        sub = block.get("content")
+        if isinstance(sub, dict):
+            total += len(str(sub.get("text", "") or ""))
+    return total
+
+
+def _should_expand_read(tool_call: protocol.ToolCall) -> bool:
+    """Whether a read-kind tool call should auto-expand.
+
+    Small results (e.g. chunked reads) expand so their content is visible;
+    large results stay collapsed to avoid flooding the view (header click /
+    ViewMore still show them).
+    """
+    return _tool_content_chars(tool_call.get("content", [])) <= _READ_AUTO_EXPAND_CHARS
+
+
 def compose_content_block(content_block: protocol.ContentBlock) -> ComposeResult:
     match content_block:
         case {"type": "text", "text": text}:
@@ -212,14 +241,19 @@ class ToolCall(containers.VerticalGroup):
         tool_call = self.tool_call
         assert tool_call is not None
         kind = tool_call.get("kind", "")
-        if kind == "read":
-            return
-
         status = tool_call.get("status")
 
         # write/edit: always expanded
         if kind == "edit":
             self.expanded = True
+            return
+
+        # read: small results (e.g. chunked reads) auto-expand so the content is
+        # visible; large results stay collapsed to avoid flooding the view
+        # (header click / ViewMore still show them).
+        if kind == "read":
+            if _should_expand_read(tool_call):
+                self.expanded = True
             return
 
         tool_call_expand = self.app.settings.get("tools.expand", str, expand=False)

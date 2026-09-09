@@ -618,6 +618,13 @@ MainScreen {
         }
 
 
+        AIDLCStats {
+            border: none !important;
+            margin: 0 !important;
+            padding: 0 1 0 0;
+            background: transparent;
+        }
+
         Plan {
             border: none !important;
             margin: 0 !important;

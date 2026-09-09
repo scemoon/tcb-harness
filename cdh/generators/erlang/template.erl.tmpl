@@ -1,0 +1,18 @@
+%% Auto-generated from {{.SourceFile}}
+-module({{.Name}}).
+-export([from_json/1, to_json/1]).
+
+{{range .Types}}
+-type {{.Name}}() :: #{
+{{range .Properties}}    {{.JsonName}} => {{if .IsNullable}}unicode:unicode_binary() | undefined{{else}}unicode:unicode_binary(){{end}}{{end}}
+}.
+
+-spec from_json(unicode:unicode_binary()) -> {{.Name}}().
+from_json(Json) when is_binary(Json) ->
+    #{ {{range .Properties}}{{.JsonName}} => maps:get(<<"{{.JsonName}}">>, Obj, undefined) }}{{end}}
+    when is_map(Obj), Obj =:= jsx:decode(Json, [return_maps]).
+{{end}}
+
+-spec to_json({{.Name}}()) -> unicode:unicode_binary().
+to_json(Struct) when is_map(Struct) ->
+    jsx:encode(Struct).

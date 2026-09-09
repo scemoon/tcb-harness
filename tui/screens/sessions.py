@@ -31,8 +31,9 @@ INSTRUCTIONS_NO_SESSIONS = "Your sessions will be shown here."
 class SessionsScreen(ModalScreen[str]):
     CSS_PATH = "sessions.tcss"
     BINDINGS = [
-        Binding("escape", "dismiss", "Dismiss"),
+        Binding("escape", "dismiss", "Dismiss", show=False),
         Binding("d", "delete_session", "Delete"),
+        Binding("n", "new_session", "New"),
     ]
 
     app: getters.app[A2TUIApp] = getters.app(A2TUIApp)
@@ -101,6 +102,12 @@ class SessionsScreen(ModalScreen[str]):
 
         await widget.remove()
         self.notify(f"Deleted session: {title}")
+
+    async def action_new_session(self) -> None:
+        session_details = await self.app.new_session_screen(
+            lambda: self.app.SessionScreen()
+        )
+        self.dismiss(session_details.mode_name)
 
     async def _load_historical_sessions(self) -> None:
         seen_pks: set[int] = set()

@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""Generate shared types from OpenAPI and AsyncAPI contracts."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import tempfile
+import time
+import traceback
+from pathlib import Path
+from typing import Any
+
+import yaml  # type: ignore[import-untyped]
+
+try:
+    from cdh.generators._runtime import build_context
+    from cdh.generators.cli import discover_all_plugins_merged
+    from cdh.generators.registry import (
+        DEFAULT_GENERATORS_DIR,
+        PluginManifest,
+        discover_plugins,
+        render,
+        set_plugins,
+    )
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from cdh.generators._runtime import build_context
+    from cdh.generators.cli import discover_all_plugins_merged
+    from cdh.generators.registry import (
+        DEFAULT_GENERATORS_DIR,
+        PluginManifest,
+        discover_plugins,
+        render,
+        set_plugins,
+    )
+
+
+class GenerateError(Exception):
+    pass
+
+
+ALIASES = {"ts": "typescript", "py": "python", "cs": "csharp", "graphql": "graphql-schema", "proto": "protobuf"}
+SELF_TEST_IDENTIFIERS = {
+    "typescript": "export interface",
+    "python": "@dataclass",
+    "java": "public record",
+    "go": "struct",
+    "rust": "pub fn",
+    "csharp": "public class",
+    "kotlin": "data class",
+    "swift": "protocol",
+    "graphql-schema": "type Query",
+    "protobuf": "message Item",
+}
+SELF_TEST_SCHEMA: dict[str, Any] = {
+    "openapi": "3.0.0",
+    "info": {"title": "SelfTest", "version": "1.0.0"},
+    "components": {
+        "schemas": {
+            "Item": {
+                "type": "object",
+                "description": "An item used to verify generator plugins.",
+                "required": ["id", "name", "status"],
+                "properties": {
+                    "id": {"type": "string", "format": "uuid"},
+                    "name": {"type": "string"},
+                    "price": {"type": "number", "format": "double", "nullable": True},
+                    "status": {"type": "string", "enum": ["active", "archived"]},
+                    "createdAt": {"type": "string", "format": "date-time"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                },
+            }
+        }
+    },
+}
+
+
+def _default_generators_dir() -> Path:
+    bundled = Path(__file__).resolve().parent.parent / "generators"
+    if bundled.is_dir():
+        return bundled
+    return DEFAULT_GENERATORS_DIR
+
+
+def _discover_with_user_and_project(
+    generators_dir: Path | None,
+    project_root: Path,
+) -> dict[str, PluginManifest]:
+    """Scan the bundled dir plus user and project-local plugin dirs.
+
+    If ``generators_dir`` is provided, only that directory is scanned
+    (backwards-compatible behaviour). Otherwise the bundled generators
+    are merged with ``~/.cdh/generators`` and ``<project>/aidlc/generators``
+    so plugins installed via ``cdh aidlc generators install`` are picked
+    up automatically. Later sources override earlier ones by plugin name.
+    """
+    if generators_dir is not None:
+        return discover_plugins(generators_dir)
+    merged: dict[str, PluginManifest] = {}
+    for _source, plugin in discover_all_plugins_merged(project_root=project_root).values():
+        merged[plugin.name] = plugin
+    return merged
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise GenerateError(f"Unable to read {path}: {exc}") from exc
+    if not isinstance(document, dict):
+        raise GenerateError(f"Root YAML value must be a mapping: {path}")
+    return document
+
+
+def _find_yaml_files(project_root: Path) -> list[Path]:
+    files: list[Path] = []
+    for relative in ("aidlc/contracts/api", "aidlc/contracts/events"):
+        directory = project_root / relative
+        if directory.is_dir():
+            files.extend(sorted(directory.glob("*.yaml")))
+            files.extend(sorted(directory.glob("*.yml")))
+    return files
+
+
+def _canonical_language(language: str, plugins: dict[str, PluginManifest]) -> str:
+    value = ALIASES.get(language.strip(), language.strip())
+    if value not in plugins:
+        raise GenerateError(f"Unknown language '{language}'. Valid: {', '.join(sorted(plugins))}")
+    return value
+
+
+def _legacy_outdirs(
+    ts_outdir: Path | None,
+    py_outdir: Path | None,
+    java_outdir: Path | None,
+    go_outdir: Path | None,
+    rust_outdir: Path | None,
+) -> dict[str, Path | None]:
+    return {
+        "typescript": ts_outdir,
+        "python": py_outdir,
+        "java": java_outdir,
+        "go": go_outdir,
+        "rust": rust_outdir,
+    }
+
+
+def _write_indexes(language: str, output_dir: Path, files: list[Path]) -> list[Path]:
+    if language == "typescript":
+        index = output_dir / "index.ts"
+        exports = ["// Auto-generated by generate_shared.py", ""]
+        exports.extend(f"export * from './{path.stem}';" for path in files)
+        index.write_text("\n".join(exports) + "\n", encoding="utf-8")
+        return [index]
+    if language == "python":
+        index = output_dir / "__init__.py"
+        imports = ['"""Auto-generated by generate_shared.py"""', ""]
+        imports.extend(f"from .{path.stem} import *" for path in files)
+        index.write_text("\n".join(imports) + "\n", encoding="utf-8")
+        return [index]
+    return []
+
+
+def generate(
+    project_root: Path,
+    ts_outdir: Path | None = None,
+    py_outdir: Path | None = None,
+    java_outdir: Path | None = None,
+    go_outdir: Path | None = None,
+    rust_outdir: Path | None = None,
+    languages: list[str] | None = None,
+    generators_dir: Path | None = None,
+    output_dirs: dict[str, Path] | None = None,
+    package_name: str | None = None,
+) -> list[Path]:
+    plugins = _discover_with_user_and_project(generators_dir, project_root)
+    set_plugins(plugins)
+    selected = [_canonical_language(language, plugins) for language in (languages or ["typescript", "python"])]
+    legacy = _legacy_outdirs(ts_outdir, py_outdir, java_outdir, go_outdir, rust_outdir)
+    overrides = output_dirs or {}
+    contracts = _find_yaml_files(project_root)
+    generated: list[Path] = []
+    shared = project_root / "aidlc" / "packages" / "shared"
+    for language in selected:
+        plugin = plugins[language]
+        output_dir = overrides.get(language) or legacy.get(language)
+        if output_dir is None:
+            output_dir = shared if plugin.default_outdir in ("", ".") else shared / plugin.default_outdir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stubs: list[Path] = []
+        for source in contracts:
+            document = _load_yaml(source)
+            context = build_context(document, source, language, package_name or plugin.package_name_default)
+            filename = plugin.output_filename_template.format(name=source.stem)
+            target = output_dir / filename
+            target.write_text(render(language, context), encoding="utf-8")
+            stubs.append(target)
+            generated.append(target)
+            print(f"  {plugin.display_name:<16} {target}")
+        generated.extend(_write_indexes(language, output_dir, stubs))
+    return generated
+
+
+def _self_test(generators_dir: Path | None = None) -> int:
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        contract_dir = root / "aidlc" / "contracts" / "api"
+        contract_dir.mkdir(parents=True)
+        (contract_dir / "selftest.yaml").write_text(yaml.safe_dump(SELF_TEST_SCHEMA), encoding="utf-8")
+        plugins = _discover_with_user_and_project(generators_dir, root)
+        set_plugins(plugins)
+        output_dirs = {name: root / "output" / name for name in plugins}
+        try:
+            generate(root, languages=list(plugins), generators_dir=generators_dir, output_dirs=output_dirs)
+        except Exception as exc:
+            traceback.print_exc()
+            failures.append(f"generation raised: {exc}")
+        for name, plugin in plugins.items():
+            output = output_dirs[name] / plugin.output_filename_template.format(name="selftest")
+            if not output.is_file():
+                failures.append(f"[{name}] missing {output.name}")
+                continue
+            identifier = SELF_TEST_IDENTIFIERS.get(name)
+            if identifier and identifier not in output.read_text(encoding="utf-8"):
+                failures.append(f"[{name}] missing expected identifier: {identifier}")
+    if failures:
+        print("Self-test FAILED:")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 1
+    print(f"Self-test PASSED: all {len(plugins)} plugins produced expected output.")
+    return 0
+
+
+def _watch(project_root: Path, arguments: argparse.Namespace, languages: list[str]) -> None:
+    previous = {path: path.stat().st_mtime_ns for path in _find_yaml_files(project_root)}
+    while True:
+        try:
+            time.sleep(2)
+            current_files = _find_yaml_files(project_root)
+            current = {path: path.stat().st_mtime_ns for path in current_files}
+            if current != previous:
+                previous = current
+                generate(project_root, languages=languages, generators_dir=arguments.generators_dir)
+        except KeyboardInterrupt:
+            return
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--project-root", default=".")
+    parser.add_argument("--generators-dir", type=Path)
+    parser.add_argument("--languages", help="Comma-separated plugin names")
+    parser.add_argument("--package-name")
+    parser.add_argument("--ts-outdir", type=Path)
+    parser.add_argument("--py-outdir", type=Path)
+    parser.add_argument("--java-outdir", type=Path)
+    parser.add_argument("--go-outdir", type=Path)
+    parser.add_argument("--rust-outdir", type=Path)
+    parser.add_argument("--watch", action="store_true")
+    parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--list-generators", action="store_true")
+    return parser
+
+
+def main() -> None:
+    arguments = _parser().parse_args()
+    project_root = Path(arguments.project_root).resolve()
+    if arguments.generators_dir is not None:
+        plugins = discover_plugins(arguments.generators_dir)
+    else:
+        plugins = _discover_with_user_and_project(None, project_root)
+    if arguments.list_generators:
+        for name, plugin in plugins.items():
+            print(f"{name}\t{plugin.display_name}\t{plugin.file_extension}")
+        return
+    if arguments.self_test:
+        raise SystemExit(_self_test(arguments.generators_dir))
+    languages = [part.strip() for part in arguments.languages.split(",")] if arguments.languages else ["typescript", "python"]
+    root = Path(arguments.project_root).resolve()
+    kwargs = {
+        "ts_outdir": arguments.ts_outdir,
+        "py_outdir": arguments.py_outdir,
+        "java_outdir": arguments.java_outdir,
+        "go_outdir": arguments.go_outdir,
+        "rust_outdir": arguments.rust_outdir,
+        "languages": languages,
+        "generators_dir": arguments.generators_dir,
+        "package_name": arguments.package_name,
+    }
+    generated = generate(root, **kwargs)
+    print(f"Generated {len(generated)} file(s).")
+    if arguments.watch:
+        _watch(root, arguments, languages)
+
+
+if __name__ == "__main__":
+    main()

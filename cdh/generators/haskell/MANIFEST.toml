@@ -1,0 +1,14 @@
+# Plugin manifest for haskell
+[plugin]
+name = "haskell"
+display_name = "Haskell"
+file_extension = ".hs"
+mime_type = "text/x-haskell"
+default_outdir = "haskell"
+output_filename_template = "{name}.hs"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

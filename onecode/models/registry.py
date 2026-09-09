@@ -19,6 +19,26 @@ class ModelInfo:
 REFERENCE_MODELS: list[ModelInfo] = [
     # ── Anthropic (Claude) ──
     ModelInfo(
+        id="claude-opus-4.7",
+        provider="anthropic",
+        context_window=200000,
+        max_output=8192,
+        cost_per_1k_input=0.015,
+        cost_per_1k_output=0.075,
+        capabilities=["reasoning", "coding", "analysis", "complex"],
+        description="Claude Opus 4.7, Anthropic's most capable model",
+    ),
+    ModelInfo(
+        id="claude-opus-4.7-fast",
+        provider="anthropic",
+        context_window=200000,
+        max_output=8192,
+        cost_per_1k_input=0.015,
+        cost_per_1k_output=0.075,
+        capabilities=["reasoning", "coding", "fast"],
+        description="Claude Opus 4.7 Fast, faster inference variant",
+    ),
+    ModelInfo(
         id="claude-3-opus-20240229",
         provider="anthropic",
         context_window=200000,
@@ -69,7 +89,47 @@ REFERENCE_MODELS: list[ModelInfo] = [
         capabilities=["reasoning", "coding", "complex"],
         description="OpenAI GPT-4 Turbo, fast and capable",
     ),
+    ModelInfo(
+        id="gpt-5.5-pro",
+        provider="openai",
+        context_window=128000,
+        max_output=16384,
+        cost_per_1k_input=0.01,
+        cost_per_1k_output=0.04,
+        capabilities=["reasoning", "coding", "complex"],
+        description="OpenAI GPT-5.5 Pro, most capable model",
+    ),
+    ModelInfo(
+        id="gpt-5.5",
+        provider="openai",
+        context_window=128000,
+        max_output=16384,
+        cost_per_1k_input=0.005,
+        cost_per_1k_output=0.015,
+        capabilities=["reasoning", "coding", "general"],
+        description="OpenAI GPT-5.5, balanced general-purpose model",
+    ),
     # ── DeepSeek ──
+    ModelInfo(
+        id="deepseek-v4-pro",
+        provider="deepseek",
+        context_window=128000,
+        max_output=8192,
+        cost_per_1k_input=0.00055,
+        cost_per_1k_output=0.00219,
+        capabilities=["reasoning", "coding", "analysis", "complex"],
+        description="DeepSeek V4 Pro, advanced reasoning model",
+    ),
+    ModelInfo(
+        id="deepseek-v4-flash",
+        provider="deepseek",
+        context_window=128000,
+        max_output=8192,
+        cost_per_1k_input=0.00014,
+        cost_per_1k_output=0.00028,
+        capabilities=["coding", "general", "fast"],
+        description="DeepSeek V4 Flash, fast cost-efficient model",
+    ),
     ModelInfo(
         id="deepseek-chat",
         provider="deepseek",
@@ -111,7 +171,57 @@ REFERENCE_MODELS: list[ModelInfo] = [
         capabilities=["coding", "general", "cost-efficient"],
         description="MiniMax M1 Light, faster and cost-effective",
     ),
+    ModelInfo(
+        id="MiniMax-M3",
+        provider="minimaxi",
+        context_window=1000000,
+        max_output=16384,
+        cost_per_1k_input=0.001,
+        cost_per_1k_output=0.003,
+        capabilities=["reasoning", "coding", "long-context", "complex"],
+        description="MiniMax M3 flagship model with 1M context",
+    ),
+    ModelInfo(
+        id="MiniMax-M2.7",
+        provider="minimaxi",
+        context_window=128000,
+        max_output=8192,
+        cost_per_1k_input=0.0002,
+        cost_per_1k_output=0.0006,
+        capabilities=["coding", "general", "cost-efficient"],
+        description="MiniMax M2.7, balanced and capable",
+    ),
+    ModelInfo(
+        id="MiniMax-M2.5",
+        provider="minimaxi",
+        context_window=64000,
+        max_output=4096,
+        cost_per_1k_input=0.0001,
+        cost_per_1k_output=0.0003,
+        capabilities=["quick", "general", "cost-efficient"],
+        description="MiniMax M2.5, fast and affordable",
+    ),
     # ── Zhipu GLM ──
+    ModelInfo(
+        id="glm-5.1",
+        provider="glm",
+        context_window=128000,
+        max_output=8192,
+        cost_per_1k_input=0.007,
+        cost_per_1k_output=0.007,
+        capabilities=["reasoning", "coding", "analysis"],
+        description="GLM-5.1, Zhipu's flagship model",
+    ),
+    ModelInfo(
+        id="glm-5",
+        provider="glm",
+        context_window=128000,
+        max_output=8192,
+        cost_per_1k_input=0.004,
+        cost_per_1k_output=0.004,
+        capabilities=["coding", "general", "balanced"],
+        description="GLM-5, balanced and capable",
+    ),
     ModelInfo(
         id="glm-4-plus",
         provider="glm",
@@ -153,11 +263,33 @@ REFERENCE_MODELS: list[ModelInfo] = [
         capabilities=["local", "coding"],
         description="Local CodeLlama model via Ollama",
     ),
+    ModelInfo(
+        id="qwen3.5-2b",
+        provider="ollama",
+        context_window=32000,
+        max_output=4096,
+        cost_per_1k_input=0.0,
+        cost_per_1k_output=0.0,
+        capabilities=["local", "coding", "reasoning"],
+        description="Qwen3.5 2B - 轻量推荐（需 8GB+ 内存）",
+    ),
+    ModelInfo(
+        id="qwen3.5-4b",
+        provider="ollama",
+        context_window=32000,
+        max_output=4096,
+        cost_per_1k_input=0.0,
+        cost_per_1k_output=0.0,
+        capabilities=["local", "coding", "reasoning"],
+        description="Qwen3.5 4B - 高质量（需 16GB+ 内存）",
+    ),
 ]
 
 
 class ModelRegistry:
     _models: dict[str, ModelInfo] = {}
+
+    _reference: dict[str, ModelInfo] = {m.id: m for m in REFERENCE_MODELS}
 
     @classmethod
     def initialize(cls):
@@ -166,16 +298,21 @@ class ModelRegistry:
         cls._models.clear()
         for provider, prov_cfg in cfg.providers.items():
             for model_id in prov_cfg.models:
+                ref = cls._reference.get(model_id)
                 cls._models[model_id] = ModelInfo(
                     id=model_id,
                     provider=provider,
-                    context_window=0,
-                    max_output=4096,
-                    cost_per_1k_input=0.0,
-                    cost_per_1k_output=0.0,
-                    capabilities=[],
-                    description="",
+                    context_window=ref.context_window if ref else 0,
+                    max_output=ref.max_output if ref else 4096,
+                    cost_per_1k_input=ref.cost_per_1k_input if ref else 0.0,
+                    cost_per_1k_output=ref.cost_per_1k_output if ref else 0.0,
+                    capabilities=list(ref.capabilities) if ref else [],
+                    description=ref.description if ref else "",
                 )
+        # Also register any reference models not in config
+        for m in REFERENCE_MODELS:
+            if m.id not in cls._models:
+                cls._models[m.id] = m
 
     @classmethod
     def get(cls, model_id: str) -> Optional[ModelInfo]:

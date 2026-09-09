@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from typing import Optional
@@ -30,22 +31,53 @@ class CodebaseRetriever:
         self._bm25: Optional[BM25] = None
         self._chunks: list[CodeChunk] = []
         self._dirty = True
+        self._chunks_by_file: dict[str, list[CodeChunk]] = {}
+        self._file_chunk_counts: dict[str, int] = {}
 
     def _ensure_indexed(self) -> None:
         if not self._dirty:
             return
-        self._chunks = self.storage.get_all_chunks()
-        if self._chunks:
-            texts = [c.content for c in self._chunks]
-            self._bm25 = BM25()
-            self._bm25.index(texts)
+
+        if not self._chunks_by_file:
+            self._chunks = self.storage.get_all_chunks()
+            self._chunks_by_file = {}
+            for chunk in self._chunks:
+                if chunk.file_path not in self._chunks_by_file:
+                    self._chunks_by_file[chunk.file_path] = []
+                self._chunks_by_file[chunk.file_path].append(chunk)
+            for fp, chunks in self._chunks_by_file.items():
+                self._file_chunk_counts[fp] = len(chunks)
         else:
+            self._chunks = []
+            for chunks in self._chunks_by_file.values():
+                self._chunks.extend(chunks)
+
+        if not self._chunks:
             self._bm25 = None
+            self._dirty = False
+            logger.debug("BM25 index empty")
+            return
+
+        texts = [c.content for c in self._chunks]
+        self._bm25 = BM25()
+        self._bm25.index(texts)
+
         self._dirty = False
-        logger.debug("BM25 index rebuilt with %d chunks", len(self._chunks))
+        logger.debug("BM25 index rebuilt with %d chunks from %d files", len(self._chunks), len(self._chunks_by_file))
 
     def mark_dirty(self) -> None:
         self._dirty = True
+
+    def update_file(self, file_path: str, chunks: list[CodeChunk]) -> None:
+        self._chunks_by_file[file_path] = chunks
+        self._file_chunk_counts[file_path] = len(chunks)
+        self._dirty = True
+
+    def remove_file(self, file_path: str) -> None:
+        if file_path in self._chunks_by_file:
+            del self._chunks_by_file[file_path]
+            del self._file_chunk_counts[file_path]
+            self._dirty = True
 
     async def retrieve(self, query: str, top_k: Optional[int] = None) -> list[CodeChunk]:
         k = top_k or self.config.top_k
@@ -155,19 +187,20 @@ async def _get_batch_embeddings(texts: list[str], config: CodebaseConfig) -> lis
         )
         texts = texts[:MAX_EMBED_CHUNKS]
 
+    _MAX_CONCURRENCY = 16
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
+
+    async def embed_with_sem(text: str) -> Optional[list[float]]:
+        async with semaphore:
+            return await _get_embedding(text, config)
+
     if provider_name == "ollama" and pcfg:
         embs = await _ollama_batch_embed(texts, pcfg.endpoint or "http://localhost:11434")
     else:
-        embs = []
-        for i, t in enumerate(texts):
-            if i > 0 and i % 16 == 0:
-                import asyncio
-                await asyncio.sleep(0)
-            emb = await _get_embedding(t, config)
-            embs.append(emb)
+        embs = await asyncio.gather(*[embed_with_sem(t) for t in texts])
 
-    BATCH_CACHE[key] = embs
-    return embs
+    BATCH_CACHE[key] = list(embs)
+    return list(embs)
 
 
 async def _openai_embed(text: str, api_key: str, endpoint: str) -> Optional[list[float]]:
@@ -196,8 +229,12 @@ async def _ollama_embed(text: str, endpoint: str) -> Optional[list[float]]:
 
 
 async def _ollama_batch_embed(texts: list[str], endpoint: str) -> list[Optional[list[float]]]:
-    embs = []
-    for t in texts:
-        emb = await _ollama_embed(t, endpoint)
-        embs.append(emb)
-    return embs
+    _MAX_CONCURRENCY = 16
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
+
+    async def embed_with_sem(text: str) -> Optional[list[float]]:
+        async with semaphore:
+            return await _ollama_embed(text, endpoint)
+
+    embs = await asyncio.gather(*[embed_with_sem(t) for t in texts])
+    return list(embs)

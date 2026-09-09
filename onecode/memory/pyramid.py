@@ -131,3 +131,15 @@ class MemoryPyramid:
     def list_recent(self, layer: MemoryLayer, limit: int = 10) -> list[MemoryEntry]:
         entries = self._layers.get(layer, [])
         return sorted(entries, key=lambda e: e.timestamp, reverse=True)[:limit]
+
+    def remove(self, layer: MemoryLayer, entry_id: str) -> bool:
+        entries = self._layers.get(layer, [])
+        for i, entry in enumerate(entries):
+            if entry.id == entry_id:
+                content_file = self._layer_dir(layer) / f"{entry_id}.md"
+                if content_file.exists():
+                    content_file.unlink()
+                self._layers[layer].pop(i)
+                self._save_index()
+                return True
+        return False

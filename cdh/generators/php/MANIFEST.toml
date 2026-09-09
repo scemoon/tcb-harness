@@ -1,0 +1,17 @@
+[plugin]
+name = "php"
+display_name = "PHP"
+file_extension = ".php"
+mime_type = "text/x-php"
+default_outdir = "php"
+output_filename_template = "{name}.php"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid"]
+
+[imports]
+date-time = "use DateTimeImmutable;"
+uuid = "use Ramsey\\Uuid\\Uuid;"

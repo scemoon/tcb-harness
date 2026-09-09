@@ -19,6 +19,7 @@ from textual import containers
 from textual.widget import Widget
 from textual.widgets.option_list import Option
 from textual.widgets.text_area import Selection
+from textual.document._document import EditResult
 from textual import events
 
 from tui.app import A2TUIApp
@@ -26,6 +27,7 @@ from tui import messages
 from tui.widgets.highlighted_textarea import HighlightedTextArea
 from tui.widgets.condensed_path import CondensedPath
 from tui.widgets.path_search import PathSearch
+from tui.widgets.pending_prompts import PendingPrompts
 from tui.widgets.plan import Plan
 from tui.answer import Answer
 from tui.widgets.question import Ask, Question
@@ -109,19 +111,21 @@ See on-screen instructions for details.
             key_display="⏎",
             priority=True,
             tooltip="Send the prompt to the agent",
+            show=False,
         ),
         Binding(
-            "ctrl+j,shift+enter",
+            "alt+enter,shift+enter",
             "newline",
             "Line",
-            key_display="⇧+⏎",
+            key_display="⌥+⏎",
             tooltip="Insert a new line character",
+            show=False,
         ),
         Binding(
-            "ctrl+j,shift+enter",
+            "alt+enter,shift+enter",
             "multiline_submit",
             "Send",
-            key_display="⇧+⏎",
+            key_display="⌥+⏎",
             tooltip="Send the prompt to the agent",
         ),
         Binding(
@@ -206,6 +210,127 @@ See on-screen instructions for details.
     def on_mount(self) -> None:
         self.highlight_cursor_line = False
         self.hide_suggestion_on_blur = False
+        self._paste_queue: list[tuple[str, str]] = []
+        self._paste_fingerprint = ""
+        self._paste_summary_enabled: bool = not bool(
+            self.app.settings.get("experimental.disable_paste_summary", bool)
+        )
+
+    QUICK_COUNT_SAMPLE = 1000
+    HUGE_PASTE_THRESHOLD = 100000
+
+    async def _on_paste(self, event: events.Paste) -> None:
+        """Handle paste events with fast path for large text to avoid blocking UI."""
+        if self.read_only:
+            return
+
+        text_len = len(event.text)
+        MAX_PASTE_CHARS = 50000
+
+        if text_len > MAX_PASTE_CHARS:
+            self.post_message(
+                messages.Flash(
+                    "内容过大，已截断",
+                    style="warning",
+                    duration=3,
+                )
+            )
+            self._paste_fingerprint = ""
+            self._paste_queue.clear()
+            text_copy = event.text[:MAX_PASTE_CHARS]
+            self._paste_queue.append((text_copy, "[Pasted large content]"))
+            self.insert("[Pasted large content] ")
+            return
+
+        await super()._on_paste(event)
+
+    def _replace_via_keyboard(self, text: str, start, end) -> EditResult | None:
+        if self.read_only:
+            return None
+
+        text_len = len(text)
+        MAX_PASTE_CHARS = 50000
+
+        if text_len > MAX_PASTE_CHARS:
+            self._paste_fingerprint = ""
+            self._paste_queue.clear()
+            sample = text[: self.QUICK_COUNT_SAMPLE]
+            sample_lines = sample.count("\n") + 1
+            estimated_line_count = int(sample_lines * text_len / len(sample))
+            marker = f"[Pasted ~{estimated_line_count} lines] (truncated)"
+            self._paste_queue.append((text[:MAX_PASTE_CHARS], marker))
+            self.post_message(
+                messages.Flash(
+                    f"[Pasted ~{estimated_line_count} lines, 内容过大已截断]",
+                    style="warning",
+                    duration=3,
+                )
+            )
+            self.insert(marker + " ")
+            return None
+
+        fingerprint = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+        if fingerprint and self._paste_fingerprint == fingerprint:
+            self._paste_fingerprint = ""
+            self._paste_queue.clear()
+            return None
+
+        if text_len <= 150:
+            self._paste_fingerprint = ""
+            self._paste_queue.clear()
+            return super()._replace_via_keyboard(text, start, end)
+
+        if not self._paste_summary_enabled:
+            self._paste_fingerprint = ""
+            self._paste_queue.clear()
+            return super()._replace_via_keyboard(text, start, end)
+
+        self._paste_fingerprint = fingerprint
+
+        sample = text[: self.QUICK_COUNT_SAMPLE]
+        sample_normalized = sample.replace("\r\n", "\n").replace("\r", "\n")
+        sample_lines = sample_normalized.count("\n") + 1
+        if text_len <= self.QUICK_COUNT_SAMPLE:
+            line_count = sample_lines
+        else:
+            line_count = int(sample_lines * text_len / len(sample))
+
+        char_count = text_len
+        text_to_store = text
+        truncated = False
+
+        if char_count > MAX_PASTE_CHARS:
+            text_to_store = text[:MAX_PASTE_CHARS]
+            truncated = True
+            self.post_message(
+                messages.Flash(
+                    f"[Pasted ~{line_count} lines, 内容过大已截断]",
+                    style="warning",
+                    duration=3,
+                )
+            )
+        elif line_count > 30:
+            self.post_message(
+                messages.Flash(
+                    f"[Pasted ~{line_count} lines]",
+                    style="default",
+                    duration=2,
+                )
+            )
+
+        marker = f"[Pasted ~{line_count} lines]" + (" (truncated)" if truncated else "")
+        self._paste_queue.append((text_to_store, marker))
+        self.insert(marker + " ")
+        return None
+
+    def action_copy(self) -> None:
+        """Copy selection to clipboard; if no selection, clear the text area."""
+        if not self.selection.is_empty:
+            self.app.copy_to_clipboard(self.selected_text)
+        else:
+            self.clear()
+            self._paste_queue.clear()
 
     def on_key(self, event: events.Key) -> None:
         if (
@@ -217,7 +342,9 @@ See on-screen instructions for details.
             event.prevent_default()
         elif self.shell_mode and event.key == "tab":
             event.prevent_default()
-        elif event.key != "escape":
+        elif event.key == "escape":
+            self._paste_queue.clear()
+        else:
             self.suggestions = None
             self.suggestion = ""
 
@@ -252,11 +379,20 @@ See on-screen instructions for details.
                 )
             )
             return
-        self.post_message(UserInputSubmitted(self.text, self.shell_mode))
+        body = self._expand_paste_markers(self.text)
+        self._paste_queue.clear()
+        self.post_message(UserInputSubmitted(body, self.shell_mode))
         self.clear()
 
     def action_newline(self) -> None:
         self.insert("\n")
+
+    def _expand_paste_markers(self, body: str) -> str:
+        """Expand paste markers in body text by replacing them with original content."""
+        for original, marker in self._paste_queue:
+            if marker in body:
+                body = body.replace(marker, original, 1)
+        return body
 
     def action_submit(self) -> None:
         if not self.agent_ready and not self.shell_mode:
@@ -281,7 +417,9 @@ See on-screen instructions for details.
                     self.insert(self.suggestion + " ")
                 self.suggestion = ""
             return
-        self.post_message(UserInputSubmitted(self.text, self.shell_mode))
+        body = self._expand_paste_markers(self.text)
+        self._paste_queue.clear()
+        self.post_message(UserInputSubmitted(body, self.shell_mode))
         self.clear()
 
     def action_cursor_up(self, select: bool = False):
@@ -324,7 +462,7 @@ See on-screen instructions for details.
 
     async def action_tab_complete(self) -> None:
         if not self.shell_mode:
-            return
+            raise SkipAction()
 
         import shlex
 
@@ -462,6 +600,7 @@ class Prompt(containers.VerticalGroup):
     current_mode: var[Mode | None] = var(None)
     modes: var[dict[str, Mode] | None] = var(None)
     status: var[str] = var("")
+    pending_prompts: var[list[str]] = var([])
 
     app = getters.app(A2TUIApp)
 
@@ -753,6 +892,7 @@ class Prompt(containers.VerticalGroup):
     def compose(self) -> ComposeResult:
         yield PathSearch(self.project_path).data_bind(root=Prompt.project_path)
         yield SlashComplete().data_bind(slash_commands=Prompt.slash_commands)
+        yield PendingPrompts().data_bind(_prompts=Prompt.pending_prompts)
         with PromptContainer(id="prompt-container"):
             yield Question()
             with containers.HorizontalGroup(id="text-prompt"):

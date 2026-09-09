@@ -1,0 +1,27 @@
+# Auto-generated from {{.SourceFile}}
+package Types;
+use strict;
+use warnings;
+use JSON;
+{{range .Types}}
+
+package Types::{{.Name}};
+use strict;
+use warnings;
+use parent 'JSON::Class';
+
+{{range .Properties}}
+has '{{.Name}}' => (
+    is => 'rw',
+    isa => '{{if .IsNullable}}Str|Undef{{else}}Str{{end}}',
+    json_key => '{{.JsonName}}',
+);
+{{end}}
+
+__PACKAGE__->meta->setup;
+__PACKAGE__->register_class;
+
+package Types;
+{{end}}
+
+1;

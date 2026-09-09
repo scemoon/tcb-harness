@@ -83,13 +83,46 @@ pytest --cov --cov-fail-under=80
 | Artifact | Location | Example |
 |----------|----------|---------|
 | Tests | `tests/unit/test_{feature}.py` | `tests/unit/test_auth.py` |
-| Step defs | `features/steps/test_{feature}_steps.py` | `features/steps/test_login_steps.py` |
+| Step defs | `aidlc/features/steps/test_{feature}_steps.py` | `aidlc/features/steps/test_login_steps.py` |
 | Source | `src/{module}/{feature}.py` | `src/auth/login.py` |
 
 ## Quality Gates
 
 ```bash
 pytest --cov --cov-fail-under=80
-pytest-bdd features/ --verbose
+pytest aidlc/features/ --verbose
 bandit -r src/ -q
+```
+
+## Test Categories
+
+Each BDD scenario type maps to a test category:
+
+| BDD Tag | Test Category | Focus |
+|---------|---------------|-------|
+| `@positive` | 处理逻辑 | Normal flow, happy path |
+| `@negative` | 异常处理 | Error handling, invalid inputs |
+| `@edge` | 边界情况 | Boundary values, empty/null |
+| `@logic` | 逻辑一致性 | Idempotency, state consistency |
+
+### @logic Test Examples
+
+```python
+def test_login_is_idempotent():
+    """Repeated login returns same token."""
+    result1 = authenticate("user@test.com", "correct123")
+    result2 = authenticate("user@test.com", "correct123")
+    assert result1.token == result2.token
+
+def test_no_duplicate_sessions():
+    """Multiple logins don't create multiple sessions."""
+    authenticate("user@test.com", "correct123")
+    authenticate("user@test.com", "correct123")
+    assert session_count() == 1
+
+def test_state_consistency():
+    """Operation preserves data integrity."""
+    initial = db.count()
+    process()
+    assert db.count() == initial
 ```

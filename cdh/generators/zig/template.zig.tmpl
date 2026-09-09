@@ -1,0 +1,20 @@
+// Auto-generated from {{.SourceFile}}
+const std = @import("std");
+const json = std.json;
+
+{{range .Types}}
+pub const {{.Name}} = struct {
+{{range .Properties}}    {{.Name}}: {{if .IsNullable}}?[]const u8{{else}}[]const u8{{end}},
+{{end}}};
+
+pub fn {{.Name}}_from_json(allocator: std.mem.Allocator, json_str: []const u8) !{{.Name}} {
+    const parsed = try json.parseFromSlice({{.Name}}, allocator, json_str);
+    return parsed.value;
+}
+
+pub fn {{.Name}}_to_json(allocator: std.mem.Allocator, obj: {{.Name}}) ![]u8 {
+    var buf = std.ArrayList(u8).init(allocator);
+    try json.stringify(allocator, obj, buf.writer());
+    return buf.toOwnedSlice();
+}
+{{end}}

@@ -82,6 +82,7 @@ async def _status(conversation: "Conversation", parameters: str) -> None:
         "- `/onecode:model [set <name|n>]` — show / change LLM model",
         "- `/onecode:skill list|enable|disable|add|remove [name]`",
         "- `/onecode:mcp list|enable|disable|add|remove [name|url]`",
+        "- `/onecode:compact` — immediately compact context",
         "- `/onecode:help` — show this overview",
     ]
     await _post(conversation, "\n".join(lines))
@@ -591,26 +592,31 @@ def _resolve_indexed_name(conversation, raw, items, sub_label):
     return None
 
 
-# ── clear-todos ──────────────────────────────────────────────────────────
+# ── compact ─────────────────────────────────────────────────────────────
 
 
-async def _clear_todos(conversation: "Conversation", parameters: str) -> None:
-    """Clear all todos via the agent's session/clear_todos RPC."""
+async def _compact(conversation: "Conversation", parameters: str) -> None:
+    """Immediately compact the agent context to reduce token usage."""
     agent = conversation.agent
     if agent is None:
-        conversation.notify("No active agent session", title="/clear-todos", severity="error")
+        conversation.notify("No active agent session", title="/onecode:compact", severity="error")
         return
-    if not hasattr(agent, "acp_session_clear_todos"):
-        conversation.notify("Agent does not support clear-todos", title="/clear-todos", severity="error")
+    if not hasattr(agent, "compact"):
+        conversation.notify("Agent does not support context compaction", title="/onecode:compact", severity="error")
         return
     try:
-        result = await agent.acp_session_clear_todos()
-        if result and result.get("cleared"):
-            conversation.notify("All todos cleared", title="/clear-todos")
-        else:
-            conversation.notify("Failed to clear todos", title="/clear-todos", severity="error")
+        result = await agent.compact()
+        if result is None:
+            conversation.notify("Compaction not available", title="/onecode:compact", severity="error")
+            return
+        await _post(
+            conversation,
+            f"**Context Compacted**\n"
+            f"- level: `{result.get('level', 'unknown')}`\n"
+            f"- tokens: `{result.get('tokens_before', 0)}` → `{result.get('tokens_after', 0)}`",
+        )
     except Exception as e:
-        conversation.notify(f"Failed to clear todos: {e}", title="/clear-todos", severity="error")
+        conversation.notify(f"Compaction failed: {e}", title="/onecode:compact", severity="error")
 
 
 # ── registration ──────────────────────────────────────────────────────
@@ -660,8 +666,8 @@ def register_commands() -> None:
         "list|add|enable|disable|remove [name|n]",
     )
     platform_commands.register(
-        "clear-todos",
-        "Clear all plan todos — starts a fresh blank plan",
-        _clear_todos,
+        "compact",
+        "Immediately compact context to reduce token usage",
+        _compact,
         "(no args)",
     )

@@ -1,6 +1,6 @@
 [project]
 name = "cloud-dev-harness"
-version = "1.0.5"
+version = "1.0.6"
 description = "Cloud Dev Harness - cloud-native development Agent framework with A2TUI"
 requires-python = ">=3.14.2"
 dependencies = [
@@ -32,6 +32,10 @@ dependencies = [
     "aiosqlite==0.22.1",
     "textual-diff-view==0.1.5",
     "typing-extensions==4.15.0",
+    "agenttrace>=0.1.2",
+    "tencentcloud-sdk-python>=3.0.0",
+    "starlette>=0.40.0",
+    "uvicorn[standard]>=0.30.0",
 ]
 
 [project.scripts]
@@ -55,6 +59,11 @@ tui = [
 ]
 onecode = [
     "builtin_skills/**/*",
+    "agent/agents/prompts/**/*",
+]
+cdh = [
+    "generators/**/*.toml",
+    "generators/**/*.tmpl",
 ]
 
 [tool.ruff]
@@ -69,6 +78,8 @@ dev = [
     "pyinstrument>=5.1.1",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
+    "pytest-bdd>=8.0.0",
     "pytest-cov>=6.0.0",
+    "ruff>=0.15.21",
     "textual-dev>=1.8.0",
 ]

@@ -1,0 +1,11 @@
+# Auto-generated from {{.SourceFile}}
+require "json"
+
+module Types
+{{range .Types}}
+  struct {{.Name}}
+    include JSON::Serializable
+{{range .Properties}}    property {{.Name}} : String
+{{end}}  end
+{{end}}
+end

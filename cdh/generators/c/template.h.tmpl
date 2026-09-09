@@ -1,0 +1,20 @@
+/* Auto-generated from {{.SourceFile}} */
+#ifndef TYPES_H
+#define TYPES_H
+
+#include <stddef.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+{{range .Types}}
+typedef struct {
+{{range .Properties}}    {{.Type}} {{.Name}};
+{{end}}} {{.Name}};
+
+{{.Name}} {{.Name}}_new(void);
+char* {{.Name}}_to_json(const {{.Name}}* obj);
+{{.Name}} {{.Name}}_from_json(const char* json_str);
+void {{.Name}}_free({{.Name}}* obj);
+{{end}}
+
+#endif /* TYPES_H */

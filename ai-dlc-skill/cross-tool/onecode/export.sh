@@ -1,54 +1,27 @@
-#!/usr/bin/env bash
-# onecode/export.sh — Export AI-DLC rules to onecode format
+#!/bin/bash
+# Registers ai-dlc-skill for OneCode via symlink
+
 set -euo pipefail
 
-# Project root: first arg or current working directory
-PROJECT_ROOT="${1:-$PWD}"
-# Skill dir: CDH platform skill pool or AI_DLC_SKILL_DIR env var
-SKILL_DIR="${AI_DLC_SKILL_DIR:-$HOME/.cdh/skills/ai-dlc-skill}"
+CANONICAL_SKILL_DIR="${HOME}/.cdh/skills/ai-dlc-skill"
+DEV_SKILL_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 
-if [ ! -d "$SKILL_DIR" ]; then
-  echo "  ✗ ai-dlc-skill not found at $SKILL_DIR" >&2
-  echo "  Run: cdh skill install ai-dlc-skill" >&2
-  exit 1
-fi
-
-echo "  Exporting onecode configs for project: $(basename "$PROJECT_ROOT")"
-
-CDH_DIR="$PROJECT_ROOT/.cdh"
-CROSS_TOOL_DIR="$SKILL_DIR/cross-tool/onecode"
-
-# 1. Generate .cdh/config.yaml if not exists
-if [ ! -f "$CDH_DIR/config.yaml" ]; then
-  mkdir -p "$CDH_DIR"
-  sed "s/{{project_name}}/$(basename "$PROJECT_ROOT")/g; s/{{cloud_provider}}/tcb/g; s/{{current_phase}}/understand/g; s/{{compute_mode}}/cloudbase-functions/g" \
-    "$CROSS_TOOL_DIR/config.yaml.tpl" > "$CDH_DIR/config.yaml"
-  echo "  ✓ $CDH_DIR/config.yaml created"
+if [ -d "$CANONICAL_SKILL_DIR" ]; then
+    SKILL_DIR="$CANONICAL_SKILL_DIR"
 else
-  echo "  - $CDH_DIR/config.yaml exists, skipping"
+    SKILL_DIR="$DEV_SKILL_DIR"
 fi
 
-# 2. Generate .cdh/state.json if not exists
-if [ ! -f "$CDH_DIR/state.json" ]; then
-  mkdir -p "$CDH_DIR"
-  cat > "$CDH_DIR/state.json" <<-EOF
-{
-  "current_phase": "understand",
-  "completed_phases": [],
-  "gate_results": {}
-}
-EOF
-  echo "  ✓ $CDH_DIR/state.json created"
+ONECODE_SKILLS_DIR="${HOME}/.onecode/skills"
+SYMLINK_TARGET="$ONECODE_SKILLS_DIR/ai-dlc-skill"
+
+mkdir -p "$ONECODE_SKILLS_DIR"
+
+if [ ! -L "$SYMLINK_TARGET" ]; then
+  ln -s "$SKILL_DIR" "$SYMLINK_TARGET"
+  echo "Created symlink: $SYMLINK_TARGET -> $SKILL_DIR"
 else
-  echo "  - $CDH_DIR/state.json exists, skipping"
+  echo "Symlink already exists: $SYMLINK_TARGET"
 fi
 
-# 3. Generate .cdh/SKILL.md from the master skill (always refresh)
-mkdir -p "$CDH_DIR"
-cp "$SKILL_DIR/SKILL.md" "$CDH_DIR/SKILL.md"
-echo "  ✓ $CDH_DIR/SKILL.md updated"
-
-# 4. Generate component skills into apps/*/.skill/
-bash "$CROSS_TOOL_DIR/export-skills.sh" "$PROJECT_ROOT" "$SKILL_DIR"
-
-echo "  onecode export complete."
+echo "ai-dlc-skill registered for OneCode"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from textual import on
 from textual.app import ComposeResult
 from textual import lazy
@@ -14,6 +16,7 @@ from textual import getters
 
 from tui.settings import Setting
 from tui.app import A2TUIApp
+from tui.widgets.model_status import OllamaStatusPanel, OllamaModelStatus
 
 
 class SettingsInput(Input):
@@ -23,7 +26,7 @@ class SettingsInput(Input):
 class SettingsScreen(ModalScreen):
     BINDINGS = [
         ("escape", "dismiss", "Dismiss settings"),
-        ("ctrl+s", "screen.focus('#search')", "Focus search"),
+        ("ctrl+s", "screen.focus('#search')", "Search"),
     ]
     CSS_PATH = "settings.tcss"
 
@@ -32,6 +35,8 @@ class SettingsScreen(ModalScreen):
     search_input = getters.query_one("Input#search", Input)
 
     AUTO_FOCUS = "Input#search"
+
+    _ollama_panel: OllamaStatusPanel | None = None
 
     def compose(self) -> ComposeResult:
         settings = self.app.settings
@@ -186,6 +191,9 @@ class SettingsScreen(ModalScreen):
             ):
                 yield from compose(self, schema_to_widget("", schema.settings_map))
 
+            with containers.VerticalGroup(id="ollama-status-container", classes="ollama-status-container"):
+                pass
+
         yield Footer()
 
     @on(Input.Blurred, "Input")
@@ -220,9 +228,11 @@ class SettingsScreen(ModalScreen):
             self.app.settings.set(event.checkbox.name, event.checkbox.value)
 
     @on(Select.Changed)
-    def on_select_changed(self, event: Select.Changed) -> None:
+    async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.name is not None:
             self.app.settings.set(event.select.name, event.select.value)
+            if event.select.name == "cdh.provider":
+                await self._update_ollama_panel()
 
     def filter_settings(self, search_term: str) -> None:
         if search_term:
@@ -252,3 +262,32 @@ class SettingsScreen(ModalScreen):
     async def action_dismiss(self, result: ScreenResultType | None = None) -> None:
         self.query("#search").focus()
         self.call_after_refresh(self.dismiss, result)
+
+    async def on_mount(self) -> None:
+        await self._update_ollama_panel()
+
+    async def _update_ollama_panel(self) -> None:
+        provider = self.app.settings.get("cdh.provider", expand=False)
+        container = self.query_one("#ollama-status-container", containers.VerticalGroup)
+
+        if provider == "ollama":
+            container.display = True
+            if self._ollama_panel is None:
+                self._ollama_panel = OllamaStatusPanel()
+                await container.mount(self._ollama_panel)
+                self._ollama_panel.set_manager(self._get_ollama_manager())
+                await self._ollama_panel.refresh_status()
+        else:
+            container.display = False
+
+    def _get_ollama_manager(self):
+        try:
+            from onecode.models.ollama_manager import OllamaManager
+            return OllamaManager()
+        except Exception:
+            return None
+
+    @on(OllamaModelStatus.DownloadStarted)
+    async def on_ollama_download_started(self, event: OllamaModelStatus.DownloadStarted) -> None:
+        if self._ollama_panel:
+            await self._ollama_panel.on_download_started(event)

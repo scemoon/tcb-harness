@@ -286,6 +286,8 @@ class StreamEventType(str, Enum):
     # style as main-conversation tools) instead of a plain "[Tool: X]" line.
     SUBAGENT_TOOL_CALL = "subagent_tool_call"
     SUBAGENT_TOOL_RESULT = "subagent_tool_result"
+    VERIFICATION_PASSED = "verification_passed"
+    VERIFICATION_FAILED = "verification_failed"
 
 
 @dataclass
@@ -321,6 +323,8 @@ class StreamEvent:
     ask_action_type: str = ""
     ask_path: str = ""
     ask_command: str = ""
+    ask_checkpoint_id: str = ""
+    ask_plan_submit: bool = False
     # ERROR fields
     error_message: str = ""
     # PLAN fields
@@ -337,6 +341,9 @@ class StreamEvent:
     # category/args). SUBAGENT_TOOL_RESULT reuses tool_id/result_* and needs
     # tool_name for display when no prior TOOL_CALL_COMPLETE was captured.
     subagent_tool_phase: str = ""
+    # VERIFICATION fields
+    verification_passed: bool = False
+    verification_failed_gates: list[str] = field(default_factory=list)
 
     @classmethod
     def text_delta(cls, text: str) -> "StreamEvent":
@@ -391,7 +398,9 @@ class StreamEvent:
                  context: str = "", action_type: str = "",
                  path: str = "", command: str = "",
                  options: list[dict] | None = None,
-                 questions: list[dict] | None = None) -> "StreamEvent":
+                 questions: list[dict] | None = None,
+                 checkpoint_id: str = "",
+                 plan_submit: bool = False) -> "StreamEvent":
         return cls(
             type=StreamEventType.ASK_USER,
             tool_id=call_id,
@@ -403,6 +412,8 @@ class StreamEvent:
             ask_action_type=action_type,
             ask_path=path,
             ask_command=command,
+            ask_checkpoint_id=checkpoint_id,
+            ask_plan_submit=plan_submit,
         )
 
     @classmethod

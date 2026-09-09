@@ -1,0 +1,20 @@
+-- Auto-generated from {{.SourceFile}}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
+
+module Types
+  ({{range .Types}}{{.Name}}{{if .IsEnum}}, {{.Name}}({{range .EnumValues}}{{.}}, {{end}}){{end}}{{end}}
+  ) where
+
+import Data.Aeson
+import GHC.Generics
+{{range .Types}}
+data {{.Name}} = {{.Name}}
+  { {{range .Properties}}{{.Name}} :: {{if .IsNullable}}Maybe {{.Type}}{{else}}{{.Type}}{{end}}{{end}}
+  } deriving (Show, Generic)
+
+instance ToJSON {{.Name}} where
+  toJSON = genericToJSON defaultOptions
+instance FromJSON {{.Name}} where
+  parseJSON = genericParseJSON defaultOptions
+{{end}}

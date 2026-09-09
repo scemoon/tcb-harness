@@ -14,11 +14,11 @@ class GridSelect(containers.ItemGrid, can_focus=True):
     CURSOR_GROUP = Binding.Group("Select")
     FOCUS_GROUP = Binding.Group("Focus")
     BINDINGS = [
-        Binding("up", "cursor_up", "Cursor Up", group=CURSOR_GROUP),
-        Binding("down", "cursor_down", "Cursor Down", group=CURSOR_GROUP),
-        Binding("left", "cursor_left", "Cursor Left", group=CURSOR_GROUP),
-        Binding("right", "cursor_right", "Cursor Right", group=CURSOR_GROUP),
-        Binding("enter", "select", "Select"),
+        Binding("up", "cursor_up", "Cursor Up", show=False, group=CURSOR_GROUP),
+        Binding("down", "cursor_down", "Cursor Down", show=False, group=CURSOR_GROUP),
+        Binding("left", "cursor_left", "Cursor Left", show=False, group=CURSOR_GROUP),
+        Binding("right", "cursor_right", "Cursor Right", show=False, group=CURSOR_GROUP),
+        Binding("enter", "select", "Select", show=False),
     ]
 
     highlighted: reactive[int | None] = reactive(None)

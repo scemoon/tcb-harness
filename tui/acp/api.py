@@ -67,6 +67,12 @@ def session_clear_todos(sessionId: str) -> dict:
     ...
 
 
+@API.method(name="session/compact")
+def session_compact(sessionId: str) -> dict:
+    """Compact the context to reduce token usage."""
+    ...
+
+
 @API.method(name="session/load_earlier")
 def session_load_earlier(sessionId: str, offset: int, limit: int) -> dict:
     """Load a range of earlier messages from the current session."""

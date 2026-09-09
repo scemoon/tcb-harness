@@ -1,0 +1,27 @@
+# Auto-generated from {{.SourceFile}}
+require 'json'
+require 'time'
+require 'uuid'
+
+{{range .Types}}
+class {{.Name}}
+{{range .Properties}}  attr_accessor :{{.Name}}
+{{end}}
+
+  def initialize({{range .Properties}}{{.Name}}: nil,
+{{end}}  )
+{{range .Properties}}    @{{.Name}} = {{.Name}}
+{{end}}  end
+
+  def self.from_json(json)
+    new({{range .Properties}}{{.Name}}: json['{{.JsonName}}'],
+{{end}}  )
+  end
+
+  def to_json(*_args)
+    JSON.generate({
+{{range .Properties}}      '{{.JsonName}}' => @{{.Name}},
+{{end}}    })
+  end
+end
+{{end}}
