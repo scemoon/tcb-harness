@@ -98,7 +98,8 @@ function run(pythonModule) {
       if (fs.existsSync(PYTHON_ENV_DIR)) {
         console.log('cdh: Python environment exists, reusing...');
       } else {
-        const rv = execVerbose(`uv venv "${PYTHON_ENV_DIR}"`, 'Creating Python environment with uv...');
+        execVerbose(`uv python install 3.14.2`, 'Installing Python 3.14.2 with uv...');
+        const rv = execVerbose(`uv venv "${PYTHON_ENV_DIR}" --python 3.14.2`, 'Creating Python environment with uv...');
         if (!rv.ok) {
           console.error('cdh: Failed to create Python environment.');
           process.exit(1);
