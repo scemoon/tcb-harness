@@ -30,7 +30,9 @@ Choose one of three install methods:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/scemoon/cloud-dev-harness/main/install.sh | bash
 ```
-Downloads and installs the latest GitHub release via pip. The `cdh` shim is installed to `~/.local/bin/cdh`.  
+Downloads and installs the latest GitHub release via pip. The `cdh` shim is installed to `~/.local/bin/cdh`.
+
+> Note: The npm package is `@scemoon/cdh`.  
 Add `~/.local/bin` to your PATH:
 
 ```bash
@@ -41,17 +43,23 @@ Add this line to your `~/.bashrc` or `~/.zshrc` to make it permanent.
 
 ### npm
 ```bash
-npm install -g cdh
+npm install -g @scemoon/cdh
 ```
-Installs via [npm registry](https://www.npmjs.com/package/cdh). Requires Node.js >= 18 and Python 3.14+.
+Installs via [npm registry](https://www.npmjs.com/package/@scemoon/cdh). Requires Node.js >= 18 and Python 3.14+.
 
 After install, the `cdh` command is available globally.
 
 Or install from a local `.tgz` built in this repo:
 ```bash
-cd npm && ./build-package.sh build   # creates npm_pkg/cdh-*.tgz
-npm install -g ./npm_pkg/cdh-*.tgz
+cd npm && ./build-package.sh build   # creates npm_pkg/@scemoon/cdh-*.tgz
+npm install -g ./npm_pkg/@scemoon/cdh-*.tgz
 ```
+
+### update
+```bash
+npm update -g @scemoon/cdh
+```
+Update to the latest version via npm.
 
 ### source
 ```bash

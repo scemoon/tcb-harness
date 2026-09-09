@@ -261,7 +261,7 @@ wheels = [
 
 [[package]]
 name = "cloud-dev-harness"
-version = "1.0.5"
+version = "1.0.7"
 source = { editable = "." }
 dependencies = [
     { name = "agenttrace" },
@@ -286,7 +286,6 @@ dependencies = [
     { name = "tencentcloud-sdk-python" },
     { name = "textual", extra = ["syntax"] },
     { name = "textual-diff-view" },
-    { name = "textual-serve" },
     { name = "textual-speedups" },
     { name = "typeguard" },
     { name = "typing-extensions" },
@@ -334,7 +333,6 @@ requires-dist = [
     { name = "textual", specifier = ">=0.46.0" },
     { name = "textual", extras = ["syntax"], specifier = "==8.2.6" },
     { name = "textual-diff-view", specifier = "==0.1.5" },
-    { name = "textual-serve", specifier = ">=1.1.2" },
     { name = "textual-speedups", specifier = "==0.2.1" },
     { name = "typeguard", specifier = "==4.5.2" },
     { name = "typing-extensions", specifier = "==4.15.0" },
