@@ -1,6 +1,6 @@
 # CDH — Cloud Dev Harness 平台层
 
-> 版本: 1.0.6 (与 onecode 同步)
+> 版本: 1.0.5 (与 onecode 同步)
 > 定位: AI Agent 的编排与运维平台
 
 ---
@@ -173,7 +173,6 @@ cdh (无参数)
 |----|------|--------|------|---------|
 | `native` | Mobile App | RN/Flutter | `apps/native/` | NATIVE |
 | `desktop` | Desktop App | Electron/Tauri | `apps/desktop/` | DESKTOP |
-| `web` | Web Frontend | React/Vue/Svelte | `apps/web/` | WEB |
 | `backend` | Backend Service | Python/Node/Go | `apps/backend/` | BE |
 | `wxa` | WeChat Mini | - | `apps/wxa/` | WXA |
 | `mya` | Alipay Mini | - | `apps/mya/` | MYA |

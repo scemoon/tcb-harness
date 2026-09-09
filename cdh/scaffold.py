@@ -50,15 +50,6 @@ COMPONENTS: tuple[ComponentSpec, ...] = (
         description="Cross-platform desktop (Electron/Tauri)",
     ),
     ComponentSpec(
-        id="web",
-        kind="frontend",
-        owns="apps/web",
-        fr_prefix="WEB",
-        tech="react | vue | svelte",
-        label="Web Frontend",
-        description="Browser SPA/SSR (React/Vue/Svelte)",
-    ),
-    ComponentSpec(
         id="backend",
         kind="service",
         owns="apps/backend",
@@ -694,9 +685,9 @@ Components can override defaults:
 
 ```yaml
 components:
-  web:
-    features_dir: apps/web/src/features/
-    test_dir: apps/web/__tests__/
+  backend:
+    features_dir: apps/backend/src/features/
+    test_dir: apps/backend/__tests__/
 ```
 """
 
