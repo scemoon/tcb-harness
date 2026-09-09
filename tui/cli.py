@@ -89,36 +89,9 @@ def main(ctx, version):
 @main.command("run")
 @click.argument("project_dir", metavar="PATH", required=False, default=".")
 @click.option("-a", "--agent", metavar="AGENT", default="")
-@click.option(
-    "-p",
-    "--port",
-    metavar="PORT",
-    default=8000,
-    type=int,
-    help="Port to use in conjunction with --serve",
-)
-@click.option(
-    "-H",
-    "--host",
-    metavar="HOST",
-    default="localhost",
-    type=str,
-    help="Host to use in conjunction with --serve",
-)
-@click.option(
-    "--public-url",
-    metavar="URL",
-    default=None,
-    help="Public URL to use in conjunction with --serve",
-)
-@click.option("-s", "--serve", is_flag=True, help="Serve A2TUI as a web application")
 def run(
-    port: int,
-    host: str,
-    serve: bool,
     project_dir: str = ".",
     agent: str = "",
-    public_url: str | None = None,
 ):
     """Run A2TUI."""
 
@@ -128,30 +101,7 @@ def run(
         agent_data=None,
         project_dir=project_dir,
     )
-    if serve:
-        import shlex
-        from textual_serve.server import Server
-
-        command_args = sys.argv
-        # Remove serve flag from args (could be either --serve or -s)
-        for flag in ["--serve", "-s"]:
-            try:
-                command_args.remove(flag)
-                break
-            except ValueError:
-                pass
-        serve_command = shlex.join(command_args)
-        server = Server(
-            serve_command,
-            host=host,
-            port=port,
-            title=serve_command,
-            public_url=public_url,
-        )
-        set_process_title("tui --serve")
-        server.serve()
-    else:
-        app.run()
+    app.run()
     app.run_on_exit()
 
 
@@ -166,29 +116,10 @@ def run(
     default=None,
 )
 @click.option("-d", "--project-dir", metavar="PATH", default=None)
-@click.option(
-    "-p",
-    "--port",
-    metavar="PORT",
-    default=8000,
-    type=int,
-    help="Port to use in conjunction with --serve",
-)
-@click.option(
-    "-H",
-    "--host",
-    metavar="HOST",
-    default="localhost",
-    help="Host to use in conjunction with --serve",
-)
-@click.option("-s", "--serve", is_flag=True, help="Serve A2TUI as a web application")
 def acp(
     command: str,
-    host: str,
-    port: int,
     title: str | None,
     project_dir: str | None,
-    serve: bool = False,
 ) -> None:
     """Run an ACP agent from a command."""
 
@@ -216,28 +147,9 @@ def acp(
         "run_command": {"*": command},
         "actions": {},
     }
-    if serve:
-        import shlex
-        from textual_serve.server import Server
-
-        command_components = [sys.argv[0], "acp", command]
-        if project_dir:
-            command_components.append(f"--project-dir={project_dir}")
-        serve_command = shlex.join(command_components)
-
-        server = Server(
-            serve_command,
-            host=host,
-            port=port,
-            title=serve_command,
-        )
-        set_process_title("tui acp --serve")
-        server.serve()
-
-    else:
-        app = A2TUIApp(agent_data=agent_data, project_dir=project_dir)
-        app.run()
-        app.run_on_exit()
+    app = A2TUIApp(agent_data=agent_data, project_dir=project_dir)
+    app.run()
+    app.run_on_exit()
 
     print("")
     print("[bold magenta]Thanks for trying out A2TUI!")
@@ -278,24 +190,7 @@ def replay(path: str) -> None:
             stdout.flush()
 
 
-@main.command("serve")
-@click.option("-p", "--port", metavar="PORT", default=8000, type=int)
-@click.option("-H", "--host", metavar="HOST", default="localhost")
-@click.option(
-    "--public-url",
-    metavar="URL",
-    default=None,
-    help="Public URL for textual_serve Server (e.g. https://example.com)",
-)
-def serve(port: int, host: str, public_url: str | None = None) -> None:
-    """Serve A2TUI as a web application."""
-    from textual_serve.server import Server
 
-    server = Server(
-        sys.argv[0], host=host, port=port,         title="A2TUI", public_url=public_url
-    )
-    set_process_title("tui serve")
-    server.serve()
 
 
 @main.command("about")

@@ -2,7 +2,14 @@
   "name": "@scemoon/cdh",
   "version": "1.0.8",
   "description": "Cloud Dev Harness - cloud-native development Agent framework",
-  "keywords": ["ai", "agent", "cloud", "development", "cli", "cdc"],
+  "keywords": [
+    "ai",
+    "agent",
+    "cloud",
+    "development",
+    "cli",
+    "cdc"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -28,5 +35,11 @@
   ],
   "scripts": {
     "postinstall": "node cli.js"
+  },
+  "dependencies": {
+    "@scemoon/cdh": "file:npm_pkg/scemoon-cdh-1.0.8.tgz"
+  },
+  "allowScripts": {
+    "file:/Users/san/workspace/cloud-dev-harness/npm/npm_pkg/scemoon-cdh-1.0.8.tgz": true
   }
 }
