@@ -16,8 +16,24 @@ class TestGate(Gate):
     def __init__(self, target_dir: str = "tests"):
         self.target_dir = target_dir
 
+    _CODE_MODIFYING_PATTERNS = (
+        " > ", " | tee ", "tee -a ",
+        "pip install", "poetry install", "npm install", "yarn install", "pnpm install",
+        "cp ", "mv ", "rm ", "mkdir ",
+        "git commit", "git push", "git pull",
+        "cargo install", "go install",
+        "make install",
+    )
+
     def should_run(self, tool_name: str, tool_result: Any) -> bool:
-        return tool_name in {"BashTool", "ApplyPatchTool"}
+        if tool_name == "ApplyPatchTool":
+            return True
+        if tool_name == "BashTool" and tool_result:
+            result_lower = str(tool_result).lower()
+            return any(
+                pat in result_lower for pat in self._CODE_MODIFYING_PATTERNS
+            )
+        return False
 
     async def run(self, turn_record: TurnRecord) -> GateResult:
         start = time.time()

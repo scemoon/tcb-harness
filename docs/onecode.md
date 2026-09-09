@@ -1,6 +1,6 @@
 # onecode — Core Agent Framework
 
-> 版本: 1.0.6
+> 版本: 1.0.5
 > 定位: Cloud Dev Harness (CDH) 的 AI Agent 引擎
 
 ---

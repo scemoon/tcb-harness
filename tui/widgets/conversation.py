@@ -969,6 +969,12 @@ class Conversation(containers.Vertical):
                 self.prompt.display = True
                 self._pending_prompts.append(text)
                 self.prompt.pending_prompts = list(self._pending_prompts)
+                await self.post(UserInput(text))
+                self.window.scroll_end(animate=False)
+                self._loading = await self.post(Loading("Please wait..."), loading=True)
+                await asyncio.sleep(0)
+                if self._msg_log is not None:
+                    self._msg_log.user_input(text, self._turn_count)
                 return
 
             await self.post(UserInput(text))

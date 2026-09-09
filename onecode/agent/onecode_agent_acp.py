@@ -2263,7 +2263,7 @@ class CDHACPAdapter:
                             approved=not cancelled, answer=answer,
                         )
                         if is_plan_submit and cancelled:
-                            self.agent._cancelled = True
+                            self.agent._cancelled = False
                             self.send_session_update({
                                 "sessionUpdate": "agent_message_chunk",
                                 "content": {"type": "text", "text": "计划已取消。会话结束。"},
@@ -2425,60 +2425,6 @@ class CDHACPAdapter:
 
         self._text_chunker.flush()
         self._thought_chunker.flush()
-
-        # ── Auto-question detection ────────────────────────────────────
-        # If the agent asked a question as plain text (instead of using the
-        # AskUser tool), convert it to an interactive AskUser dialog so the
-        # user's response does not get lost in the prompt queue.
-        # We then recursively call session_prompt with the answer to get an
-        # immediate follow-up from the LLM.
-        #
-        # Detection shares the engine's semantic + syntax rules (question_detect)
-        # so both layers agree; the engine normally intercepts question-only
-        # turns before they get here, this is the last-chance fallback.
-        # Use the strict variant: the question must be signalled by intent or
-        # by trailing question punctuation, so ordinary prose that merely
-        # contains a question mark does not pop an AskUser dialog every turn.
-        _auto_text = self._agent_text_output.rstrip()
-        from onecode.agent.question_detect import looks_like_question, compact_question
-        _auto_is_q = bool(_auto_text and looks_like_question(_auto_text, strict=True))
-        if _auto_is_q and not self.agent._cancelled:
-            _q_show = compact_question(_auto_text)
-            self.send_session_update({
-                "sessionUpdate": "ask_user",
-                "question": _q_show,
-                "toolId": "auto-text-ask",
-            })
-            ask_cfg = getattr(self.agent.app.config, "ask_user", None)
-            _auto_timeout = getattr(ask_cfg, "timeout_seconds", 10) if ask_cfg else 10
-
-            _auto_ans = ""
-            _auto_cancelled = False
-            for _attempt in range(2):
-                try:
-                    self._ask_user_future = asyncio.get_event_loop().create_future()
-                    _resp = await asyncio.wait_for(
-                        self._ask_user_future, timeout=_auto_timeout,
-                    )
-                    _auto_ans = _resp.get("answer", "")
-                    _auto_cancelled = _resp.get("cancelled", False)
-                    break
-                except (asyncio.TimeoutError, Exception):
-                    if _attempt == 0:
-                        self.send_session_update({
-                            "sessionUpdate": "ask_user_remind",
-                            "text": "请回答",
-                            "toolId": "auto-text-ask",
-                        })
-                    else:
-                        _auto_cancelled = True
-                finally:
-                    self._ask_user_future = None
-            if not _auto_cancelled and _auto_ans:
-                return await self.session_prompt(
-                    prompt=[{"type": "text", "text": _auto_ans}],
-                    session_id=session_id,
-                )
 
         self.send_awaiting_user_input()
 

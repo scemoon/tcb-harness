@@ -2127,48 +2127,6 @@ class AgentEngine:
                 self._streaming_used,
             )
 
-            # ── Auto-ask detection: if the LLM output a question as plain text,
-            # the Do phase should become AskUser — regardless of whether tool
-            # calls accompanied it. Instead of executing the original tools
-            # (which may depend on the answer) or treating the turn as an
-            # empty round (which would bury the question and queue the user's
-            # input), we REPLACE tool_uses with a single AskUser tool call.
-            # The normal tool execution loop then handles AskUser naturally,
-            # pausing until the user responds.
-            #
-            # Detection logic uses strict=True only: semantic intent OR trailing
-            # `?`/`？` triggers auto-ask. Implementation tools (Read/Write/Grep/
-            # Bash/etc.) are excluded — a question before file operations is
-            # unlikely to need user input.
-            from onecode.agent.question_detect import looks_like_question
-
-            _IMPLEMENTATION_TOOLS = {
-                "Read", "Write", "Edit", "Glob", "Grep", "Bash", "Search",
-                "WebFetch", "Run", "Execute", "Tool", "Task", "TodoWrite",
-                "TodoClear", "TodoSet", "SlotSet", "ContextGet", "ContextSet",
-            }
-            _tool_names = {tu.get("name") for tu in tool_uses}
-            _has_impl_tools = bool(_tool_names & _IMPLEMENTATION_TOOLS)
-
-            _is_auto_ask = bool(
-                clean_text and
-                looks_like_question(clean_text, strict=True) and
-                not _has_impl_tools
-            )
-
-            if _is_auto_ask:
-                _ask_id = f"auto-ask-{self._tool_id_counter}"
-                self._tool_id_counter += 1
-                # Show the trailing question sentence in the dialog instead of
-                # dumping the whole preamble into the AskUser widget.
-                from onecode.agent.question_detect import compact_question
-                _ask_question = compact_question(clean_text)
-                tool_uses = [{
-                    "id": _ask_id,
-                    "name": "AskUser",
-                    "input": {"question": _ask_question},
-                }]
-
             # Add assistant response to context with proper content blocks.
             # Persist thinking blocks so they survive session reload — the
             # TUI replays them as collapsible Thought widgets.
