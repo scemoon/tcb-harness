@@ -1,6 +1,6 @@
 # CDH — Cloud Dev Harness 平台层
 
-> 版本: 1.0.5 (与 onecode 同步)
+> 版本: 1.0.6 (与 onecode 同步)
 > 定位: AI Agent 的编排与运维平台
 
 ---

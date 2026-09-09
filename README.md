@@ -2,7 +2,7 @@
 
 AI-powered terminal-based development framework for cloud-native applications, featuring a Textual TUI, multi-provider LLM support, MCP integration, and sandboxed execution.
 
-**Version 1.0.5**
+**Version 1.0.6**
 
 ## Features
 

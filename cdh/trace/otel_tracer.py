@@ -13,7 +13,7 @@ so collectors (Honeycomb, Tempo, Jaeger) can group/filter on them.
 Usage::
 
     from cdh.trace.otel_tracer import span, init_tracer
-    init_tracer(service_name="cdh-validate", service_version="1.0.5")
+    init_tracer(service_name="cdh-validate", service_version="1.0.6")
     with span("ears_check", attributes={"path": "."}) as s:
         result = do_thing()
         s.set_attribute("ears.passed", result["passed"])
