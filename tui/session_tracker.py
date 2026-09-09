@@ -1,0 +1,123 @@
+from dataclasses import dataclass
+from operator import attrgetter
+from typing import Iterable, Literal, Sequence
+
+from textual.signal import Signal
+
+type SessionState = Literal["notready", "busy", "asking", "idle"]
+
+
+@dataclass
+class SessionDetails:
+    """Tracks a concurrent session."""
+
+    index: int
+    """Index of session, used in sorting."""
+    mode_name: str
+    """The screen mode name."""
+    session_pk: int | None = None
+    """The DB session primary key, for deduplication when reloading."""
+    title: str = ""
+    """The title of the conversation."""
+    subtitle: str = ""
+    """The subtitle of the conversation."""
+    path: str = ""
+    """The project directory path."""
+    state: SessionState = "notready"
+    """The current state of the session."""
+    summary: str = ""
+    """Suplimentary information about the session."""
+
+    updates: int = 0
+    """Track updates to the session details."""
+
+
+class SessionTracker:
+    """Tracks concurrent agent settings"""
+
+    def __init__(self, signal: Signal[tuple[str, SessionDetails | None]]) -> None:
+        self.sessions: dict[str, SessionDetails] = {}
+        self._session_index = 0
+        self.signal = signal
+
+    @property
+    def session_count(self) -> int:
+        return len(self.sessions)
+
+    def new_session(self, session_pk: int | None = None) -> SessionDetails:
+        self._session_index += 1
+        mode_name = f"session-{self._session_index}"
+        session_meta = SessionDetails(
+            index=self._session_index,
+            mode_name=mode_name,
+            session_pk=session_pk,
+            title="New Session",
+        )
+        self.sessions[mode_name] = session_meta
+        return session_meta
+
+    def close_session(self, mode_name: str) -> None:
+        if mode_name in self.sessions:
+            del self.sessions[mode_name]
+            self.signal.publish((mode_name, None))
+
+    def get_session(self, mode_name: str) -> SessionDetails | None:
+        return self.sessions.get(mode_name, None)
+
+    def get_session_by_pk(self, session_pk: int) -> SessionDetails | None:
+        for session in self.sessions.values():
+            if session.session_pk == session_pk:
+                return session
+        return None
+
+    def update_session(
+        self,
+        mode_name: str,
+        title: str | None = None,
+        subtitle: str | None = None,
+        path: str | None = None,
+        state: SessionState | None = None,
+        session_pk: int | None = None,
+    ) -> SessionDetails:
+        session_details = self.sessions[mode_name]
+        if title is not None:
+            session_details.title = title
+        if subtitle is not None:
+            session_details.subtitle = subtitle
+        if path is not None:
+            session_details.path = path
+        if state is not None:
+            session_details.state = state
+        if session_pk is not None:
+            session_details.session_pk = session_pk
+        self.signal.publish((mode_name, session_details))
+        return session_details
+
+    @property
+    def ordered_sessions(self) -> Sequence[SessionDetails]:
+        return sorted(self.sessions.values(), key=attrgetter("index"))
+
+    def __iter__(self) -> Iterable[SessionDetails]:
+        return iter(self.ordered_sessions)
+
+    def session_cursor_move(
+        self, mode_name: str, direction: Literal[-1, +1], valid_modes: set[str] | None = None
+    ) -> str | None:
+        if valid_modes is None:
+            valid_modes = {s.mode_name for s in self.ordered_sessions}
+        else:
+            valid_modes = valid_modes & {s.mode_name for s in self.ordered_sessions}
+        if not valid_modes:
+            return None
+        ordered_valid = sorted(
+            [s for s in self.ordered_sessions if s.mode_name in valid_modes],
+            key=attrgetter("index")
+        )
+        mode_names = [s.mode_name for s in ordered_valid]
+        try:
+            mode_index = mode_names.index(mode_name)
+        except ValueError:
+            return None
+        mode_index = (mode_index + direction) % len(mode_names)
+        new_mode_name = mode_names[mode_index]
+        return new_mode_name

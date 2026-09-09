@@ -1,0 +1,12 @@
+# Auto-generated from {{.SourceFile}}
+import std/[json, options, strutils]
+
+{{range .Types}}type
+  {{.Name}}* = object
+{{range .Properties}}    {{.Name}}*: {{if .IsNullable}}Option[string]{{else}}string{{end}}
+{{end}}
+
+proc `$`*(x: {{.Name}}): string = "TODO"
+proc toJson*(x: {{.Name}}): JsonNode = newJObject()
+proc fromJson*(x: var {{.Name}}, json: JsonNode) = discard
+{{end}}

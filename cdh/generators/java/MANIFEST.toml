@@ -1,0 +1,18 @@
+[plugin]
+name = "java"
+display_name = "Java"
+file_extension = ".java"
+mime_type = "text/x-java-source"
+default_outdir = "java"
+output_filename_template = "{name}.java"
+package_name_default = "types"
+
+[features]
+enums = true
+allOf = true
+oneOf = true
+anyOf = true
+nullable = true
+readOnly = true
+writeOnly = true
+format_hints = ["date-time", "uuid", "email", "uri", "double"]

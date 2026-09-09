@@ -1,0 +1,20 @@
+[plugin]
+name = "scala"
+display_name = "Scala"
+file_extension = ".scala"
+mime_type = "text/x-scala"
+default_outdir = "scala"
+output_filename_template = "{name}.scala"
+package_name_default = "types"
+
+[features]
+enums = true
+allOf = true
+oneOf = true
+anyOf = true
+nullable = true
+format_hints = ["date-time", "uuid"]
+
+[imports]
+date-time = "import java.time.Instant"
+uuid = "import java.util.UUID"

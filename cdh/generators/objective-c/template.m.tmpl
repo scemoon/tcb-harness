@@ -1,0 +1,31 @@
+// Auto-generated from {{.SourceFile}}
+#import <Foundation/Foundation.h>
+
+{{range .Types}}
+@interface {{.Name}} : NSObject
+
+{{range .Properties}}
+@property (nonatomic, {{if .IsNullable}}nullable{{end}}) NSString *{{.Name}};
+{{end}}
+
++ (instancetype)fromJson:(NSDictionary *)json;
+- (NSDictionary *)toJson;
+
+@end
+
+@implementation {{.Name}}
+
++ (instancetype)fromJson:(NSDictionary *)json {
+    {{.Name}} *instance = [[{{.Name}} alloc] init];
+{{range .Properties}}    instance.{{.Name}} = json[@"{{.JsonName}}"];
+{{end}}    return instance;
+}
+
+- (NSDictionary *)toJson {
+    return @{
+{{range .Properties}}        @"{{.JsonName}}": self.{{.Name}} ?: [NSNull null],
+{{end}}    };
+}
+
+@end
+{{end}}

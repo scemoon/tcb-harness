@@ -1,0 +1,16 @@
+// Auto-generated from {{.SourceFile}}
+use serde::{Deserialize, Serialize};
+use serde_json;
+{{if .HasDateTime}}use chrono::{DateTime, Utc};
+{{end}}{{if .HasUUID}}use uuid::Uuid;
+{{end}}
+{{range .Types}}#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct {{.Name}} {
+{{range .Properties}}    pub {{.Name}}: {{.OptionalType}},
+{{end}}}
+
+impl {{.Name}} {
+    pub fn schema_name() -> &'static str { "{{.Name}}" }
+}
+
+{{end}}

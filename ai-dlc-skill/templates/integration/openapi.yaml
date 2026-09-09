@@ -1,0 +1,18 @@
+openapi: 3.1.0
+info:
+  title: {{title}}
+  version: {{version}}
+  description: |
+    Implements INT-FR-{{int_fr_id}}.
+    Consumers: {{consumers}}
+    Producers: {{producers}}
+  x-change-id: {{change_id}}
+  x-fr: INT-FR-{{int_fr_id}}
+
+servers:
+  - url: ${BACKEND_URL}
+    description: Stack preview / staging / production (URL injected at deploy)
+
+paths:
+  /{{resource}}:
+    {{methods}}

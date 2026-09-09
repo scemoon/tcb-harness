@@ -1,0 +1,29 @@
+# Auto-generated from {{.SourceFile}}
+#' @title {{.Name}} class
+#' @description Auto-generated R class for {{.SourceFile}}
+#' @slot name Character
+#' @slot properties List
+{{range .Types}}
+#' @rdname {{.Name}}
+#' @export
+{{.Name}} <- setClass(
+  "{{.Name}}",
+{{range .Properties}}  "{{.Name}}" = {{if .IsNullable}}"character"{{else}}"character"{{end}},
+{{end}}
+  prototype = prototype(
+{{range .Properties}}    {{.Name}} = NA_character_,
+{{end}}  )
+)
+
+#' @export
+from_json_{{.Name}} <- function(json_str) {
+  json <- jsonlite::fromJSON(json_str)
+{{range .Properties}}  {{.Name}} = json${{.JsonName}}{{end}}
+  new("{{.Name}}"{{range .Properties}}, {{.Name}} = {{.Name}}{{end}})
+}
+
+#' @export
+to_json_{{.Name}} <- function(obj) {
+  jsonlite::toJSON(as.list(obj), auto_unbox = TRUE)
+}
+{{end}}

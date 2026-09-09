@@ -1,0 +1,15 @@
+#lang racket
+;; Auto-generated from {{.SourceFile}}
+
+(module+ types
+  (provide {{range .Types}}{{.Name}} {{end}})
+
+{{range .Types}}
+  (struct {{.Name}} ({{range .Properties}}{{.Name}} {{end}}) #:prefab)
+
+  (define (json->{{.Name}} j)
+    ({{.Name}} {{range .Properties}}(hash-ref j '{{.JsonName}}) {{end}}))
+
+  (define ({{.Name}}->json x)
+    (hasheq {{range .Properties}}'{{.JsonName}}' ({{.Name}}-{{.Name}} x) {{end}}))
+{{end}}

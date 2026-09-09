@@ -1,0 +1,79 @@
+# mypy: disable-error-code="empty-body"
+"""
+ACP remote API
+"""
+
+from tui import jsonrpc
+from tui.acp import protocol
+
+API = jsonrpc.API()
+
+
+@API.method()
+def initialize(
+    protocolVersion: int,
+    clientCapabilities: protocol.ClientCapabilities,
+    clientInfo: protocol.Implementation,
+) -> protocol.InitializeResponse:
+    """https://agentclientprotocol.com/protocol/initialization"""
+    ...
+
+
+@API.method(name="session/new")
+def session_new(
+    cwd: str, mcpServers: list[protocol.McpServer]
+) -> protocol.NewSessionResponse:
+    """https://agentclientprotocol.com/protocol/session-setup#session-id"""
+    ...
+
+
+@API.method(name="session/load")
+def session_load(
+    cwd: str, mcpServers: list[protocol.McpServer], sessionId: str
+) -> protocol.LoadSessionResponse:
+    """https://agentclientprotocol.com/protocol/session-setup#loading-a-session"""
+    ...
+
+
+@API.notification(name="session/cancel")
+def session_cancel(sessionId: str, _meta: dict):
+    """https://agentclientprotocol.com/protocol/prompt-turn#cancellation"""
+    ...
+
+
+@API.method(name="session/prompt")
+def session_prompt(
+    prompt: list[protocol.ContentBlock], sessionId: str
+) -> protocol.SessionPromptResponse:
+    """https://agentclientprotocol.com/protocol/prompt-turn#1-user-message"""
+    ...
+
+
+@API.method(name="session/set_mode")
+def session_set_mode(sessionId: str, modeId: str) -> protocol.SetSessionModeResponse:
+    """https://agentclientprotocol.com/protocol/session-modes#from-the-client"""
+    ...
+
+
+@API.method(name="session/save")
+def session_save(sessionId: str) -> dict:
+    """Save the session state."""
+    ...
+
+
+@API.method(name="session/clear_todos")
+def session_clear_todos(sessionId: str) -> dict:
+    """Clear all todos in the current session."""
+    ...
+
+
+@API.method(name="session/compact")
+def session_compact(sessionId: str) -> dict:
+    """Compact the context to reduce token usage."""
+    ...
+
+
+@API.method(name="session/load_earlier")
+def session_load_earlier(sessionId: str, offset: int, limit: int) -> dict:
+    """Load a range of earlier messages from the current session."""
+    ...

@@ -1,0 +1,32 @@
+{
+  "name": "@scemoon/cdh",
+  "version": "1.0.6",
+  "description": "Cloud Dev Harness - cloud-native development Agent framework",
+  "keywords": ["ai", "agent", "cloud", "development", "cli", "cdc"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/scemoon/cloud-dev-harness.git"
+  },
+  "bin": {
+    "cdh": "cli.js",
+    "cloud-dev-harness": "cli.js"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "files": [
+    "cli.js",
+    "onecode-cli.js",
+    "run.js",
+    "package.json",
+    "pyproject.toml",
+    "cdh",
+    "onecode",
+    "tui",
+    "ai-dlc-skill"
+  ],
+  "scripts": {
+    "postinstall": "node cli.js"
+  }
+}

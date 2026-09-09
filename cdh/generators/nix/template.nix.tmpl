@@ -1,0 +1,8 @@
+# Auto-generated from {{.SourceFile}}
+{ lib }:
+
+{
+{{range .Types}}  {{.Name}} = {
+{{range .Properties}}    {{.Name}} = {{if .IsNullable}}"''${toString null}''"{{else}}""{{end}};
+{{end}}  };
+{{end}}}

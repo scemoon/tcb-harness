@@ -1,0 +1,14 @@
+# Plugin manifest for cython
+[plugin]
+name = "cython"
+display_name = "Cython"
+file_extension = ".pyx"
+mime_type = "text/x-cython"
+default_outdir = "cython"
+output_filename_template = "{name}}.pyx"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

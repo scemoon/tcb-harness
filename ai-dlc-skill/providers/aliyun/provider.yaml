@@ -1,0 +1,160 @@
+# Aliyun Provider (Stack-aware)
+
+Aliyun (Alibaba Cloud) provider — secondary platform. Supports the unified stack deploy (backend + all clients: web, native, desktop, wxa, mya, tta) and per-component deploys (for isolated dev sandboxes only).
+
+## Metadata
+
+```yaml
+provider:
+  name: aliyun
+  display_name: Alibaba Cloud
+  default: false
+  version: 3.0.0
+  website: https://www.aliyun.com/
+
+stack:
+  components:
+    - id: backend
+      deploy_order: 1
+      exposes: BACKEND_URL
+    - id: web
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: native
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: desktop
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: wxa
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: mya
+      deploy_order: 2
+      consumes: BACKEND_URL
+    - id: tta
+      deploy_order: 2
+      consumes: BACKEND_URL
+
+regions:
+  - id: cn-shanghai
+    name: Shanghai
+  - id: cn-beijing
+    name: Beijing
+  - id: cn-hangzhou
+    name: Hangzhou
+  - id: ap-southeast-1
+    name: Singapore
+
+services:
+  - functions: function-compute
+  - database: rds + tablestore
+  - storage: oss
+  - hosting: static-website + cdn
+
+limits:
+  function_timeout: 600s
+  function_memory: 3072MB
+
+compute_modes:
+  - id: fc
+    type: faas
+    default: true
+    description: "Function Compute — event-driven functions"
+    limits:
+      timeout: 600s
+      memory: 3072MB
+  - id: sae
+    type: caas
+    description: "Serverless App Engine 2.0 — container/web app hosting"
+    limits:
+      timeout: 86400s
+      memory: 32768MB
+
+capabilities:
+  - function_compute
+  - serverless_app_engine
+  - oss_storage
+  - rds_database
+  - tablestore
+  - static_hosting
+  - cdn_acceleration
+  - preview_deploy
+  - ssl_cert
+  - stack_deploy
+  - build_env_injection
+```
+
+## Stack Deploy (recommended for shared environments)
+
+```bash
+# Unified stack preview
+deploy_stack --preview --provider aliyun
+# → backend:  fun deploy --env preview
+# → web:      oss + cdn deploy with build env BACKEND_URL=${STACK_URL}
+# → native:   build with BACKEND_URL injected; package
+# → desktop:  build with BACKEND_URL injected; package
+# → wxa:      build with BACKEND_URL injected; upload to mini-program platform
+# → mya:      build with BACKEND_URL injected; upload to mini-program platform
+# → tta:      build with BACKEND_URL injected; upload to mini-program platform
+# → STACK_URL = https://{gateway}.{region}.fc.devs.com
+
+deploy_stack --env staging --provider aliyun
+deploy_stack --env production --provider aliyun
+deploy_stack --rollback ${LAST_STABLE_STACK_VERSION} --provider aliyun
+```
+
+## Per-Component Deploy (dev sandboxes only)
+
+```bash
+# Functions
+fun deploy --function hello
+
+# Storage (OSS)
+oss cp ./file.txt oss://bucket/path/
+oss ls oss://bucket/
+
+# Database (RDS / TableStore)
+# RDS: standard MySQL/PostgreSQL CLI
+# TableStore: ots search
+
+# Hosting (web only, dev sandbox)
+oss cp -r ./dist oss://{dev-bucket}/ && cdn refresh
+
+# Environment
+fun config --account-id <id>
+fun config --region cn-shanghai
+```
+
+> Per-component deploys to shared environments are forbidden (STK-004). Use `deploy_stack`.
+
+## URL Resolution
+
+| Component | Pattern |
+|-----------|---------|
+| `STACK_URL` / `BACKEND_URL` | `https://{gateway}.{region}.fc.devs.com` |
+| `WEB_URL` | `https://{bucket}.{region}.oss-website.aliyuncs.com` |
+| `NATIVE_DIST_URL` | internal distribution URL |
+| `DESKTOP_DIST_URL` | internal distribution URL |
+| `WXA_URL` | mini-program preview QR |
+| `MYA_URL` | mini-program preview QR |
+| `TTA_URL` | mini-program preview QR |
+
+## Build Config Injection
+
+```bash
+BACKEND_URL=$STACK_URL pnpm --filter web build
+oss cp -r ./dist oss://{bucket}/ --update
+cdn refresh
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| ALICLOUD_ACCESS_KEY | Aliyun access key ID |
+| ALICLOUD_SECRET_KEY | Aliyun access key secret |
+| ALICLOUD_REGION | Default region |
+| FUNCTION_COMPUTE_SERVICE | FC service name |
+| BACKEND_URL | Stack URL injected at build time |
+| STACK_URL | Alias of BACKEND_URL (gateway) |

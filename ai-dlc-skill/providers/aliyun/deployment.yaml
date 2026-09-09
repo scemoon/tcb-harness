@@ -1,0 +1,66 @@
+# Aliyun Stack Deployment
+
+Production deployment pipeline for Aliyun. The default is the unified `deploy_stack` orchestrator; per-component deploys are only allowed into isolated dev sandboxes.
+
+## Environments
+
+| Environment | Purpose | Deploy Trigger | Orchestrator |
+|-------------|---------|----------------|--------------|
+| preview | Per-component + cross-stack e2e | Feature branch | `deploy_stack --preview` |
+| staging | Pre-production stack validation | PR merge to main | `deploy_stack --env staging` |
+| production | Live traffic | Release tag + human approval | `deploy_stack --env production` |
+
+## Stack Deploy Steps
+
+```yaml
+staging:
+  orchestrator: deploy_stack
+  steps:
+    - fun deploy --env staging                   # backend
+    - rds migrate --env staging                  # backend (or tablestore)
+    - oss sync ./dist oss://bucket-staging/      # web
+    - cdn refresh --domain staging.example.com   # web
+    - native build with BACKEND_URL injected     # native
+    - desktop build with BACKEND_URL injected    # desktop
+    - wxa build with BACKEND_URL injected        # wxa
+    - mya build with BACKEND_URL injected        # mya
+    - tta build with BACKEND_URL injected        # tta
+    - smoke-test ${STACK_URL}
+
+production:
+  orchestrator: deploy_stack
+  pre_conditions:
+    - human-approval-gate
+  steps:
+    - fun deploy --env production --publish
+    - rds migrate --env production
+    - oss sync ./dist oss://bucket-production/
+    - cdn refresh --domain example.com
+    - native build with BACKEND_URL injected
+    - desktop build with BACKEND_URL injected
+    - wxa build with BACKEND_URL injected
+    - mya build with BACKEND_URL injected
+    - tta build with BACKEND_URL injected
+    - smoke-test ${PRODUCTION_URL}
+    - health-check ${PRODUCTION_URL}/health
+    - bvt ${PRODUCTION_URL}
+```
+
+## Per-Component Dev Sandbox (allowed)
+
+```bash
+# Personal dev sandbox — one user, one component
+fun deploy --function hello --env dev-${USER}
+oss cp -r ./dist oss://{dev-bucket}/ --update
+# Per-component deploys to shared envs (preview/staging/production) are forbidden
+```
+
+## Stack Rollback
+
+```bash
+# Automatic on BVT failure
+deploy_stack --rollback ${LAST_STABLE_STACK_VERSION} --provider aliyun
+
+# Manual on demand
+deploy_stack --rollback --stack-version v1.2.3 --provider aliyun
+```

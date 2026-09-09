@@ -1,0 +1,24 @@
+.git/
+.gitignore
+.env
+.env.*
+*.log
+*.pyc
+__pycache__/
+.pytest_cache/
+.venv/
+node_modules/
+tests/
+testing/
+coverage/
+build/
+dist/
+.npmignore
+install.sh
+start.sh
+.gitkeep
+.DS_Store
+.cdh/
+
+# Keep these for npm publish
+# README.md, LICENSE

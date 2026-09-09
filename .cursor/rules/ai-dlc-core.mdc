@@ -1,0 +1,75 @@
+---
+description: AI-DLC Core Lifecycle Rules
+globs: ["*"]
+---
+
+
+# AI-DLC Master Orchestrator
+
+## Core Cycle
+
+```
+① Understand (SDD+BDD)   Intent → Spec Delta → BDD Feature Files
+② Plan (SDD+TDD)         Design Doc → Task DAG → Test Plan
+③ Verify (BDD+TDD)       Red → Green → Refactor per scenario
+④ Deliver (SDD+Cloud)    Stack Preview → e2e → Production + BVT
+```
+
+## Components
+
+| Prefix | Component | Directory | FR Namespace |
+|--------|-----------|-----------|--------------|
+| NATIVE | Mobile | `apps/native/` | `NATIVE-FR-NNN` |
+| DESKTOP | Desktop | `apps/desktop/` | `DESKTOP-FR-NNN` |
+| WEB | Browser | `apps/web/` | `WEB-FR-NNN` |
+| BE | Service | `apps/backend/` | `BE-FR-NNN` |
+| WXA | WeChat Mini | `apps/wxa/` | `WXA-FR-NNN` |
+| MYA | Alipay Mini | `apps/mya/` | `MYA-FR-NNN` |
+| TTA | TikTok Mini | `apps/tta/` | `TTA-FR-NNN` |
+| INT | Contracts | `aidlc/contracts/`, `aidlc/packages/shared/` | `INT-FR-NNN` |
+
+## Adaptive Flow
+
+See `core/adaptive-flow.md` for complexity assessment.
+See `core/task-registry.md` for task status tracking.
+
+1. **Check Registry**: `python aidlc/bin/registry.py check "intent"` — deduplication
+   - Found + all phases completed → SKIP, return existing result
+   - Found + partially completed → skip completed phases, run pending only
+   - Not found → create new task entry
+2. Analyze intent → determine complexity (L1-L5)
+3. Select phases to execute (skip any already completed per registry)
+4. `python aidlc/bin/registry.py create "intent" --level Lx --phases a,b,c` — record task
+5. For each pending phase:
+   a. Call `TodoClear` to reset the plan
+   b. Delegate via `Task(agent_type="general", prompt=...)` using the phase's `prompt.md`
+   c. Collect result, enforce gate
+   d. `python aidlc/bin/registry.py complete-phase <id> <phase> ...` — mark done
+6. All phases done → mark task `completed` in registry
+
+```
+
+## Phase Reference
+
+| Phase | Lifecycle | Rules | Practices |
+|-------|-----------|-------|-----------|
+| ① Understand | `phases/understand/lifecycle.md` | `phases/understand/rules.md` | SDD, BDD |
+| ② Plan | `phases/plan/lifecycle.md` | `phases/plan/rules.md` | SDD, TDD |
+| ③ Verify | `phases/verify/lifecycle.md` | `phases/verify/rules.md` | BDD, TDD |
+| ④ Deliver | `phases/deliver/lifecycle.md` | `phases/deliver/rules.md` | SDD, Cloud |
+
+Security baseline: `core/security.md` (all phases).
+<!-- ═══════════════════════════════════════════════════════════
+     Project Rules
+     ═══════════════════════════════════════════════════════════ -->
+
+## Project Rules
+
+1. Intent → Spec (EARS) → BDD → Design (DAG) → TDD Red-Green-Refactor → Deploy
+2. Contract-first for cross-component changes (`aidlc/contracts/`)
+3. FR namespaces: NATIVE|DESKTOP|WEB|BE|WXA|MYA|TTA (apps/) + INT (aidlc/contracts/)
+4. Quality gates: coverage ≥80%, BDD 100%, 0 vulns, no TODO, backward-compat contracts
+5. Cross-stack e2e mandatory for changes affecting ≥2 components
+6. Never commit secrets; never force-push to main/master
+7. Chinese for user communication, English for code
+8. Run lint/typecheck/test after non-trivial edits

@@ -1,0 +1,16 @@
+;; Auto-generated from {{.SourceFile}}
+(define-module (types)
+  #:export ({{range .Types}}make-{{.Name}} {{end}}))
+
+{{range .Types}}
+(define-record-type {{.Name}}
+  ({{.Name}} {{range .Properties}}{{.Name}} {{end}})
+  {{.Name}}?
+{{range .Properties}}  ({{.Name}}-{{.Name}} {{.Name}}) {{end}})
+
+(define ({{.Name}}->alist x)
+  (list {{range .Properties}}(cons '{{.JsonName}}' ({{.Name}}-{{.Name}} x)) {{end}}))
+
+(define (alist->{{.Name}} alst)
+  ({{.Name}} {{range .Properties}}(cond ((assoc '{{.JsonName}} alst) => cdr) (else #f)) {{end}}))
+{{end}}

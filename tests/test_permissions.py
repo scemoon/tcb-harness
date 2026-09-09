@@ -1,0 +1,497 @@
+"""Tests for the unified permission system: PermissionStore + _check_tool_permission."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from onecode.agent.agents.types import AgentPermission, BuildAgent, PlanAgent, SoloAgent
+from onecode.agent.permissions_store import PermissionStore
+from onecode.agent.session import AgentSession
+
+
+# ── PermissionStore tests ──────────────────────────────────────────────────
+
+
+class TestPermissionStore:
+    def test_set_and_get_override(self):
+        store = PermissionStore()
+        assert store.get_override("edit") is None
+        store.set_override("edit", AgentPermission.ALLOW)
+        assert store.get_override("edit") == AgentPermission.ALLOW
+
+    def test_apply_to_agent(self):
+        store = PermissionStore()
+        store.set_override("bash", AgentPermission.ALLOW)
+        agent = BuildAgent()
+        assert agent.permission_bash == AgentPermission.ASK  # default
+        store.apply_to(agent)
+        assert agent.permission_bash == AgentPermission.ALLOW
+
+    def test_apply_to_agent_reject_always(self):
+        store = PermissionStore()
+        store.set_override("edit", AgentPermission.DENY)
+        agent = SoloAgent()
+        assert agent.permission_edit == AgentPermission.ASK  # SoloAgent defaults
+        store.apply_to(agent)
+        assert agent.permission_edit == AgentPermission.DENY
+
+    def test_clear_override(self):
+        store = PermissionStore()
+        store.set_override("edit", AgentPermission.ALLOW)
+        store.clear_override("edit")
+        assert store.get_override("edit") is None
+
+    def test_clear_all(self):
+        store = PermissionStore()
+        store.set_override("edit", AgentPermission.ALLOW)
+        store.set_override("bash", AgentPermission.DENY)
+        store.clear_all()
+        assert store.get_override("edit") is None
+        assert store.get_override("bash") is None
+
+    def test_snapshot_roundtrip(self):
+        store = PermissionStore()
+        store.set_override("edit", AgentPermission.ALLOW)
+        snap = store.snapshot()
+        assert snap == {"edit": AgentPermission.ALLOW}
+
+    def test_to_dict_and_from_dict(self):
+        store = PermissionStore()
+        store.set_override("edit", AgentPermission.ALLOW)
+        store.set_override("bash", AgentPermission.DENY)
+        d = store.to_dict()
+        assert d == {"edit": "allow", "bash": "deny"}
+        restored = PermissionStore.from_dict(d)
+        assert restored.get_override("edit") == AgentPermission.ALLOW
+        assert restored.get_override("bash") == AgentPermission.DENY
+
+    def test_apply_to_preserves_unrelated_fields(self):
+        store = PermissionStore()
+        store.set_override("bash", AgentPermission.ALLOW)
+        agent = BuildAgent()
+        original_edit = agent.permission_edit
+        store.apply_to(agent)
+        assert agent.permission_bash == AgentPermission.ALLOW
+        assert agent.permission_edit == original_edit  # unchanged
+
+    def test_set_agent_create_new_agent_and_reapply(self):
+        """Simulate the adapter flow: set_agent() creates fresh agent,
+        then PermissionStore.apply_to() restores overrides."""
+        store = PermissionStore()
+        store.set_override("edit", AgentPermission.ALLOW)
+
+        # BuildAgent defaults
+        agent = BuildAgent()
+        assert agent.permission_edit == AgentPermission.ASK
+
+        store.apply_to(agent)
+        assert agent.permission_edit == AgentPermission.ALLOW
+
+        # Simulate mode switch: create a new agent with hard DENY
+        agent2 = PlanAgent()
+        assert agent2.permission_edit == AgentPermission.DENY  # PlanAgent defaults to DENY
+
+        # apply_to must NOT override agent's hard DENY — that's the bug fix
+        store.apply_to(agent2)
+        assert agent2.permission_edit == AgentPermission.DENY  # DENY preserved!
+
+    def test_apply_to_skips_permissions_locked_agent(self):
+        """PlanAgent is permissions_locked: PermissionStore overrides must
+        never touch it, even to ALLOW."""
+        store = PermissionStore()
+        store.set_override("edit", AgentPermission.ALLOW)
+        store.set_override("bash", AgentPermission.ALLOW)
+
+        plan = PlanAgent()
+        assert plan.permissions_locked is True
+        store.apply_to(plan)
+        assert plan.permission_edit == AgentPermission.DENY
+        assert plan.permission_bash == AgentPermission.DENY
+
+    def test_solo_agent_not_locked(self):
+        """SoloAgent stays overridable by the permission store."""
+        store = PermissionStore()
+        store.set_override("bash", AgentPermission.ALLOW)
+        solo = SoloAgent()
+        assert solo.permissions_locked is False
+        store.apply_to(solo)
+        assert solo.permission_bash == AgentPermission.ALLOW
+
+
+# ── _check_tool_permission integration tests ───────────────────────────────
+
+
+class TestCheckToolPermission:
+    """Verify that the engine's _check_tool_permission method correctly
+    respects AgentConfig permission fields after PermissionStore overrides."""
+
+    def _make_engine_mock(self, agent):
+        """Create a minimal object that behaves like AgentEngine for the
+        purpose of calling _check_tool_permission.
+        
+        We import the actual method from engine module.
+        """
+        from onecode.agent.engine import AgentEngine
+
+        class FakeApp:
+            config = type("cfg", (), {"default_provider": "minimaxi", "default_model": "minimax-m1-671b", "providers": {}})()
+
+        engine = AgentEngine(FakeApp(), project_dir=Path.cwd())
+        engine.current_agent = agent
+        return engine
+
+    def test_ask_returns_requires_approval(self):
+        engine = self._make_engine_mock(BuildAgent())
+        result = engine._check_tool_permission("Bash", {})
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed.get("requires_approval") is True
+
+    def test_allow_returns_none(self):
+        agent = BuildAgent()
+        setattr(agent, "permission_bash", AgentPermission.ALLOW)
+        engine = self._make_engine_mock(agent)
+        result = engine._check_tool_permission("Bash", {})
+        assert result is None
+
+    def test_deny_returns_denied_message(self):
+        agent = BuildAgent()
+        setattr(agent, "permission_bash", AgentPermission.DENY)
+        engine = self._make_engine_mock(agent)
+        result = engine._check_tool_permission("Bash", {})
+        assert result is not None
+        parsed = json.loads(result)
+        assert "denied" in parsed.get("error", "")
+
+    def test_setattr_after_allow_always_then_check(self):
+        """Simulate the exact flow: user clicks 'Allow always' → setattr
+        → next tool call → _check_tool_permission returns None."""
+
+        # BuildAgent defaults: permission_bash = ASK
+        agent = BuildAgent()
+        assert agent.permission_bash == AgentPermission.ASK
+        assert agent.get_tools_config()["bash"] == AgentPermission.ASK
+
+        # User clicks "Allow always"
+        setattr(agent, "permission_bash", AgentPermission.ALLOW)
+
+        # Next tool call
+        engine = self._make_engine_mock(agent)
+        result = engine._check_tool_permission("Bash", {})
+        assert result is None
+
+    def test_reject_always_then_check(self):
+        """User clicks 'Reject always' → setattr → next call is denied."""
+
+        agent = BuildAgent()
+        setattr(agent, "permission_bash", AgentPermission.DENY)
+
+        engine = self._make_engine_mock(agent)
+        result = engine._check_tool_permission("Bash", {})
+        assert result is not None
+        parsed = json.loads(result)
+        assert "denied" in parsed.get("error", "")
+
+    def test_permission_store_reapply_via_setattr(self):
+        """Integration: PermissionStore.set_override → apply_to →
+        _check_tool_permission sees ALLOW even after creating a fresh agent."""
+
+        store = PermissionStore()
+        store.set_override("bash", AgentPermission.ALLOW)
+
+        # Fresh agent (e.g. after set_agent("build"))
+        agent = BuildAgent()
+        store.apply_to(agent)
+
+        engine = self._make_engine_mock(agent)
+        result = engine._check_tool_permission("Bash", {})
+        assert result is None
+
+    def test_unknown_tool_name_returns_none(self):
+        engine = self._make_engine_mock(BuildAgent())
+        engine._check_tool_permission("NonExistentTool", {})
+
+    def test_all_tool_names_mapped(self):
+        """Every tool in _TOOL_NAME_TO_PERM_KEY maps to a valid attr name."""
+        from onecode.agent.engine import AgentEngine
+
+        agent = BuildAgent()
+        for tool_name, perm_key in AgentEngine._TOOL_NAME_TO_PERM_KEY.items():
+            agent = BuildAgent()
+            attr_name = f"permission_{perm_key}"
+            assert hasattr(agent, attr_name), f"Agent missing {attr_name}"
+            setattr(agent, attr_name, AgentPermission.ALLOW)
+            engine = self._make_engine_mock(agent)
+            result = engine._check_tool_permission(tool_name, {})
+            assert result is None, f"{tool_name} (key={perm_key}) returned {result}"
+
+
+# ── Subagent inheritance tests ──────────────────────────────────────────────
+
+
+class TestPermStoreSubagentInheritance:
+    """PermissionStore overrides set on parent engine must propagate to
+    child engines spawned via ``_spawn_subagent_async_streaming``."""
+
+    def test_subagent_receives_parent_perm_store(self):
+        from onecode.agent.engine import AgentEngine
+
+        class FakeApp:
+            config = type("cfg", (), {"default_provider": "minimaxi", "default_model": "minimax-m1-671b", "providers": {}})()
+
+        parent = AgentEngine(FakeApp(), project_dir=Path.cwd())
+        parent._perm_store.set_override("edit", AgentPermission.ALLOW)
+
+        # Simulate subagent creation (the exact line from _spawn_subagent_async_streaming)
+        child = AgentEngine(FakeApp(), project_dir=Path.cwd(), perm_store=parent._perm_store)
+        child.set_agent("build")
+
+        assert child.current_agent.permission_edit == AgentPermission.ALLOW
+
+    def test_subagent_inherits_live_override(self):
+        """Override set on parent after child creation is visible in child
+        (because they share the same PermissionStore instance)."""
+        from onecode.agent.engine import AgentEngine
+
+        class FakeApp:
+            config = type("cfg", (), {"default_provider": "minimaxi", "default_model": "minimax-m1-671b", "providers": {}})()
+
+        parent = AgentEngine(FakeApp(), project_dir=Path.cwd())
+        child = AgentEngine(FakeApp(), project_dir=Path.cwd(), perm_store=parent._perm_store)
+        child.set_agent("build")
+
+        # Parent sets override AFTER child exists
+        parent._perm_store.set_override("bash", AgentPermission.ALLOW)
+
+        # Re-apply to child (simulates child calling set_agent again)
+        child._perm_store.apply_to(child.current_agent)
+
+        assert child.current_agent.permission_bash == AgentPermission.ALLOW
+
+    def test_set_agent_auto_applies_perm_store(self):
+        """After Engine.__init__ with perm_store, set_agent() must auto-apply."""
+        from onecode.agent.engine import AgentEngine
+
+        class FakeApp:
+            config = type("cfg", (), {"default_provider": "minimaxi", "default_model": "minimax-m1-671b", "providers": {}})()
+
+        store = PermissionStore()
+        store.set_override("websearch", AgentPermission.DENY)
+
+        engine = AgentEngine(FakeApp(), project_dir=Path.cwd(), perm_store=store)
+        engine.set_agent("build")
+
+        assert engine.current_agent.permission_websearch == AgentPermission.DENY
+        result = engine._check_tool_permission("WebSearch", {})
+        assert result is not None
+        assert "denied" in result
+
+
+# ── Persistence round-trip tests ────────────────────────────────────────────
+
+
+class TestPermStorePersistence:
+    """Verify that permission overrides survive save → load cycles."""
+
+    def test_roundtrip_via_to_dict_from_dict(self):
+        store = PermissionStore()
+        store.set_override("edit", AgentPermission.ALLOW)
+        store.set_override("bash", AgentPermission.DENY)
+
+        d = store.to_dict()
+        restored = PermissionStore.from_dict(d)
+
+        assert restored.get_override("edit") == AgentPermission.ALLOW
+        assert restored.get_override("bash") == AgentPermission.DENY
+
+        agent = BuildAgent()
+        restored.apply_to(agent)
+        assert agent.permission_edit == AgentPermission.ALLOW
+        assert agent.permission_bash == AgentPermission.DENY
+
+    def test_project_loader_persistence(self, tmp_path):
+        """Use CdhProjectLoader to save permissions to .cdh/permissions.json
+        and then load them back."""
+        from onecode.agent.cdh_loader import CdhProjectLoader
+
+        cdh_dir = tmp_path / ".cdh"
+        cdh_dir.mkdir()
+
+        store = PermissionStore()
+        store.set_override("bash", AgentPermission.ALLOW)
+        store.set_override("edit", AgentPermission.DENY)
+
+        CdhProjectLoader.save_permissions(cdh_dir, store.to_dict())
+
+        saved_path = cdh_dir / "permissions.json"
+        assert saved_path.exists()
+
+        loaded_data = CdhProjectLoader.load_permissions(cdh_dir)
+        assert loaded_data == {"bash": "allow", "edit": "deny"}
+
+        restored = PermissionStore.from_dict(loaded_data)
+        assert restored.get_override("bash") == AgentPermission.ALLOW
+        assert restored.get_override("edit") == AgentPermission.DENY
+
+    def test_project_loader_persistence_no_cdh_dir(self, tmp_path):
+        """load_permissions should return {} when .cdh/ doesn't exist."""
+        from onecode.agent.cdh_loader import CdhProjectLoader
+
+        no_dir = tmp_path / "nonexistent"
+        result = CdhProjectLoader.load_permissions(no_dir)
+        assert result == {}
+
+    def test_reset_permission_via_clear_and_reapply(self):
+        """Simulate /permission: clear override + set_agent reapply."""
+        store = PermissionStore()
+        store.set_override("bash", AgentPermission.DENY)
+
+        agent = BuildAgent()
+        store.apply_to(agent)
+        assert agent.permission_bash == AgentPermission.DENY
+
+        # Simulate /permission bash
+        store.clear_override("bash")
+        agent2 = BuildAgent()
+        store.apply_to(agent2)
+        assert agent2.permission_bash == AgentPermission.ASK  # back to default
+
+
+# ── Context stats persistence tests ──────────────────────────────────────────
+
+
+class TestContextStatsPersistence:
+    """Verify that context usage stats survive save_session → load_session."""
+
+    def _make_engine(self) -> AgentEngine:  # noqa: F821
+        from onecode.agent.engine import AgentEngine
+        class FakeApp:
+            config = type("cfg", (), {"default_provider": "minimaxi", "default_model": "minimax-m1-671b", "max_tokens": 4096, "providers": {}})()
+        return AgentEngine(FakeApp(), project_dir=Path.cwd())
+
+    def test_save_and_restore_via_lifecycle_state(self):
+        engine = self._make_engine()
+        session = AgentSession()
+        engine.attach_session(session)
+
+        engine.total_tokens = 5000
+        engine.iterations = 10
+        engine._turn_usages = [{"input_tokens": 200, "output_tokens": 100, "total_tokens": 300}]
+
+        engine.save_session()
+        sid = session.id
+
+        engine2 = self._make_engine()
+        ok = engine2.load_session(sid)
+        assert ok
+        assert engine2.total_tokens == 5000
+        assert engine2.iterations == 10
+        assert engine2._turn_usages == [{"input_tokens": 200, "output_tokens": 100, "total_tokens": 300}]
+
+        session.delete()
+
+    def test_save_and_restore_via_attach(self):
+        session = AgentSession()
+        session.update_state("stats", {
+            "total_tokens": 777,
+            "iterations": 4,
+            "turn_usages": [{"input_tokens": 50}],
+        })
+
+        engine = self._make_engine()
+        engine.attach_session(session)
+
+        assert engine.total_tokens == 777
+        assert engine.iterations == 4
+        assert engine._turn_usages == [{"input_tokens": 50}]
+
+    def test_empty_stats_does_not_override_defaults(self):
+        session = AgentSession()
+        engine = self._make_engine()
+        engine.total_tokens = 100
+        engine.iterations = 2
+        engine.attach_session(session)
+        # Should keep engine values, not reset to 0
+        assert engine.total_tokens == 100
+        assert engine.iterations == 2
+
+    def test_build_session_usage_fallback(self):
+        """_build_session_usage falls back to engine.total_tokens when _turn_usages is empty."""
+        from onecode.agent.onecode_agent_acp import CDHACPAdapter
+        engine = self._make_engine()
+        engine.total_tokens = 999
+        engine._turn_usages = []  # empty
+
+        adapter = CDHACPAdapter()
+        adapter.agent = engine
+        usage = adapter._build_session_usage()
+        assert usage["total_tokens"] == 999
+        assert usage["input_tokens"] == 0
+        assert usage["output_tokens"] == 0
+
+
+# ── Agent instruction templates (set_agent assembly) ───────────────────────
+
+
+class TestAgentInstructionTemplates:
+    """set_agent() must assemble self-contained templates for plan/solo and
+    skip the generic gate + response-style assembly for them."""
+
+    def _make_engine(self):
+        from onecode.agent.engine import AgentEngine
+
+        class FakeApp:
+            config = type("cfg", (), {
+                "default_provider": "minimaxi",
+                "default_model": "minimax-m1-671b",
+                "max_tokens": 4096,
+                "providers": {},
+            })()
+
+        return AgentEngine(FakeApp(), project_dir=Path.cwd())
+
+    def _system_text(self, engine) -> str:
+        return "\n".join(
+            m.content for m in engine.context.messages
+            if m.role == "system" and isinstance(m.content, str)
+        )
+
+    def test_set_agent_solo_uses_solo_template(self):
+        engine = self._make_engine()
+        engine.set_agent("solo")
+        prompt = self._system_text(engine)
+        assert "Solo Agent (Execution)" in prompt
+        assert "APPROVED_PLAN" in prompt
+        assert "Verification before done" in prompt
+        assert "Output a plan as Markdown first" not in prompt  # no PLAN_GATE_SOFT
+        assert "File edits require user approval" not in prompt  # restrictions already in template
+
+    def test_set_agent_plan_uses_plan_template(self):
+        engine = self._make_engine()
+        engine.set_agent("plan")
+        prompt = self._system_text(engine)
+        assert "Plan Agent" in prompt
+        assert "Output a plan as Markdown first" not in prompt  # no PLAN_GATE_SOFT
+
+    def test_set_agent_build_uses_build_template(self):
+        engine = self._make_engine()
+        engine.set_agent("build")
+        prompt = self._system_text(engine)
+        assert "Build Agent (Development)" in prompt
+        assert "Verification before done" in prompt  # verification discipline embedded
+        assert "Output a brief inline plan as Markdown" in prompt  # soft-gate semantics moved into template
+        assert "Output a plan as Markdown first" not in prompt  # no static PLAN_GATE_SOFT
+        assert "File edits require user approval" not in prompt  # restrictions section skipped
+        assert prompt.count("require user approval") == 1  # no duplication with description
+
+    def test_plan_handoff_switches_to_solo_and_injects_approved_plan(self):
+        engine = self._make_engine()
+        engine.set_agent("plan")
+        engine._todo_manager.create_todo("Fix the widget", "Test agent handoff")
+        engine._plan_handoff(plan_path=None)
+        assert engine.current_agent.name == "solo"
+        prompt = self._system_text(engine)
+        assert "<!-- APPROVED_PLAN -->" in prompt
+        assert "Fix the widget" in prompt
+        assert engine._todo_manager.list_todos()  # todos preserved across handoff

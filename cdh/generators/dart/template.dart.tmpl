@@ -1,0 +1,27 @@
+// Auto-generated from {{.SourceFile}}
+import Foundation
+
+{{range .Types}}
+class {{.Name}} {
+{{range .Properties}}  var {{.Name}}: {{if .IsNullable}}String?{{else}}String{{end}};
+{{end}}
+
+  init(
+{{range .Properties}}    {{.Name}}: {{if .IsNullable}}String? = nil{{else}}String{{end}},
+{{end}}  ) {
+{{range .Properties}}    self.{{.Name}} = {{.Name}};
+{{end}}  }
+
+  static func fromJson(_ json: [String: Any]) -> {{.Name}} {
+    return {{.Name}}(
+{{range .Properties}}      json["{{.JsonName}}"] as? String,
+{{end}}    )
+  }
+
+  func toJson() -> [String: Any] {
+    return [
+{{range .Properties}}      "{{.JsonName}}": {{.Name}},
+{{end}}    ]
+  }
+}
+{{end}}

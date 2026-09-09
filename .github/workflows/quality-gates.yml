@@ -1,0 +1,56 @@
+name: quality-gates
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "dist/**"
+      - "npm/**"
+      - "**.md"
+      - ".gitignore"
+  pull_request:
+    paths-ignore:
+      - "dist/**"
+      - "npm/**"
+      - "**.md"
+      - ".gitignore"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install ruff
+      - run: ruff check .
+
+  typecheck:
+    name: mypy type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install mypy
+      - run: mypy onecode/
+
+  test:
+    name: pytest with coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: |
+          pip install pytest pytest-asyncio pytest-cov
+          pip install -e .
+      - run: pytest tests/ --cov --cov-fail-under=80

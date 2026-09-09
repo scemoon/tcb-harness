@@ -1,0 +1,12 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date, datetime, time
+from typing import Any, Literal, Optional, Union
+
+{{range .Types}}{{if .Description}}"""{{.Description}}"""
+{{end}}@dataclass
+class {{.Name}}:
+{{range .Properties}}    {{.Name}}: {{if .IsNullable}}Optional[{{.Type}}] = None{{else}}{{.Type}}{{end}}
+{{end}}
+{{end}}

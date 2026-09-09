@@ -1,0 +1,14 @@
+# Plugin manifest for pascal
+[plugin]
+name = "pascal"
+display_name = "Pascal"
+file_extension = ".pas"
+mime_type = "text/x-pascal"
+default_outdir = "pascal"
+output_filename_template = "{name}}.pas"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = false
+format_hints = ["date-time", "uuid"]

@@ -1,0 +1,17 @@
+[plugin]
+name = "dart"
+display_name = "Dart"
+file_extension = ".dart"
+mime_type = "text/x-dart"
+default_outdir = "dart"
+output_filename_template = "{name}.dart"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid"]
+
+[imports]
+date-time = 'import "package:intl/intl.dart";'
+uuid = 'import "package:uuid/uuid.dart";'

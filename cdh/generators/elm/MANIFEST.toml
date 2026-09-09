@@ -1,0 +1,14 @@
+# Plugin manifest for elm
+[plugin]
+name = "elm"
+display_name = "Elm"
+file_extension = ".elm"
+mime_type = "text/x-elm"
+default_outdir = "elm"
+output_filename_template = "{name}.elm"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

@@ -1,0 +1,14 @@
+# Plugin manifest for crystal
+[plugin]
+name = "crystal"
+display_name = "Crystal"
+file_extension = ".cr"
+mime_type = "text/x-crystal"
+default_outdir = "crystal"
+output_filename_template = "{name}}.cr"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

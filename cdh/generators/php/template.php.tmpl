@@ -1,0 +1,31 @@
+<?php
+// Auto-generated from {{.SourceFile}}
+
+{{range .Types}}
+class {{.Name}} implements \JsonSerializable
+{
+{{range .Properties}}    public ?string ${{.Name}};
+{{end}}
+
+    public function __construct(
+{{range .Properties}}        {{if .IsNullable}}?{{end}}string ${{.Name}},
+{{end}}    )
+    {
+{{range .Properties}}        $this->{{.Name}} = ${{.Name}};
+{{end}}    }
+
+    public static function fromJson(array $json): self
+    {
+        return new self(
+{{range .Properties}}            $json['{{.JsonName}}'] ?? null,
+{{end}}        );
+    }
+
+    public function jsonSerialize(): array
+    {
+        return [
+{{range .Properties}}            '{{.JsonName}}' => $this->{{.Name}},
+{{end}}        ];
+    }
+}
+{{end}}

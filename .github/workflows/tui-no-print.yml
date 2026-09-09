@@ -1,0 +1,34 @@
+name: tui-no-print
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tui/ansi/**"
+      - "scripts/check_tui_no_print.py"
+      - ".github/workflows/tui-no-print.yml"
+  pull_request:
+    paths:
+      - "tui/ansi/**"
+      - "scripts/check_tui_no_print.py"
+      - ".github/workflows/tui-no-print.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: forbid bare print() in tui/ansi/
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Run no-print guard
+        run: python scripts/check_tui_no_print.py

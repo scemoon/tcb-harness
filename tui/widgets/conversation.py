@@ -1,0 +1,3235 @@
+from __future__ import annotations
+
+import logging
+from asyncio import Future
+
+logger = logging.getLogger("tui.conversation")
+import asyncio
+
+from contextlib import suppress
+from functools import partial
+from itertools import filterfalse
+from operator import attrgetter
+from typing import TYPE_CHECKING, Literal
+from pathlib import Path
+from time import monotonic
+
+from typing import Callable, Any
+
+from rich.segment import Segment
+
+from textual import log, on, work
+from textual.app import ComposeResult
+from textual import containers
+from textual import getters
+from textual import events
+from textual.actions import SkipAction
+from textual.binding import Binding
+from textual.content import Content
+from textual.geometry import clamp
+from textual.css.query import NoMatches
+from textual.widget import Widget
+from textual.widgets import Static
+from textual.widgets.markdown import MarkdownBlock, MarkdownFence
+from textual.geometry import Offset, Spacing, Region
+from textual.reactive import var
+from textual.layouts.grid import GridLayout
+from textual.layout import WidgetPlacement
+from textual.strip import Strip
+
+
+from tui import jsonrpc, messages
+from tui import paths
+from tui import platform_commands
+from tui.message_log import MessageLog
+from tui.agent_schema import Agent as AgentData
+from tui.acp import messages as acp_messages
+from tui.app import A2TUIApp
+from tui.acp import protocol as acp_protocol
+from tui.answer import Answer
+from tui.agent import AgentBase, AgentReady, AgentFail
+from tui.format_path import format_path
+from tui.directory_watcher import DirectoryWatcher, DirectoryChanged
+from tui.history import History
+from tui.widgets.flash import Flash
+from tui.widgets.menu import Menu
+from tui.widgets.note import Note
+from tui.widgets.prompt import Prompt
+from tui.widgets.session_tabs import SessionsTabs
+from tui.widgets.terminal import Terminal
+from tui.widgets.throbber import Throbber
+from tui.widgets.user_input import UserInput
+from tui.shell import Shell, CurrentWorkingDirectoryChanged
+from tui.slash_command import SlashCommand
+from tui.protocol import BlockProtocol, MenuProtocol, ExpandProtocol
+from tui.menus import MenuItem
+from tui.widgets.shell_terminal import ShellTerminal
+from tui.widgets.ask_user import AskUserWidget, AskUserSubmitted
+from tui.widgets.load_more import LoadMoreIndicator
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from tui.acp.agent import Mode
+    from tui.widgets.terminal import Terminal
+    from tui.widgets.agent_response import AgentResponse
+    from tui.widgets.agent_thought import AgentThought
+    from tui.widgets.terminal_tool import TerminalTool
+
+
+AGENT_FAIL_HELP = {
+    "fail": """\
+## Agent failed to run
+
+**The agent failed to start.**
+
+Check that the agent is installed and up-to-date.
+
+Note that some agents require an ACP adapter to be installed to work with A2TUI.
+
+- Exit the app, and run `tui` again
+- Select the agent and hit ENTER
+- Click the dropdown, select "Install"
+- Click the GO button
+- Repeat the process to install an ACP adapter (if required)
+
+Some agents may require you to restart your shell (open a new terminal) after installing.
+
+If that fails, ask for help in [Discussions](https://github.com/batrachianai/tui/discussions)!
+""",
+    "no_resume": """\
+## Agent does not support resume
+
+The agent or ACP adapter does not support resuming sessions.
+
+Try updating to see if support has been added.
+
+- Exit the app, and run `tui` again
+- Select the agent and hit ENTER
+- Click the dropdown, select "Update" or "Install" again
+- Repeat the process to update the ACP adapter (if required)
+
+If that fails, ask for help in [Discussions](https://github.com/batrachianai/tui/discussions)!
+""",
+}
+
+HELP_URL = "https://github.com/batrachianai/tui/discussions"
+
+INTERNAL_EROR = f"""\
+## Internal error
+
+The agent reported an internal error:
+
+```
+$ERROR
+```
+
+This is likely an issue with the agent, and not A2TUI.
+
+- Try the prompt again
+- Report the issue to the Agent developer
+
+Ask on {HELP_URL} if you need assistance.
+
+"""
+
+STOP_REASON_MAX_TOKENS = f"""\
+## Maximum tokens reached
+
+$AGENT reported that your account is out of tokens.
+
+- You may need to purchase additional tokens, or fund your account.
+- If your account has tokens, try running any login or auth process again.
+
+If that fails, ask on {HELP_URL}
+"""
+
+STOP_REASON_MAX_TURN_REQUESTS = f"""\
+## Maximum model requests reached
+
+$AGENT has exceeded the maximum number of model requests in a single turn.
+
+Need help? Ask on {HELP_URL}
+"""
+
+STOP_REASON_REFUSAL = f"""\
+## Agent refusal
+ 
+$AGENT has refused to continue. 
+
+Need help? Ask on {HELP_URL}
+"""
+
+
+class Loading(Static):
+    """Tiny widget to show loading indicator."""
+
+    DEFAULT_CLASSES = "block"
+    DEFAULT_CSS = """
+    Loading {
+        height: auto;        
+    }
+    """
+
+
+class Cursor(Static):
+    """The block 'cursor' -- A vertical line to the left of a block in the conversation that
+    is used to navigate the discussion history.
+    """
+
+    follow_widget: var[Widget | None] = var(None)
+    blink = var(True, toggle_class="-blink")
+
+    def on_mount(self) -> None:
+        self.visible = False
+        self.blink_timer = self.set_interval(0.5, self._update_blink, pause=True)
+
+    def _update_blink(self) -> None:
+        try:
+            window = self.query_ancestor(Window)
+        except NoMatches:
+            self.blink = True
+            return
+        if window.has_focus and self.screen.is_active:
+            self.blink = not self.blink
+        else:
+            self.blink = False
+
+    def watch_follow_widget(self, widget: Widget | None) -> None:
+        self.visible = widget is not None
+
+    def update_follow(self) -> None:
+        if self.follow_widget and self.follow_widget.is_attached:
+            self.styles.height = max(1, self.follow_widget.outer_size.height)
+            follow_y = (
+                self.follow_widget.virtual_region.y
+                + self.follow_widget.parent.virtual_region.y
+            )
+            self.offset = Offset(0, follow_y)
+        else:
+            self.styles.height = None
+
+    def follow(self, widget: Widget | None) -> None:
+        self.follow_widget = widget
+        self.blink = False
+        if widget is None:
+            self.visible = False
+            self.blink_timer.reset()
+            self.blink_timer.pause()
+            self.styles.height = None
+        else:
+            self.visible = True
+            self.blink_timer.reset()
+            self.blink_timer.resume()
+            self.update_follow()
+
+
+class Contents(containers.VerticalGroup, can_focus=False):
+    BLANK = True
+
+    def process_layout(
+        self, placements: list[WidgetPlacement]
+    ) -> list[WidgetPlacement]:
+        if placements:
+            last_placement = placements[-1]
+            top, right, _bottom, left = last_placement.margin
+            placements[-1] = last_placement._replace(
+                margin=Spacing(top, right, 0, left)
+            )
+        return placements
+
+
+class ContentsGrid(containers.Grid):
+    BLANK = True
+
+    def pre_layout(self, layout) -> None:
+        assert isinstance(layout, GridLayout)
+        layout.stretch_height = True
+
+
+class CursorContainer(containers.Vertical):
+    def render_lines(self, crop: Region) -> list[Strip]:
+        rich_style = self.visual_style.rich_style
+        strips = [Strip([Segment("▌", rich_style)], cell_length=1)] * crop.height
+        if crop.y == 0 and strips:
+            strips[0] = Strip([Segment(" ", rich_style)], cell_length=1)
+
+        return strips
+
+
+class Window(containers.VerticalScroll):
+    HELP = """\
+## Conversation
+
+This is a view of your conversation with the agent.
+
+- **cursor keys** Scroll
+- **ctrl+j / ctrl+k** Navigate content
+- **start typing** Focus the prompt
+"""
+    BINDING_GROUP_TITLE = "View"
+    BINDINGS = [Binding("end", "screen.focus_prompt", "Prompt")]
+
+    auto_follow: var[bool] = var(True)
+
+    def update_node_styles(self, animate: bool = True) -> None:
+        pass
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        self.auto_follow = new_value >= self.max_scroll_y
+        super().watch_scroll_y(old_value, new_value)
+
+    def scroll_end_if_following(self, animate: bool = True) -> None:
+        if self.auto_follow:
+            self.scroll_end(animate=animate)
+
+
+def _plan_entries_from_dicts(raw_entries):
+    """Deprecated thin wrapper around the shared ``entries_from_dicts`` helper.
+
+    Kept for backwards compatibility with any external callers; new code
+    should import ``entries_from_dicts`` directly from ``tui.widgets.plan``.
+    """
+    from tui.widgets.plan import entries_from_dicts
+    return entries_from_dicts(raw_entries)
+
+
+class Conversation(containers.Vertical):
+    """Holds the agent conversation (input, output, and various controls / information)."""
+
+    BLANK = True
+    BINDING_GROUP_TITLE = "Conversation"
+    CURSOR_BINDING_GROUP = Binding.Group(description="Cursor")
+    BINDINGS = [
+        Binding(
+            "ctrl+j",
+            "cursor_down",
+            "Down",
+            priority=True,
+            group=CURSOR_BINDING_GROUP,
+        ),
+        Binding(
+            "ctrl+k",
+            "cursor_up",
+            "Up",
+            priority=True,
+            group=CURSOR_BINDING_GROUP,
+        ),
+        Binding(
+            "enter",
+            "select_block",
+            "Select",
+            tooltip="Select this block",
+            show=False,
+        ),
+        Binding(
+            "ctrl+x",
+            "toggle_expand",
+            "Toggle",
+            tooltip="Toggle expand/collapse cursor block",
+            priority=True,
+        ),
+        Binding(
+            "escape",
+            "cancel",
+            "Cancel",
+            tooltip="Cancel agent's turn",
+            priority=True,
+            show=False,
+        ),
+        Binding(
+            "ctrl+f",
+            "focus_terminal",
+            "Focus",
+            tooltip="Focus the active terminal",
+            priority=True,
+        ),
+        Binding(
+            "ctrl+o",
+            "mode_switcher",
+            "Modes",
+            tooltip="Open the mode switcher",
+        ),
+        Binding(
+            "ctrl+n",
+            "fullscreen_block",
+            "Full",
+            tooltip="Open full-screen view of the cursor block",
+        ),
+        Binding(
+            "ctrl+c",
+            "interrupt",
+            "Interrupt",
+            tooltip="Interrupt running command",
+        ),
+    ]
+
+    busy_count = var(0)
+    cursor_offset = var(-1, init=False)
+    project_path = var("")
+    working_directory: var[str] = var("")
+    _blocks: var[list[MarkdownBlock] | None] = var(None)
+
+    throbber: getters.query_one[Throbber] = getters.query_one("#throbber")
+    contents = getters.query_one(Contents)
+    window = getters.query_one(Window)
+    cursor = getters.query_one(Cursor)
+    prompt = getters.query_one(Prompt)
+    app = getters.app(A2TUIApp)
+
+    _shell: var[Shell | None] = var(None)
+    shell_history_index: var[int] = var(0, init=False)
+    prompt_history_index: var[int] = var(0, init=False)
+
+    agent: var[AgentBase | None] = var(None, bindings=True)
+    agent_info: var[Content] = var(Content())
+    agent_ready: var[bool] = var(False)
+    modes: var[dict[str, Mode]] = var({}, bindings=True)
+    current_mode: var[Mode | None] = var(None)
+    turn: var[Literal["agent", "client"] | None] = var(None, bindings=True)
+    status: var[str] = var("")
+    column: var[bool] = var(False, toggle_class="-column")
+
+    title = var("")
+    _agent_session_title: var[str] = var("")
+
+    def __init__(
+        self,
+        project_path: Path,
+        agent: AgentData | None = None,
+        agent_session_id: str | None = None,
+        session_pk: int | None = None,
+        initial_prompt: str | None = None,
+    ) -> None:
+        super().__init__()
+
+        project_path = project_path.resolve().absolute()
+
+        self.set_reactive(Conversation.project_path, project_path)
+        self.set_reactive(Conversation.working_directory, str(project_path))
+        self.agent_slash_commands: list[SlashCommand] = []
+        self.terminals: dict[str, TerminalTool] = {}
+        self._loading: Loading | None = None
+        self._agent_response: AgentResponse | None = None
+        self._agent_thought: AgentThought | None = None
+        self._replay: bool = False
+        self._replay_buffer: list[dict] = []
+        self._active_subagents: dict = {}
+        self._last_escape_time: float = 0.0
+        self._agent_data = agent
+        self._agent_session_id = agent_session_id
+        self._session_pk = session_pk
+        self._agent_fail = False
+        self._mouse_down_offset: Offset | None = None
+
+        self._focusable_terminals: list[Terminal] = []
+
+        self.project_data_path = paths.get_project_data(project_path)
+        self.shell_history = History(self.project_data_path / "shell_history.jsonl")
+        self.prompt_history = History(self.project_data_path / "prompt_history.jsonl")
+
+        self.session_start_time: float | None = None
+        self._terminal_count = 0
+        self._require_check_prune = False
+
+        self._turn_count = 0
+        self._shell_count = 0
+        self._tool_call_total = 0
+
+        self._tool_call_success = 0
+        self._tool_call_failed = 0
+        self._tool_call_finalized: set[str] = set()
+
+        self._directory_changed = False
+        self._directory_watcher: DirectoryWatcher | None = None
+        self._suppress_directory_changed = False
+
+        self._initial_prompt = initial_prompt
+
+        self._msg_log: MessageLog | None = None
+
+        self._post_lock = asyncio.Lock()
+        self._auto_named_session = False
+        self._pending_prompts: list[str] = []
+        self._pending_ask_user: bool = False
+
+        self._total_messages: int = 0
+        self._visible_count: int = 0
+        self._loaded_up_to: int = 0
+        self._load_more_widget: LoadMoreIndicator | None = None
+        self._flush_append_at: int | None = None
+
+    def update_title(self) -> None:
+        """Update the screen title."""
+        screen = self.screen
+        if self._agent_session_title:
+            screen.title = self._agent_session_title
+        elif agent_title := self.agent_title:
+            project_path = format_path(self.project_path)
+            screen.title = f"{agent_title} {project_path}"
+        else:
+            screen.title = ""
+
+    @property
+    def agent_title(self) -> str | None:
+        if self._agent_data is not None:
+            return self._agent_data["name"]
+        return None
+
+    @property
+    def is_watching_directory(self) -> bool:
+        """Is the directory watcher enabled and watching?"""
+        if self._directory_watcher is None:
+            return False
+        return self._directory_watcher.enabled
+
+    def validate_shell_history_index(self, index: int) -> int:
+        return clamp(index, -self.shell_history.size, 0)
+
+    def validate_prompt_history_index(self, index: int) -> int:
+        return clamp(index, -self.prompt_history.size, 0)
+
+    def shell_complete(self, prefix: str) -> list[str]:
+        completes = self.shell_history.complete(prefix)
+        return completes
+
+    def insert_path_into_prompt(self, path: Path) -> None:
+        try:
+            insert_path_text = str(path.relative_to(self.project_path))
+        except Exception:
+            self.app.bell()
+            return
+
+        insert_text = (
+            f'@"{insert_path_text}"'
+            if " " in insert_path_text
+            else f"@{insert_path_text}"
+        )
+        self.prompt.prompt_text_area.insert(insert_text)
+        self.prompt.prompt_text_area.insert(" ")
+
+    def watch_project_path(self, path: Path) -> None:
+        self.working_directory = str(path)
+        self.post_message(messages.SessionUpdate(path=str(path)))
+
+    async def watch_shell_history_index(self, previous_index: int, index: int) -> None:
+        if previous_index == 0:
+            self.shell_history.current = self.prompt.text
+        try:
+            history_entry = await self.shell_history.get_entry(index)
+        except IndexError:
+            pass
+        else:
+            self.prompt.text = history_entry["input"]
+            self.prompt.shell_mode = True
+
+    async def watch_prompt_history_index(self, previous_index: int, index: int) -> None:
+        if previous_index == 0:
+            self.prompt_history.current = self.prompt.text
+        try:
+            history_entry = await self.prompt_history.get_entry(index)
+        except IndexError:
+            pass
+        else:
+            self.prompt.text = history_entry["input"]
+
+    def watch_turn(self, turn: str) -> None:
+        if turn == "client":
+            self.post_message(messages.SessionUpdate(state="idle"))
+        elif turn == "agent":
+            self.post_message(messages.SessionUpdate(state="busy"))
+
+    @on(events.Key)
+    async def on_key(self, event: events.Key):
+        if (
+            event.character is not None
+            and event.is_printable
+            and (event.character.isalnum() or event.character in "$/!")
+            and self.window.has_focus
+        ):
+            event.stop()
+            self.prompt.focus()
+            self.prompt.prompt_text_area.post_message(event)
+
+    def compose(self) -> ComposeResult:
+        yield Throbber(id="throbber")
+        yield SessionsTabs()
+        with Window():
+            with ContentsGrid():
+                with CursorContainer(id="cursor-container"):
+                    yield Cursor()
+                yield Contents(id="contents")
+        yield Flash()
+        yield Prompt(complete_callback=self.shell_complete).data_bind(
+            project_path=Conversation.project_path,
+            working_directory=Conversation.working_directory,
+            agent_info=Conversation.agent_info,
+            agent_ready=Conversation.agent_ready,
+            current_mode=Conversation.current_mode,
+            modes=Conversation.modes,
+            status=Conversation.status,
+        )
+
+    @property
+    def _terminal(self) -> Terminal | None:
+        """Return the last focusable terminal, if there is one.
+
+        Returns:
+            A focusable (non finalized) terminal.
+        """
+        # Terminals should be removed in response to the Terminal.FInalized message
+        # This is a bit of a sanity check
+        self._focusable_terminals[:] = list(
+            filterfalse(attrgetter("is_finalized"), self._focusable_terminals)
+        )
+
+        for terminal in reversed(self._focusable_terminals):
+            if terminal.display:
+                return terminal
+        return None
+
+    def add_focusable_terminal(self, terminal: Terminal) -> None:
+        """Add a focusable terminal.
+
+        Args:
+            terminal: Terminal instance.
+        """
+        if not terminal.is_finalized:
+            self._focusable_terminals.append(terminal)
+
+    @on(ShellTerminal.Interrupt)
+    async def on_shell_terminal_terminate(self, event: ShellTerminal.Terminate) -> None:
+        if not event.teminal.is_finalized:
+            await self.shell.interrupt()
+            self.cursor_offset = -1
+            self.flash("Command interrupted", style="success")
+
+    @on(DirectoryChanged)
+    def on_directory_changed(self, event: DirectoryChanged) -> None:
+        event.stop()
+        self._directory_changed = True
+        if self._suppress_directory_changed:
+            return
+        self._suppress_directory_changed = True
+        self.post_message(messages.ProjectDirectoryUpdated(project_dir=self.app.project_dir))
+        self.set_timer(0.5, self._release_directory_changed_suppress)
+
+    def _release_directory_changed_suppress(self) -> None:
+        self._suppress_directory_changed = False
+
+    def directory_watcher_swap(self, project_path: Path) -> None:
+        """Stop the current DirectoryWatcher (if any) and start a new one
+        rooted at *project_path*.
+
+        Used by ``MainScreen`` when the user switches projects so we don't
+        keep receiving events for the old tree.
+        """
+        if self._directory_watcher is not None:
+            self._directory_watcher.stop()
+            self._directory_watcher = None
+        if project_path is None:
+            return
+        try:
+            watcher = DirectoryWatcher(project_path, self)
+        except Exception:
+            return
+        watcher.start()
+        self._directory_watcher = watcher
+
+    @on(Terminal.Finalized)
+    def on_terminal_finalized(self, event: Terminal.Finalized) -> None:
+        """Terminal was finalized, so we can remove it from the list."""
+        try:
+            self._focusable_terminals.remove(event.terminal)
+        except ValueError:
+            pass
+
+        if self._directory_changed or not self.is_watching_directory:
+            self.prompt.project_directory_updated()
+            self._directory_changed = False
+            self.post_message(messages.ProjectDirectoryUpdated(project_dir=self.app.project_dir))
+
+    @on(Terminal.LongRunning)
+    def on_terminal_long_running(self, event: Terminal.LongRunning) -> None:
+        if (
+            not event.terminal.is_finalized
+            and not event.terminal.has_focus
+            and not event.terminal.state.buffer.is_blank
+        ):
+            self.flash("Press [b]ctrl+f[/b] to focus command", style="default")
+
+    @on(Terminal.AlternateScreenChanged)
+    def on_terminal_alternate_screen_(
+        self, event: Terminal.AlternateScreenChanged
+    ) -> None:
+        """A terminal enabled or disabled alternate screen."""
+        if event.enabled:
+            event.terminal.focus()
+        else:
+            self.focus_prompt()
+
+    @on(events.DescendantFocus, "Terminal")
+    def on_terminal_focus(self, event: events.DescendantFocus) -> None:
+        self.flash("Press [b]escape[/b] [i]twice[/] to exit terminal", style="success")
+
+    @on(events.DescendantBlur, "Terminal")
+    def on_terminal_blur(self, event: events.DescendantFocus) -> None:
+        self.focus_prompt()
+
+    @on(Terminal.CancelRequested)
+    async def on_terminal_cancel_requested(self, event: Terminal.CancelRequested) -> None:
+        event.stop()
+        if (agent := self.agent) is not None:
+            await agent.cancel()
+            # Don't claim success yet — the agent only stops once the
+            # session/prompt response arrives with stopReason="cancelled",
+            # which is surfaced as a "Turn cancelled" flash in agent_turn_over.
+            self.flash("Cancel requested…", style="success")
+
+    @on(messages.Flash)
+    def on_flash(self, event: messages.Flash) -> None:
+        event.stop()
+        self.flash(event.content, duration=event.duration, style=event.style)
+
+    def flash(
+        self,
+        content: str | Content,
+        *,
+        duration: float | None = None,
+        style: Literal["default", "warning", "error", "success"] = "default",
+    ) -> None:
+        """Flash a single-line message to the user.
+
+        Args:
+            content: Content to flash.
+            style: A semantic style.
+            duration: Duration in seconds of the flash, or `None` to use default in settings.
+        """
+        self.query_one(Flash).flash(content, duration=duration, style=style)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "focus_terminal":
+            return None if self._terminal is None else True
+        if action == "mode_switcher":
+            return bool(self.modes)
+        if action == "cancel":
+            if self._pending_ask_user:
+                return True
+            return True if (self.agent and self.turn == "agent") else None
+        if action in {"expand_block", "collapse_block", "toggle_expand"}:
+            if (cursor_block := self.cursor_block) is None:
+                return False
+            elif isinstance(cursor_block, ExpandProtocol):
+                if action == "expand_block":
+                    return False if cursor_block.is_block_expanded() else True
+                elif action == "collapse_block":
+                    return True if cursor_block.is_block_expanded() else False
+                return cursor_block.can_expand()
+            return None if action == "expand_block" else False
+
+        return True
+
+    async def action_focus_terminal(self) -> None:
+        if self._terminal is not None:
+            self._terminal.focus()
+        else:
+            self.flash("Nothing to focus...", style="error")
+
+    async def action_expand_block(self) -> None:
+        if (cursor_block := self.cursor_block) is not None:
+            if isinstance(cursor_block, ExpandProtocol):
+                cursor_block.expand_block()
+                self.refresh_bindings()
+                self.call_after_refresh(self.cursor.follow, cursor_block)
+
+    async def action_collapse_block(self) -> None:
+        if (cursor_block := self.cursor_block) is not None:
+            if isinstance(cursor_block, ExpandProtocol):
+                cursor_block.collapse_block()
+                self.refresh_bindings()
+                self.call_after_refresh(self.cursor.follow, cursor_block)
+
+    async def action_toggle_expand(self) -> None:
+        if (cursor_block := self.cursor_block) is not None:
+            if isinstance(cursor_block, ExpandProtocol):
+                if cursor_block.is_block_expanded():
+                    cursor_block.collapse_block()
+                else:
+                    cursor_block.expand_block()
+                self.refresh_bindings()
+                self.call_after_refresh(self.cursor.follow, cursor_block)
+
+    async def action_fullscreen_block(self) -> None:
+        if (cursor_block := self.cursor_block) is not None:
+            fullscreen = getattr(cursor_block, "action_fullscreen", None)
+            if fullscreen:
+                fullscreen()
+                self.call_after_refresh(self.cursor.follow, cursor_block)
+
+    async def post_agent_response(self, fragment: str = "") -> AgentResponse | None:
+        """Get or create an agent response widget."""
+        from tui.widgets.agent_response import AgentResponse
+
+        async with self._post_lock:
+            if self._agent_response is None:
+                self._agent_response = agent_response = AgentResponse(fragment)
+                await self.post(agent_response, new_block=False)
+            else:
+                await self._agent_response.append_fragment(fragment)
+            return self._agent_response
+
+    def _complete_thought(self) -> None:
+        """Mark the current thought widget as completed and drop the reference."""
+        if self._agent_thought is not None:
+            self._agent_thought.mark_completed()
+            self._agent_thought = None
+
+    async def post_agent_thought(self, thought_fragment: str, *, replay: bool = False) -> AgentThought | None:
+        """Get or create an agent thought widget."""
+        from tui.widgets.agent_thought import AgentThought
+
+        async with self._post_lock:
+            if self._agent_thought is None:
+                if thought_fragment.strip():
+                    self._agent_thought = AgentThought(thought_fragment, replay=replay)
+                    await self.post(self._agent_thought, new_block=False)
+            else:
+                await self._agent_thought.append_fragment(thought_fragment)
+            return self._agent_thought
+
+    @property
+    def cursor_block(self) -> Widget | None:
+        """The block next to the cursor, or `None` if no block cursor."""
+        if self.cursor_offset == -1 or not self.contents.displayed_children:
+            return None
+        try:
+            block_widget = self.contents.displayed_children[self.cursor_offset]
+        except IndexError:
+            return None
+        return block_widget
+
+    @property
+    def cursor_block_child(self) -> Widget | None:
+        if (cursor_block := self.cursor_block) is not None:
+            if isinstance(cursor_block, BlockProtocol):
+                return cursor_block.get_cursor_block()
+        return cursor_block
+
+    def get_cursor_block[BlockType](
+        self, block_type: type[BlockType] = Widget
+    ) -> BlockType | None:
+        """Get the cursor block if it matches a type.
+
+        Args:
+            block_type: The expected type.
+
+        Returns:
+            The widget next to the cursor, or `None` if the types don't match.
+        """
+        cursor_block = self.cursor_block_child
+        if isinstance(cursor_block, block_type):
+            return cursor_block
+        return None
+
+    @on(AgentReady)
+    async def on_agent_ready(self) -> None:
+        self.session_start_time = monotonic()
+        if self.agent is not None:
+            content = Content.assemble(self.agent.get_info(), " connected")
+            self.flash(content, style="success")
+            if self._agent_data is not None:
+                self.app.capture_event(
+                    "agent-session-begin",
+                    agent=self._agent_data["identity"],
+                )
+            session_id = getattr(self.agent, "session_id", None) or self._agent_session_id or "unknown"
+            self._msg_log = MessageLog(
+                session_id=session_id,
+                agent_name=self.agent_title or "unknown",
+            )
+
+        self.agent_ready = True
+
+    async def on_unmount(self) -> None:
+        if self._msg_log is not None:
+            self._msg_log.close()
+        if self._directory_watcher is not None:
+            self._directory_watcher.stop()
+        if self.agent is not None:
+            await self.agent.stop()
+
+        if self._agent_data is not None and self.session_start_time is not None:
+            session_time = monotonic() - self.session_start_time
+            self.app.capture_event(
+                "agent-session-end",
+                agent=self._agent_data["identity"],
+                duration=session_time,
+                agent_session_fail=self._agent_fail,
+                shell_count=self._shell_count,
+                turn_count=self._turn_count,
+            )
+
+            session_id = getattr(self.agent, "session_id", None) or self._agent_session_id or ""
+            self.app._exit_metrics = {
+                "session_id": session_id,
+                "tool_call_total": self._tool_call_total,
+                "tool_call_success": self._tool_call_success,
+                "tool_call_failed": self._tool_call_failed,
+                "turn_count": self._turn_count,
+                "shell_count": self._shell_count,
+                "wall_time": session_time,
+                "agent_title": self.agent_title or "Agent",
+            }
+
+    @on(AgentFail)
+    async def on_agent_fail(self, message: AgentFail) -> None:
+        self.agent_ready = True
+        self._agent_fail = True
+        if self._msg_log is not None:
+            self._msg_log.error(message.message, turn=self._turn_count, details=message.details)
+        self.notify(message.message, title="Agent failure", severity="error", timeout=5)
+
+        if self._agent_data is not None:
+            self.app.capture_event(
+                "agent-session-error",
+                agent=self._agent_data["identity"],
+                message=message.message,
+                details=message.details,
+            )
+
+        if message.message:
+            error = Content.assemble(
+                Content.from_markup(message.message).stylize("$text-error"),
+                " — ",
+                Content.from_markup(message.details.strip()).stylize("dim"),
+            )
+        else:
+            error = Content.from_markup(message.details.strip()).stylize("$text-error")
+        await self.post(Note(error, classes="-error"))
+
+        from tui.widgets.markdown_note import MarkdownNote
+
+        if message.help in AGENT_FAIL_HELP:
+            help = AGENT_FAIL_HELP[message.help]
+        else:
+            help = AGENT_FAIL_HELP["fail"]
+
+        await self.post(MarkdownNote(help))
+
+    @on(messages.WorkStarted)
+    def on_work_started(self) -> None:
+        self.busy_count += 1
+
+    @on(messages.WorkFinished)
+    def on_work_finished(self) -> None:
+        self.busy_count -= 1
+
+    @work
+    @on(messages.ChangeMode)
+    async def on_change_mode(self, event: messages.ChangeMode) -> None:
+        await self.set_mode(event.mode_id)
+
+    @on(acp_messages.ModeUpdate)
+    def on_mode_update(self, event: acp_messages.ModeUpdate) -> None:
+        if (modes := self.modes) is not None:
+            if (mode := modes.get(event.current_mode)) is not None:
+                self.current_mode = mode
+
+    @on(messages.UserInputSubmitted)
+    async def on_user_input_submitted(self, event: messages.UserInputSubmitted) -> None:
+        if not event.body.strip():
+            return
+        if event.shell:
+            if await self.shell.is_busy():
+                if self.shell.terminal is not None:
+                    self.shell.terminal.focus(scroll_visible=False)
+                await self.shell.send_input(event.body, paste=True)
+            else:
+                await self.shell_history.append(event.body)
+                self.shell_history_index = 0
+                await self.post_shell(event.body)
+            self.window.scroll_end(animate=False)
+        elif text := event.body.strip():
+            await self.prompt_history.append(event.body)
+            self.prompt_history_index = 0
+            if text.startswith("/") and await self.slash_command(text):
+                # A2TUI has processed the slash command.
+                return
+
+            if self._pending_ask_user:
+                self._pending_ask_user = False
+                self.turn = "agent"
+                self.prompt.display = True
+                self.agent.send_ask_user_answer(text, cancelled=False)
+                await self.post(UserInput(text))
+                self.focus_prompt()
+                return
+
+            if self.turn == "agent":
+                self._pending_ask_user = False
+                self.prompt.display = True
+                self._pending_prompts.append(text)
+                self.prompt.pending_prompts = list(self._pending_prompts)
+                await self.post(UserInput(text))
+                self.window.scroll_end(animate=False)
+                self._loading = await self.post(Loading("Please wait..."), loading=True)
+                await asyncio.sleep(0)
+                if self._msg_log is not None:
+                    self._msg_log.user_input(text, self._turn_count)
+                return
+
+            await self.post(UserInput(text))
+            self.window.scroll_end(animate=False)
+            self._loading = await self.post(Loading("Please wait..."), loading=True)
+            await asyncio.sleep(0)
+            if self._msg_log is not None:
+                self._msg_log.user_input(text, self._turn_count)
+            self.send_prompt_to_agent(text)
+
+    async def _auto_name_session(self, prompt: str) -> None:
+        if self._auto_named_session or self.agent is None:
+            return
+
+        if self._agent_session_title not in ("", "New Session", "Untitled"):
+            self._auto_named_session = True
+            return
+
+        if self.agent.session_pk is None:
+            return
+
+        self._auto_named_session = True
+        name = prompt.strip().split("\n")[0][:60].strip()
+        if name:
+            await self.agent.set_session_name(name)
+
+    @work
+    async def send_prompt_to_agent(self, prompt: str) -> None:
+        if self.agent is not None:
+            await self._auto_name_session(prompt)
+            stop_reason: str | None = None
+            self.busy_count += 1
+            try:
+                self.turn = "agent"
+                stop_reason = await self.agent.send_prompt(prompt)
+            except jsonrpc.APIError as error:
+                from tui.widgets.markdown_note import MarkdownNote
+
+                self.turn = "client"
+                if self._msg_log is not None:
+                    self._msg_log.error(str(error), turn=self._turn_count)
+
+                message = error.message or "no details were provided"
+
+                await self.post(
+                    MarkdownNote(
+                        INTERNAL_EROR.replace("$ERROR", message),
+                        classes="-stop-reason",
+                    )
+                )
+            finally:
+                self.busy_count -= 1
+            await self._auto_name_session(prompt)
+            self.call_later(self.agent_turn_over, stop_reason)
+
+    async def agent_turn_over(self, stop_reason: str | None) -> None:
+        """Called when the agent's turn is over.
+
+        Args:
+            stop_reason: The stop reason returned from the Agent, or `None`.
+        """
+        self.turn = "client"
+        if self._loading is not None:
+            await self._loading.remove()
+        self._agent_response = None
+        self._complete_thought()
+
+        # Safety net: mark any still-active subagents as cancelled.
+        # Normal flow emits subagent_end before getting here, but
+        # cancellation or errors can leave widgets stuck in "running".
+        if self._active_subagents:
+            for sa in self._active_subagents.values():
+                sa.complete(status="cancelled", error="Turn ended")
+            self._active_subagents.clear()
+
+        if self._directory_changed or not self.is_watching_directory:
+            self._directory_changed = False
+            self.post_message(messages.ProjectDirectoryUpdated(project_dir=self.app.project_dir))
+            self.prompt.project_directory_updated()
+
+        self._turn_count += 1
+
+        if self._msg_log is not None:
+            self._msg_log.turn_end(self._turn_count, stop_reason)
+
+        self.post_message(messages.SessionUpdate(state="idle"))
+
+        if stop_reason != "end_turn":
+            from tui.widgets.markdown_note import MarkdownNote
+
+            agent = (self.agent_title or "agent").title()
+
+            if stop_reason == "max_tokens":
+                await self.post(
+                    MarkdownNote(
+                        STOP_REASON_MAX_TOKENS.replace("$AGENT", agent),
+                        classes="-stop-reason",
+                    )
+                )
+            elif stop_reason == "max_turn_requests":
+                await self.post(
+                    MarkdownNote(
+                        STOP_REASON_MAX_TURN_REQUESTS.replace("$AGENT", agent),
+                        classes="-stop-reason",
+                    )
+                )
+            elif stop_reason == "refusal":
+                await self.post(
+                    MarkdownNote(
+                        STOP_REASON_REFUSAL.replace("$AGENT", agent),
+                        classes="-stop-reason",
+                    )
+                )
+            elif stop_reason == "cancelled":
+                # The agent genuinely stopped — only now is the earlier
+                # "Cancel requested…" flash confirmed.
+                self.flash("Turn cancelled", style="success")
+
+        if self.app.settings.get("notifications.turn_over", bool):
+            self.app.system_notify(
+                f"{self.agent_title} has finished working",
+                title="Waiting for input",
+                sound="turn-over",
+            )
+
+        if self._pending_prompts:
+            next_prompt = self._pending_prompts.pop(0)
+            self.prompt.pending_prompts = list(self._pending_prompts)
+            await self.post(UserInput(next_prompt))
+            self.window.scroll_end(animate=False)
+            self._loading = await self.post(Loading("Please wait..."), loading=True)
+            await asyncio.sleep(0)
+            if self._msg_log is not None:
+                self._msg_log.user_input(next_prompt, self._turn_count)
+            self.send_prompt_to_agent(next_prompt)
+
+    @on(Menu.OptionSelected)
+    async def on_menu_option_selected(self, event: Menu.OptionSelected) -> None:
+        event.stop()
+        event.menu.display = False
+        if event.action is not None:
+            await self.run_action(event.action, {"block": event.owner})
+        if (cursor_block := self.get_cursor_block()) is not None:
+            self.call_after_refresh(self.cursor.follow, cursor_block)
+        self.call_after_refresh(event.menu.remove)
+
+    @on(Menu.Dismissed)
+    async def on_menu_dismissed(self, event: Menu.Dismissed) -> None:
+        event.stop()
+        if event.menu.has_focus:
+            self.window.focus(scroll_visible=False)
+        await event.menu.remove()
+
+    @on(CurrentWorkingDirectoryChanged)
+    def on_current_working_directory_changed(
+        self, event: CurrentWorkingDirectoryChanged
+    ) -> None:
+        self.working_directory = str(Path(event.path).resolve().absolute())
+
+    async def watch_busy_count(self, busy: int) -> None:
+        if (throbber := self.query_one_optional("#throbber")) is not None:
+            throbber.set_class(busy > 0, "-busy")
+
+    @on(acp_messages.ContextUpdate)
+    async def on_context_update(self, message: acp_messages.ContextUpdate):
+        message.stop()
+        from tui.widgets.context_stats import ContextStats
+        if stats := self.screen.query_one_optional("#context-stats", ContextStats):
+            stats.update_stats(message.used, message.size)
+
+    @on(acp_messages.UpdateStatusLine)
+    async def on_update_status_line(self, message: acp_messages.UpdateStatusLine):
+        self.status = message.status_line
+
+    @on(acp_messages.Update)
+    async def on_acp_agent_message(self, message: acp_messages.Update):
+        message.stop()
+        if self._replay:
+            self._replay_buffer.append({"kind": "agent_text", "text": message.text})
+            return
+        self._complete_thought()
+        if self._msg_log is not None:
+            self._msg_log.agent_output(message.text, self._turn_count)
+        await self.post_agent_response(message.text)
+
+    @on(acp_messages.UserMessage)
+    async def on_acp_user_message(self, message: acp_messages.UserMessage):
+        message.stop()
+        if self._replay:
+            self._replay_buffer.append({"kind": "user", "text": message.text})
+            return
+        self._complete_thought()
+        self._agent_response = None
+        await self.post(UserInput(message.text))
+
+    @on(acp_messages.Thinking)
+    async def on_acp_agent_thinking(self, message: acp_messages.Thinking):
+        message.stop()
+        if self._replay:
+            self._replay_buffer.append({"kind": "thought", "text": message.text})
+            return
+        if self._msg_log is not None:
+            self._msg_log.agent_thought(message.text, self._turn_count)
+        await self.post_agent_thought(message.text, replay=self._replay)
+
+    @on(acp_messages.SessionReplay)
+    def on_acp_session_replay(self, message: acp_messages.SessionReplay):
+        """Mark a session replay boundary so thought chunks are shown as completed."""
+        message.stop()
+        was_replay = self._replay
+        self._replay = message.active
+        # When the replay just ended, flush buffer and complete any pending thought.
+        if was_replay and not message.active:
+            if message.total_messages > 0:
+                self._total_messages = message.total_messages
+                self._visible_count = message.visible_count
+                self._loaded_up_to = message.total_messages - message.visible_count
+            self.call_after_refresh(self._flush_replay_buffer)
+            self._complete_thought()
+
+    @work(thread=False)
+    async def _flush_replay_buffer(self) -> None:
+        """Process all buffered replay entries in one batch mount."""
+        if not self._replay_buffer:
+            return
+        from tui.widgets.agent_response import AgentResponse
+        from tui.widgets.agent_thought import AgentThought
+        from tui.widgets.tool_call import ToolCall
+        from tui.widgets.plan import Plan
+        from tui.widgets.subagent import SubAgent
+
+        created_subagents: dict[str, SubAgent] = {}
+        current_thought: AgentThought | None = None
+        widgets: list[Widget] = []
+        seen_tool_ids: set[str] = set()
+        seen_ask_user_ids: set[str] = set()
+
+        for entry in self._replay_buffer:
+            match entry["kind"]:
+                case "user":
+                    current_thought = None
+                    self._complete_thought()
+                    self._agent_response = None
+                    widgets.append(UserInput(entry["text"]))
+
+                case "agent_text":
+                    current_thought = None
+                    self._complete_thought()
+                    self._agent_response = None
+                    widgets.append(AgentResponse(entry["text"]))
+
+                case "thought":
+                    if current_thought is None:
+                        current_thought = AgentThought(entry["text"], replay=True)
+                        widgets.append(current_thought)
+                    else:
+                        current_thought.append_fragment(entry["text"])
+
+                case "tool_call":
+                    tool_id = entry["tool_id"]
+                    if tool_id in seen_tool_ids:
+                        continue
+                    seen_tool_ids.add(tool_id)
+                    current_thought = None
+                    self.new_block()
+                    widgets.append(ToolCall(entry["tool_call"], id=tool_id))
+
+                case "plan":
+                    current_thought = None
+                    self.new_block()
+                    widgets.append(Plan(_plan_entries_from_dicts(entry["entries"])))
+
+                case "subagent_start":
+                    current_thought = None
+                    self.new_block()
+                    sa = SubAgent(entry["agent_type"], tool_id=entry["id"], prompt=entry.get("prompt", ""))
+                    created_subagents[entry["id"]] = sa
+                    widgets.append(sa)
+
+                case "subagent_chunk":
+                    sa = created_subagents.get(entry["id"])
+                    if sa is not None:
+                        sa.append_chunk(entry["text"])
+
+                case "subagent_thinking":
+                    sa = created_subagents.get(entry["id"])
+                    if sa is not None:
+                        sa.append_thinking(entry["text"])
+
+                case "subagent_end":
+                    sa = created_subagents.get(entry["id"])
+                    if sa is not None:
+                        sa.complete(
+                            entry.get("status", "completed"),
+                            entry.get("error", ""),
+                        )
+
+                case "subagent_tool_call":
+                    sa = created_subagents.get(entry["id"])
+                    if sa is not None:
+                        await sa.add_or_update_tool_call(
+                            entry["tool_id"], entry["tool_call"]
+                        )
+
+                case "ask_user":
+                    ask_id = entry["tool_id"]
+                    if ask_id in seen_ask_user_ids:
+                        continue
+                    seen_ask_user_ids.add(ask_id)
+                    current_thought = None
+                    self.new_block()
+                    widgets.append(AskUserWidget(
+                        ask_id,
+                        question=entry["question"],
+                        options=entry.get("options", []),
+                        questions=entry.get("questions", []),
+                    ))
+
+        if self._loaded_up_to > 0 and self._flush_append_at is None:
+            load_more = LoadMoreIndicator(count=self._loaded_up_to)
+            widgets.insert(0, load_more)
+            self._load_more_widget = load_more
+
+        if widgets:
+            insert_before = self._flush_append_at
+            if insert_before is not None:
+                await self.contents.mount(*widgets, before=insert_before)
+                self._loaded_up_to = max(0, self._loaded_up_to - len(widgets))
+                if self._loaded_up_to > 0:
+                    lm = LoadMoreIndicator(count=self._loaded_up_to)
+                    self._load_more_widget = lm
+                    await self.contents.mount(lm, before=len(widgets))
+                self._flush_append_at = None
+            else:
+                await self.contents.mount(*widgets)
+        self._replay_buffer.clear()
+        self._complete_thought()
+        self.window.scroll_end_if_following(animate=False)
+
+    @on(LoadMoreIndicator.LoadMorePressed)
+    async def on_load_more_pressed(self, message: LoadMoreIndicator.LoadMorePressed) -> None:
+        message.stop()
+        if self._loaded_up_to <= 0:
+            return
+        batch_size = 50
+        start = max(0, self._loaded_up_to - batch_size)
+        limit = self._loaded_up_to - start
+        if limit <= 0:
+            return
+
+        if self._load_more_widget is not None:
+            await self._load_more_widget.remove()
+            self._load_more_widget = None
+
+        loading = Static("  Loading earlier messages...  ")
+        await self.contents.mount(loading, before=0)
+
+        self._flush_append_at = 0
+        self.post_message(acp_messages.SessionReplay(active=True))
+        await self.agent.acp_load_earlier_messages(offset=start, limit=limit)
+        self.post_message(acp_messages.SessionReplay(active=False))
+        await loading.remove()
+
+    @on(acp_messages.RequestPermission)
+    async def on_acp_request_permission(self, message: acp_messages.RequestPermission):
+        message.stop()
+        options = [
+            Answer(option["name"], option["optionId"], option["kind"])
+            for option in message.options
+        ]
+        self.request_permissions(
+            message.result_future,
+            options,
+            message.tool_call,
+        )
+        self._agent_response = None
+        self._complete_thought()
+
+    @on(acp_messages.AskUser)
+    async def on_acp_ask_user(self, message: acp_messages.AskUser):
+        message.stop()
+        if self._replay:
+            tool_id = message.tool_id
+            for existing in self._replay_buffer:
+                if existing.get("kind") == "ask_user" and existing.get("tool_id") == tool_id:
+                    return
+            self._replay_buffer.append({
+                "kind": "ask_user",
+                "tool_id": tool_id,
+                "question": message.question,
+                "options": message.options or [],
+                "questions": message.questions or [],
+            })
+            return
+
+        # Single free-text question (no options, no questions) → skip widget,
+        # let user type directly in the Prompt Input.
+        has_options = bool(message.options) or bool(message.questions)
+        if not has_options:
+            self.turn = "client"
+            self._pending_ask_user = True
+            self.prompt.display = True
+            self.window.scroll_end(animate=False)
+            return
+
+        # If a previous ask_user is still open, remove it before posting the
+        # new one — otherwise widgets stack up and the user's answer becomes
+        # ambiguous about which question it targets.
+        if self._pending_ask_user:
+            try:
+                existing = self.contents.get_child_by_id(
+                    message.tool_id, AskUserWidget
+                )
+            except Exception:
+                existing = None
+            if existing is not None:
+                try:
+                    await existing.remove()
+                except Exception:
+                    pass
+
+        self.window.scroll_end(animate=False)
+
+        # Hand control back to the user: switch turn out of "agent" so that
+        # on_user_input_submitted routes the next input to send_ask_user_answer
+        # rather than appending it to _pending_prompts as a brand-new task.
+        self.turn = "client"
+        if self._loading is not None:
+            try:
+                await self._loading.remove()
+            except Exception:
+                pass
+            self._loading = None
+
+        self._pending_ask_user = True
+        self.busy_count -= 1
+
+        widget = AskUserWidget(
+            message.tool_id,
+            question=message.question,
+            options=message.options or [],
+            questions=message.questions or [],
+            checkpoint_id=message.checkpoint_id,
+        )
+        await self.post(widget, new_block=True)
+        self.prompt.display = False
+        self._agent_response = None
+        self._complete_thought()
+        self.call_after_refresh(lambda: self.window.scroll_end(animate=False))
+
+    @on(acp_messages.AwaitingUserInput)
+    async def on_acp_awaiting_user_input(self, message: acp_messages.AwaitingUserInput):
+        """The agent yielded control to the user without invoking AskUser.
+
+        Switch turn out of "agent" so the next user_input_submitted is treated
+        as a reply to the question currently on screen rather than queued as a
+        fresh prompt. Streaming output is intentionally NOT cancelled.
+        """
+        message.stop()
+        if self._replay:
+            return
+        self.turn = "client"
+        if self._loading is not None:
+            try:
+                await self._loading.remove()
+            except Exception:
+                pass
+            self._loading = None
+        self._complete_thought()
+
+    @on(AskUserSubmitted)
+    async def on_ask_user_submitted(self, message: AskUserSubmitted) -> None:
+        message.stop()
+        self._pending_ask_user = False
+        self.busy_count += 1
+
+        # Widget already removed by _finish() in ask_user.py
+        try:
+            existing = self.contents.get_child_by_id(
+                message.tool_id, AskUserWidget
+            )
+            if existing is not None:
+                await existing.remove()
+        except Exception:
+            pass
+
+        rollback = message.value == "__rollback__"
+
+        # Post answer to conversation as a user message
+        if not rollback:
+            await self.post(UserInput(message.value))
+
+        if self.agent is not None:
+            self.agent.send_ask_user_answer(
+                "" if rollback else message.value,
+                cancelled=False,
+                rollback=rollback,
+            )
+
+        self.prompt.display = True
+        self.focus_prompt()
+        self.turn = "agent"
+
+    @on(acp_messages.Plan)
+    async def on_acp_plan(self, message: acp_messages.Plan):
+        if self._replay:
+            self._replay_buffer.append({"kind": "plan", "entries": message.entries})
+            return
+        from tui.widgets.plan import Plan
+
+        entries = _plan_entries_from_dicts(message.entries)
+
+        # Look up any existing Plan widget anywhere in the conversation
+        # tree — checking only ``children[-1]`` would create duplicates if
+        # a ToolCall/SubAgent was posted after the Plan.
+        try:
+            existing_plan = self.query(Plan).first()
+        except NoMatches:
+            existing_plan = None
+        if existing_plan is not None:
+            if entries:
+                existing_plan.entries = entries
+            else:
+                # An empty snapshot at the start of a turn means "no
+                # plan yet for this turn".  Remove the stale inline
+                # widget from the previous turn so we don't keep
+                # rendering its "No plan yet" placeholder once a new
+                # turn has begun.
+                await existing_plan.remove()
+        elif entries:
+            await self.post(Plan(entries))
+
+    @on(acp_messages.ToolCallUpdate)
+    @on(acp_messages.ToolCall)
+    async def on_acp_tool_call_update(
+        self, message: acp_messages.ToolCall | acp_messages.ToolCallUpdate
+    ):
+        from tui.widgets.tool_call import ToolCall
+
+        tool_call = message.tool_call
+        status = tool_call.get("status", "")
+
+        if tool_call.get("title") == "AskUser":
+            return
+        tool_id = message.tool_id
+
+        # Tools invoked *inside* a subagent carry a ``subagentId`` (the parent
+        # Spawn toolCallId). Render them as ToolCall cards INSIDE the owning
+        # SubAgent widget (same style as main-conversation tools) instead of
+        # the main conversation.
+        subagent_id = tool_call.get("subagentId")
+        if subagent_id:
+            if self._replay:
+                self._replay_buffer.append({
+                    "kind": "subagent_tool_call",
+                    "id": subagent_id,
+                    "tool_id": tool_id,
+                    "tool_call": tool_call,
+                })
+                return
+            sa = self._get_subagent(subagent_id)
+            if sa is not None:
+                await sa.add_or_update_tool_call(tool_id, tool_call)
+            return
+
+        if self._replay:
+            if isinstance(message, acp_messages.ToolCall):
+                # Avoid duplicate tool_call entries with the same tool_id.
+                for existing in self._replay_buffer:
+                    if existing.get("kind") == "tool_call" and existing.get("tool_id") == tool_id:
+                        break
+                else:
+                    self._replay_buffer.append({"kind": "tool_call", "tool_call": tool_call, "tool_id": tool_id})
+            else:
+                # ToolCallUpdate during replay: merge result content/status/title
+                # into the corresponding buffered tool_call entry. If no match,
+                # create a new entry from the update data.
+                matched = False
+                for entry in self._replay_buffer:
+                    if entry.get("kind") == "tool_call" and entry.get("tool_id") == tool_id:
+                        new_content = tool_call.get("content", [])
+                        if new_content:
+                            entry["tool_call"]["content"] = new_content
+                        if status:
+                            entry["tool_call"]["status"] = status
+                        new_title = tool_call.get("title", "")
+                        if new_title:
+                            entry["tool_call"]["title"] = new_title
+                        matched = True
+                        break
+                if not matched:
+                    self._replay_buffer.append({"kind": "tool_call", "tool_call": tool_call, "tool_id": tool_id})
+            return
+
+        content = tool_call.get("content", None) or []
+
+        logger.debug(
+            "on_acp_tool_call_update: type=%s id=%s status=%s content_blocks=%d",
+            type(message).__name__, tool_id, status, len(content),
+        )
+
+        if isinstance(message, acp_messages.ToolCall):
+            if self._msg_log is not None:
+                self._msg_log.tool_call(
+                    tool_call.get("title", "unknown"),
+                    tool_call.get("toolCallId", ""),
+                    self._turn_count,
+                )
+            if tool_id not in self._tool_call_finalized:
+                self._tool_call_total += 1
+
+        if status in ("completed", "failed") and tool_id not in self._tool_call_finalized:
+            self._tool_call_finalized.add(tool_id)
+            if self._msg_log is not None:
+                self._msg_log.tool_result(
+                    tool_call.get("title", "unknown"),
+                    tool_call.get("toolCallId", ""),
+                    self._turn_count,
+                    status=status,
+                )
+            if status == "completed":
+                self._tool_call_success += 1
+            else:
+                self._tool_call_failed += 1
+
+        if status == "completed":
+            self._complete_thought()
+            self._agent_response = None
+
+        try:
+            existing_tool_call: ToolCall | None = self.contents.get_child_by_id(
+                tool_id, ToolCall
+            )
+        except NoMatches:
+            widget = await self.post(ToolCall(tool_call, id=message.tool_id), new_block=True)
+            await widget.update_tool_call(tool_call)
+            logger.debug(
+                "  => created new ToolCall widget, mounted %d content blocks",
+                len(content),
+            )
+        else:
+            if existing_tool_call is not None:
+                await existing_tool_call.update_tool_call(tool_call)
+
+    @on(acp_messages.SubAgentStart)
+    async def on_acp_subagent_start(self, message: acp_messages.SubAgentStart):
+        from tui.widgets.subagent import SubAgent
+
+        message.stop()
+        logger.debug(
+            "[TUI-SUBagent] on_start id=%s type=%s prompt_len=%d replay=%s",
+            message.subagent_id, message.agent_type,
+            len(message.prompt or ""), self._replay,
+        )
+        if self._replay:
+            self._replay_buffer.append({"kind": "subagent_start", "agent_type": message.agent_type, "id": message.subagent_id, "prompt": message.prompt})
+            return
+        sa = SubAgent(message.agent_type, tool_id=message.subagent_id, prompt=message.prompt)
+        self._active_subagents[message.subagent_id] = sa
+        await self.post(sa, new_block=True)
+        logger.debug("[TUI-SUBagent] on_start posted SubAgent id=%s", message.subagent_id)
+
+    def _get_subagent(self, subagent_id: str):
+        from tui.widgets.subagent import SubAgent
+
+        sa = self._active_subagents.get(subagent_id)
+        if sa is not None:
+            return sa
+        try:
+            return self.contents.get_child_by_id(subagent_id, SubAgent)
+        except NoMatches:
+            return None
+
+    @on(acp_messages.SubAgentChunk)
+    async def on_acp_subagent_chunk(self, message: acp_messages.SubAgentChunk):
+        message.stop()
+        sa = self._get_subagent(message.subagent_id)
+        _cnt = (sa._chunk_count_log + 1) if sa else 0
+        if sa:
+            sa._chunk_count_log = _cnt
+        if _cnt <= 5 or _cnt % 50 == 0:
+            logger.debug(
+                "[TUI-SUBagent] on_chunk id=%s chunk#%d bytes=%d sa=%s",
+                message.subagent_id, _cnt, len(message.text or ""),
+                "yes" if sa else "MISSING",
+            )
+        if self._replay:
+            self._replay_buffer.append({"kind": "subagent_chunk", "id": message.subagent_id, "text": message.text})
+            return
+        if sa is not None:
+            sa.append_chunk(message.text)
+
+    @on(acp_messages.SubAgentThinking)
+    async def on_acp_subagent_thinking(self, message: acp_messages.SubAgentThinking):
+        message.stop()
+        if self._replay:
+            self._replay_buffer.append({
+                "kind": "subagent_thinking",
+                "id": message.subagent_id,
+                "text": message.text,
+            })
+            return
+        sa = self._get_subagent(message.subagent_id)
+        if sa is not None:
+            sa.append_thinking(message.text)
+
+    @on(acp_messages.SubAgentEnd)
+    async def on_acp_subagent_end(self, message: acp_messages.SubAgentEnd):
+        message.stop()
+        logger.debug(
+            "[TUI-SUBagent] on_end id=%s status=%s err=%r active=%s "
+            "chunks=%d bytes=%d",
+            message.subagent_id, message.status, (message.error or "")[:80],
+            message.subagent_id in self._active_subagents,
+            (self._get_subagent(message.subagent_id)._chunk_count_log
+             if self._get_subagent(message.subagent_id) else 0),
+            (self._get_subagent(message.subagent_id)._byte_count_log
+             if self._get_subagent(message.subagent_id) else 0),
+        )
+        if self._replay:
+            self._replay_buffer.append({
+                "kind": "subagent_end",
+                "id": message.subagent_id,
+                "status": message.status,
+                "error": message.error,
+            })
+            return
+        sa = self._get_subagent(message.subagent_id)
+        if sa is not None:
+            sa.complete(message.status, message.error)
+            self._active_subagents.pop(message.subagent_id, None)
+
+    @on(acp_messages.AvailableCommandsUpdate)
+    async def on_acp_available_commands_update(
+        self, message: acp_messages.AvailableCommandsUpdate
+    ):
+        slash_commands: list[SlashCommand] = []
+        for available_command in message.commands:
+            input = available_command.get("input", {}) or {}
+            slash_command = SlashCommand(
+                f"/{available_command['name']}",
+                available_command["description"],
+                hint=input.get("hint"),
+            )
+            slash_commands.append(slash_command)
+        self.agent_slash_commands = slash_commands
+        self.update_slash_commands()
+
+    def get_terminal(self, terminal_id: str) -> TerminalTool | None:
+        """Get a terminal from its id.
+
+        Args:
+            terminal_id: ID of the terminal.
+
+        Returns:
+            Terminal instance, or `None` if no terminal was found.
+        """
+        from tui.widgets.terminal_tool import TerminalTool
+
+        try:
+            terminal = self.contents.query_one(f"#{terminal_id}", TerminalTool)
+        except NoMatches:
+            return None
+        if terminal.released:
+            return None
+        return terminal
+
+    async def action_interrupt(self) -> None:
+        terminal = self._terminal
+        if terminal is not None and not terminal.is_finalized:
+            await self.shell.interrupt()
+            # self._shell = None
+            self.flash("Command interrupted", style="success")
+        else:
+            raise SkipAction()
+
+    def action_focus_block(self, block_id: str) -> None:
+        with suppress(NoMatches):
+            self.query_one(f"#{block_id}").focus()
+
+    @work
+    @on(acp_messages.CreateTerminal)
+    async def on_acp_create_terminal(self, message: acp_messages.CreateTerminal):
+        from tui.widgets.terminal_tool import TerminalTool, Command
+
+        command = Command(
+            message.command,
+            message.args or [],
+            message.env or {},
+            message.cwd or str(self.project_path),
+        )
+        width = self.window.size.width - 5 - self.window.styles.scrollbar_size_vertical
+        height = self.window.scrollable_content_region.height - 2
+
+        terminal = TerminalTool(
+            command,
+            output_byte_limit=message.output_byte_limit,
+            id=message.terminal_id,
+            minimum_terminal_width=width,
+        )
+        self.terminals[message.terminal_id] = terminal
+        terminal.display = False
+
+        try:
+            await terminal.start(width, height)
+        except Exception as error:
+            log(str(error))
+            message.result_future.set_result(False)
+            return
+
+        try:
+            await self.post(terminal)
+        except Exception:
+            message.result_future.set_result(False)
+        else:
+            message.result_future.set_result(True)
+
+    @on(acp_messages.KillTerminal)
+    async def on_acp_kill_terminal(self, message: acp_messages.KillTerminal):
+        if (terminal := self.get_terminal(message.terminal_id)) is not None:
+            terminal.kill()
+
+    @on(acp_messages.GetTerminalState)
+    def on_acp_get_terminal_state(self, message: acp_messages.GetTerminalState):
+        if (terminal := self.get_terminal(message.terminal_id)) is None:
+            message.result_future.set_exception(
+                KeyError(f"No terminal with id {message.terminal_id!r}")
+            )
+        else:
+            message.result_future.set_result(terminal.tool_state)
+
+    @on(acp_messages.ReleaseTerminal)
+    def on_acp_terminal_release(self, message: acp_messages.ReleaseTerminal):
+        if (terminal := self.get_terminal(message.terminal_id)) is not None:
+            terminal.kill()
+            terminal.release()
+
+    @work
+    @on(acp_messages.WaitForTerminalExit)
+    async def on_acp_wait_for_terminal_exit(
+        self, message: acp_messages.WaitForTerminalExit
+    ):
+        if (terminal := self.get_terminal(message.terminal_id)) is None:
+            message.result_future.set_exception(
+                KeyError(f"No terminal with id {message.terminal_id!r}")
+            )
+        else:
+            return_code, signal = await terminal.wait_for_exit()
+            message.result_future.set_result((return_code or 0, signal))
+
+    async def set_mode(self, mode_id: str | None) -> None:
+        """Set the mode give its id (if it exists).
+
+        Args:
+            mode_id: Id of mode.
+
+        Returns:
+            `True` if the mode was changed, `False` if it didn't exist.
+        """
+        if (agent := self.agent) is None:
+            return
+        if mode_id is None:
+            self.current_mode = None
+        else:
+            if (error := await agent.set_mode(mode_id)) is not None:
+                self.notify(error, title="Set Mode", severity="error")
+            elif (new_mode := self.modes.get(mode_id)) is not None:
+                self.current_mode = new_mode
+                self.flash(
+                    Content.from_markup("Mode changed to [b]$mode", mode=new_mode.name),
+                    style="success",
+                )
+
+    @on(acp_messages.SetModes)
+    async def on_acp_set_modes(self, message: acp_messages.SetModes):
+        print(f"[DEBUG on_acp_set_modes] current_mode={message.current_mode!r}, modes={list(message.modes.keys())!r}", flush=True)
+        self.modes = message.modes
+        self.current_mode = self.modes[message.current_mode]
+        print(f"[DEBUG on_acp_set_modes] done. self.modes={list(self.modes.keys())!r}", flush=True)
+
+    @on(messages.HistoryMove)
+    async def on_history_move(self, message: messages.HistoryMove) -> None:
+        message.stop()
+        if message.shell:
+            await self.shell_history.open()
+
+            if self.shell_history_index == 0:
+                current_shell_command = ""
+            else:
+                current_shell_command = (
+                    await self.shell_history.get_entry(self.shell_history_index)
+                )["input"]
+            while True:
+                self.shell_history_index += message.direction
+                new_entry = await self.shell_history.get_entry(self.shell_history_index)
+                if (new_entry)["input"] != current_shell_command:
+                    break
+                if message.direction == +1 and self.shell_history_index == 0:
+                    break
+                if (
+                    message.direction == -1
+                    and self.shell_history_index <= -self.shell_history.size
+                ):
+                    break
+        else:
+            await self.prompt_history.open()
+            self.prompt_history_index += message.direction
+
+    @work
+    async def request_permissions(
+        self,
+        result_future: Future[Answer],
+        options: list[Answer],
+        tool_call_update: acp_protocol.ToolCallUpdatePermissionRequest,
+    ) -> None:
+        kind = tool_call_update.get("kind", None)
+        title = tool_call_update.get("title", "") or ""
+
+        contents = tool_call_update.get("content", []) or []
+        # If all the content is diffs, we will set kind to "edit" to show the permisisons screen
+        for content in contents:
+            if content.get("type") != "diff":
+                break
+        else:
+            kind = "edit"
+
+        self.post_message(messages.SessionUpdate(state="asking"))
+
+        if kind == "edit":
+            diffs: list[tuple[str, str, str | None, str]] = []
+
+            contents = tool_call_update.get("content", []) or []
+            for content in contents:
+                match content:
+                    case {
+                        "type": "diff",
+                        "oldText": old_text,
+                        "newText": new_text,
+                        "path": path,
+                    }:
+                        diffs.append((path, path, old_text, new_text))
+
+            if diffs:
+                from tui.screens.permissions import PermissionsScreen
+
+                self.app.terminal_alert()
+                self.app.system_notify(
+                    f"{self.agent_title} would like to write files",
+                    title="Permissions request",
+                    sound="question",
+                )
+                permissions_screen = PermissionsScreen(
+                    options, diffs, agent_name=self.agent_title or "The Agent"
+                )
+                result = await self.app.push_screen_wait(
+                    permissions_screen, mode=self.screen.id
+                )
+                self.post_message(messages.SessionUpdate(state="busy"))
+                self.app.terminal_alert(False)
+                result_future.set_result(result)
+                return
+
+        from tui.widgets.acp_content import ACPToolCallContent, _header_path
+
+        def answer_callback(answer: Answer) -> None:
+            try:
+                result_future.set_result(answer)
+            except Exception:
+                # I've seen this occur in shutdown with an `InvalidStateError`
+                pass
+
+            if not self.prompt.ask_queue:
+                self.post_message(messages.SessionUpdate(state="busy"))
+
+        tool_call_content = tool_call_update.get("content", None) or []
+        fname = _header_path(tool_call_content)
+        question_title = f"{title} — {fname}" if fname else title
+        if kind == "edit":
+            question_title = question_title or "Apply changes to file"
+        else:
+            question_title = question_title or f"Execute {kind} operation?"
+        self.ask(
+            options,
+            question_title,
+            (
+                partial(ACPToolCallContent, tool_call_content)
+                if tool_call_content
+                else None
+            ),
+            answer_callback,
+        )
+        return
+
+    async def post_tool_call(
+        self, tool_call_update: acp_protocol.ToolCallUpdate
+    ) -> None:
+        if (contents := tool_call_update.get("content")) is None:
+            return
+
+        for content in contents:
+            match content:
+                case {
+                    "type": "diff",
+                    "oldText": old_text,
+                    "newText": new_text,
+                    "path": path,
+                }:
+                    await self.post_diff(path, old_text, new_text)
+
+    async def post_diff(self, path: str, before: str | None, after: str) -> None:
+        """Post a diff view.
+
+        Args:
+            path: Path to the file.
+            before: Content of file before edit.
+            after: Content of file after edit.
+        """
+
+        from tui.widgets.diff_view import make_diff
+
+        diff_view = make_diff(path, path, before, after, classes="block")
+        await self.post(diff_view)
+
+    def ask(
+        self,
+        options: list[Answer],
+        title: str = "",
+        get_content: Callable[[], Widget] | None = None,
+        callback: Callable[[Answer], Any] | None = None,
+    ) -> None:
+        """Replace the prompt with a dialog to ask a question
+
+        Args:
+            question: Question to ask or empty string to omit.
+            options: A list of (ANSWER, ANSWER_ID) tuples.
+            callback: Optional callable that will be invoked with the result.
+        """
+        from tui.widgets.question import Ask
+
+        self.agent_info
+
+        if self.agent_title:
+            notify_title = f"[{self.agent_title}] {title}"
+        else:
+            notify_title = title
+        notify_message = "\n".join(f" • {option.text}" for option in options)
+        self.app.system_notify(notify_message, title=notify_title, sound="question")
+
+        self.prompt.ask(Ask(title, options, get_content, callback))
+
+    def _build_slash_commands(self) -> list[SlashCommand]:
+        slash_commands = [
+            SlashCommand("/exit", "Exit A2TUI"),
+            SlashCommand("/about", "About A2TUI"),
+            SlashCommand(
+                "/clear",
+                "Clear conversation window",
+                "<optional number of lines to preserve>",
+            ),
+            SlashCommand(
+                "/session",
+                "Session commands: list, load, new, close, rename",
+                "<list|load|new|close|rename> [args]",
+            ),
+            SlashCommand(
+                "/aidlc",
+                "AIDLC commands: project, phase, gate, sync, update",
+                "<project|phase|gate|sync|update> [args]",
+            ),
+            SlashCommand(
+                "/trace",
+                "Open the structured trace viewer",
+            ),
+            SlashCommand(
+                "/engine",
+                "Open the agent/engine selection screen",
+            ),
+            SlashCommand(
+                "/cls",
+                "Search TCB/SCF logs via CLS (requestId tracing)",
+                "<--request-id ID --function NAME>",
+            ),
+            SlashCommand(
+                "/diff",
+                "Show project diff (git working tree changes)",
+            ),
+            SlashCommand(
+                "/ide",
+                "Open built-in code editor",
+                "[filepath]",
+            ),
+        ]
+
+        slash_commands.extend(platform_commands.get_slash_commands())
+        slash_commands.extend(self.agent_slash_commands)
+        deduplicated_slash_commands = {
+            slash_command.command: slash_command for slash_command in slash_commands
+        }
+        slash_commands = sorted(
+            deduplicated_slash_commands.values(), key=attrgetter("command")
+        )
+        return slash_commands
+
+    def update_slash_commands(self) -> None:
+        """Update slash commands, which may have changed since mounting."""
+        self.prompt.slash_commands = self._build_slash_commands()
+
+    async def on_mount(self) -> None:
+        self.trap_focus()
+        self.prompt.focus()
+        self.prompt.slash_commands = self._build_slash_commands()
+        self.call_after_refresh(self.post_welcome)
+        self.app.settings_changed_signal.subscribe(self, self._settings_changed)
+
+        self.shell_history.complete.add_words(
+            self.app.settings.get("shell.allow_commands", expect_type=str).split()
+        )
+        self.shell
+
+        if self._agent_data is not None:
+            commands_prefix = self._agent_data.get("commands_prefix", "")
+            platform_commands.set_prefix(commands_prefix)
+            commands_module = self._agent_data.get("commands_module", "")
+            if commands_module:
+                import importlib
+                try:
+                    mod = importlib.import_module(commands_module)
+                    mod.register_commands()
+                except Exception:
+                    log.warning(f"Failed to load commands from {commands_module}")
+            self.prompt.slash_commands = self._build_slash_commands()
+
+            async def start_agent() -> None:
+                """Start the agent after refreshing the UI."""
+                assert self._agent_data is not None
+                from tui.acp.agent import Agent
+
+                self.agent = Agent(
+                    self.project_path,
+                    self._agent_data,
+                    self._agent_session_id,
+                    self._session_pk,
+                    default_model=self.app.settings.get("model", str),
+                )
+                await self.agent.start(self)
+
+            self.call_after_refresh(start_agent)
+
+        else:
+            self.agent_ready = True
+
+        self.update_title()
+        self.window.anchor()
+
+    def _settings_changed(self, setting_item: tuple[str, str]) -> None:
+        key, value = setting_item
+        if key == "shell.allow_commands":
+            self.shell_history.complete.add_words(value.split())
+
+    @work
+    async def post_welcome(self) -> None:
+        """Post any welcome content."""
+
+    def watch_agent(self, agent: AgentBase | None) -> None:
+        if agent is None:
+            self.agent_info = Content.styled("shell")
+        else:
+            self.agent_info = agent.get_info()
+            self.agent_ready = False
+        self.update_title()
+
+    @work
+    async def watch_agent_ready(self, ready: bool) -> None:
+        with suppress(asyncio.TimeoutError):
+            async with asyncio.timeout(2.0):
+                await self.shell.wait_for_ready()
+        if ready:
+            self._directory_watcher = DirectoryWatcher(self.project_path, self)
+            self._directory_watcher.start()
+        if ready and (agent_data := self._agent_data) is not None:
+            welcome = agent_data.get("welcome", None)
+            if welcome is not None:
+                from tui.widgets.markdown_note import MarkdownNote
+
+                await self.post(MarkdownNote(welcome))
+        if ready and self._initial_prompt is not None:
+            prompt = self._initial_prompt
+            if prompt.startswith("!"):
+                self.post_message(
+                    messages.UserInputSubmitted(self._initial_prompt[1:], shell=True)
+                )
+            else:
+                self.post_message(
+                    messages.UserInputSubmitted(self._initial_prompt, shell=False)
+                )
+            self._initial_prompt = None
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        self._mouse_down_offset = event.screen_offset
+
+    def on_click(self, event: events.Click) -> None:
+        if (
+            self._mouse_down_offset is not None
+            and event.screen_offset != self._mouse_down_offset
+        ):
+            return
+        widget = event.widget
+
+        contents = self.contents
+        if self.screen.get_selected_text():
+            return
+        if widget is None or widget.is_maximized:
+            return
+        try:
+            widget.query_ancestor(Prompt)
+        except NoMatches:
+            pass
+        else:
+            return
+
+        # AskUserWidget is an interactive block (Input/Buttons): clicking
+        # inside it must not move the block cursor, because
+        # refresh_block_cursor() would call window.focus() and steal focus
+        # from the ask-user input the user just clicked on.
+        try:
+            widget.query_ancestor(AskUserWidget)
+        except NoMatches:
+            pass
+        else:
+            return
+
+        if widget in contents.displayed_children:
+            self.cursor_offset = contents.displayed_children.index(widget)
+            self.refresh_block_cursor()
+            return
+        for parent in widget.ancestors:
+            if not isinstance(parent, Widget):
+                break
+            if (
+                parent is self or parent is contents
+            ) and widget in contents.displayed_children:
+                self.cursor_offset = contents.displayed_children.index(widget)
+                self.refresh_block_cursor()
+                break
+            if (
+                isinstance(parent, BlockProtocol)
+                and parent in contents.displayed_children
+            ):
+                self.cursor_offset = contents.displayed_children.index(parent)
+                parent.block_select(widget)
+                self.refresh_block_cursor()
+                break
+            widget = parent
+
+    def new_block(self) -> None:
+        """Start a new block for agent response."""
+        self._complete_thought()
+        self._agent_response = None
+
+    async def post[WidgetType: Widget](
+        self,
+        widget: WidgetType,
+        *,
+        loading: bool = False,
+        new_block: bool = True,
+    ) -> WidgetType:
+        """Post a widget to the converstaion.
+
+        Args:
+            widget: Widget to post.
+            loading: Set the widget to an initial loading state?
+            new_block: Start a new block?
+
+        Returns:
+            The widget that was mounted.
+        """
+        if self._loading is not None:
+            await self._loading.remove()
+        if new_block and not loading:
+            self.new_block()
+        if not self.contents.is_attached:
+            return widget
+        await self.contents.mount(widget)
+
+        widget.loading = loading
+        self._require_check_prune = True
+        self.call_after_refresh(self.check_prune)
+        return widget
+
+    async def check_prune(self) -> None:
+        """Check if a prune is required."""
+        if self._require_check_prune:
+            self._require_check_prune = False
+            low_mark = self.app.settings.get("ui.prune_low_mark", int)
+            high_mark = low_mark + self.app.settings.get("ui.prune_excess", int)
+            await self.prune_window(low_mark, high_mark)
+
+    async def prune_window(self, low_mark: int, high_mark: int) -> None:
+        """Remove older children to keep within a certain range.
+
+        Args:
+            low_mark: Height to aim for.
+            high_mark: Height to start pruning.
+        """
+
+        assert high_mark >= low_mark
+
+        contents = self.contents
+
+        height = contents.virtual_size.height
+        if height <= high_mark:
+            return
+        prune_children: list[Widget] = []
+        bottom_margin = 0
+        prune_height = 0
+
+        if low_mark == 0:
+            # Aggressive prune: only act on already-hidden children
+            # (e.g. collapsed blocks).  Wiping every visible widget
+            # would erase the live ToolCall the user is interacting
+            # with.
+            prune_children = [
+                child for child in contents.children if not child.display
+            ]
+        else:
+            for child in contents.children:
+                if not child.display:
+                    prune_children.append(child)
+                    continue
+                top, _, bottom, _ = child.styles.margin
+                child_height = child.outer_size.height
+                prune_height = (
+                    (prune_height - bottom_margin + max(bottom_margin, top))
+                    + bottom
+                    + child_height
+                )
+                bottom_margin = bottom
+                if height - prune_height <= low_mark:
+                    break
+                prune_children.append(child)
+
+        if not prune_children:
+            return
+        self.cursor_offset = -1
+        self.cursor.visible = False
+        self.cursor.follow(None)
+        contents.refresh()
+
+        if prune_children:
+            await contents.remove_children(prune_children)
+
+        if self.window.scroll_y >= self.window.max_scroll_y:
+            self.call_later(self.window.anchor)
+
+    async def new_terminal(self) -> Terminal:
+        """Create a new interactive Terminal.
+
+        Args:
+            width: Initial width of the terminal.
+            display: Initial display.
+
+        Returns:
+            A new (mounted) Terminal widget.
+        """
+
+        if (terminal := self._terminal) is not None:
+            if terminal.state.buffer.is_blank:
+                terminal.finalize()
+                await terminal.remove()
+
+        self._terminal_count += 1
+
+        terminal_width, terminal_height = self.get_terminal_dimensions()
+        terminal = ShellTerminal(
+            f"terminal #{self._terminal_count}",
+            id=f"shell-terminal-{self._terminal_count}",
+            size=(terminal_width, terminal_height),
+            get_terminal_dimensions=self.get_terminal_dimensions,
+        )
+
+        terminal.display = False
+        terminal = await self.post(terminal)
+        self.add_focusable_terminal(terminal)
+        self.refresh_bindings()
+        return terminal
+
+    def get_terminal_dimensions(self) -> tuple[int, int]:
+        """Get the default dimensions of new terminals.
+
+        Returns:
+            Tuple of (WIDTH, HEIGHT)
+        """
+        terminal_width = max(
+            16,
+            (self.window.size.width - 2 - self.window.styles.scrollbar_size_vertical),
+        )
+        terminal_height = max(8, self.window.scrollable_content_region.height)
+        return terminal_width, terminal_height
+
+    @property
+    def shell(self) -> Shell:
+        """A Shell instance."""
+
+        if self._shell is None or self._shell.is_finished:
+            shell_command = self.app.settings.get(
+                "shell.command",
+                str,
+                expand=False,
+            )
+            shell_start = self.app.settings.get(
+                "shell.command_start",
+                str,
+                expand=False,
+            )
+            shell_directory = self.working_directory
+            self._shell = Shell(
+                self, shell_directory, shell=shell_command, start=shell_start
+            )
+            self._shell.start()
+        return self._shell
+
+    async def post_shell(self, command: str) -> None:
+        """Post a command to the shell.
+
+        Args:
+            command: Command to execute.
+        """
+        from tui.widgets.shell_result import ShellResult
+
+        if command.strip():
+            self._shell_count += 1
+            await self.post(ShellResult(command))
+            width, height = self.get_terminal_dimensions()
+            await self.shell.send(command, width, height)
+
+    def action_cursor_up(self) -> None:
+        if not self.contents.displayed_children or self.cursor_offset == 0:
+            # No children
+            return
+        if self.cursor_offset == -1:
+            # Start cursor at end
+            self.cursor_offset = len(self.contents.displayed_children) - 1
+            cursor_block = self.cursor_block
+            if isinstance(cursor_block, BlockProtocol):
+                cursor_block.block_cursor_clear()
+                cursor_block.block_cursor_up()
+        else:
+            cursor_block = self.cursor_block
+            if isinstance(cursor_block, BlockProtocol):
+                if cursor_block.block_cursor_up() is None:
+                    self.cursor_offset -= 1
+                    cursor_block = self.cursor_block
+                    if isinstance(cursor_block, BlockProtocol):
+                        cursor_block.block_cursor_clear()
+                        cursor_block.block_cursor_up()
+            else:
+                # Move cursor up
+                self.cursor_offset -= 1
+                cursor_block = self.cursor_block
+                if isinstance(cursor_block, BlockProtocol):
+                    cursor_block.block_cursor_clear()
+                    cursor_block.block_cursor_up()
+        self.refresh_block_cursor()
+
+    def action_cursor_down(self) -> None:
+        if not self.contents.displayed_children or self.cursor_offset == -1:
+            # No children, or no cursor
+            return
+
+        cursor_block = self.cursor_block
+        if isinstance(cursor_block, BlockProtocol):
+            if cursor_block.block_cursor_down() is None:
+                self.cursor_offset += 1
+                if self.cursor_offset >= len(self.contents.displayed_children):
+                    self.cursor_offset = -1
+                    self.refresh_block_cursor()
+                    return
+                cursor_block = self.cursor_block
+                if isinstance(cursor_block, BlockProtocol):
+                    cursor_block.block_cursor_clear()
+                    cursor_block.block_cursor_down()
+        else:
+            self.cursor_offset += 1
+            if self.cursor_offset >= len(self.contents.displayed_children):
+                self.cursor_offset = -1
+                self.refresh_block_cursor()
+                return
+            cursor_block = self.cursor_block
+            if isinstance(cursor_block, BlockProtocol):
+                cursor_block.block_cursor_clear()
+                cursor_block.block_cursor_down()
+        self.refresh_block_cursor()
+
+    async def action_cancel(self) -> None:
+        now = monotonic()
+
+        # If AskUser is showing (simple question path), single ESC closes it
+        if self._pending_ask_user:
+            self._pending_ask_user = False
+            try:
+                for child in self.contents.children:
+                    if isinstance(child, AskUserWidget):
+                        await child.remove()
+                        break
+            except Exception:
+                pass
+            if self.agent is not None and self.agent._process is not None:
+                self.agent.send_ask_user_answer("", cancelled=True)
+            self.prompt.display = True
+            self.flash("AskUser closed")
+            self.focus_prompt()
+            self._last_escape_time = 0.0
+            self.turn = "agent"
+            return
+
+        # Normal double-ESC logic for session cancellation
+        if now - self._last_escape_time < 3:
+            if (agent := self.agent) is not None:
+                self._last_escape_time = 0.0
+                await agent.cancel()
+                self.flash("Cancel requested…", style="success")
+        else:
+            self.flash("Press [b]esc[/] again to cancel agent's turn")
+        self._last_escape_time = now
+
+    def focus_prompt(self, reset_cursor: bool = True, scroll_end: bool = True) -> None:
+        """Focus the prompt input.
+
+        Args:
+            reset_cursor: Reset the block cursor.
+            scroll_end: Scroll t the end of the content.
+        """
+        if reset_cursor:
+            self.cursor_offset = -1
+            self.cursor.visible = False
+        if scroll_end:
+            self.window.scroll_end()
+        self.prompt.focus()
+
+    async def action_select_block(self) -> None:
+        if (block := self.get_cursor_block(Widget)) is None:
+            return
+
+        menu_options = [
+            MenuItem("[u]C[/]opy to clipboard", "copy_to_clipboard", "c"),
+            MenuItem("Co[u]p[/u]y to prompt", "copy_to_prompt", "p"),
+            MenuItem("Open as S[u]V[/]G", "export_to_svg", "v"),
+        ]
+
+        if block.allow_maximize:
+            menu_options.append(MenuItem("[u]M[/u]aximize", "maximize_block", "m"))
+
+        if isinstance(block, MenuProtocol):
+            menu_options.extend(block.get_block_menu())
+            menu = Menu(block, menu_options)
+        else:
+            menu = Menu(block, menu_options)
+
+        menu.offset = Offset(1, block.region.offset.y)
+        await self.mount(menu)
+        menu.focus()
+
+    def action_copy_to_clipboard(
+        self, block: Widget | None = None
+    ) -> None:
+        if block is None:
+            block = self.get_cursor_block()
+        if isinstance(block, MenuProtocol):
+            text = block.get_block_content("clipboard")
+        elif isinstance(block, MarkdownFence):
+            text = block._content.plain
+        elif isinstance(block, MarkdownBlock):
+            text = block.source
+        else:
+            return
+        if text:
+            self.app.copy_to_clipboard(text)
+            self.flash("Copied to clipboard")
+
+    def action_copy_to_prompt(self) -> None:
+        block = self.get_cursor_block()
+        if isinstance(block, MenuProtocol):
+            text = block.get_block_content("prompt")
+        elif isinstance(block, MarkdownFence):
+            # Copy to prompt leaves MD formatting
+            text = block.source
+        elif isinstance(block, MarkdownBlock):
+            text = block.source
+        else:
+            return
+
+        if text:
+            self.prompt.append(text)
+            self.flash("Copied to prompt")
+            self.focus_prompt()
+
+    def action_maximize_block(self) -> None:
+        if (block := self.get_cursor_block()) is not None:
+            self.screen.maximize(block, container=False)
+            block.focus()
+
+    def action_export_to_svg(self) -> None:
+        block = self.get_cursor_block()
+        if block is None:
+            return
+        import platformdirs
+        from textual._compositor import Compositor
+        from textual._files import generate_datetime_filename
+
+        width, height = block.outer_size
+        compositor = Compositor()
+        compositor.reflow(block, block.outer_size)
+        render = compositor.render_full_update()
+
+        from rich.console import Console
+        import io
+        import os.path
+
+        console = Console(
+            width=width,
+            height=height,
+            file=io.StringIO(),
+            force_terminal=True,
+            color_system="truecolor",
+            record=True,
+            legacy_windows=False,
+            safe_box=False,
+        )
+        console.print(render)
+        path = platformdirs.user_pictures_dir()
+        svg_filename = generate_datetime_filename("A2TUI", ".svg", None)
+        svg_path = os.path.expanduser(os.path.join(path, svg_filename))
+        console.save_svg(svg_path)
+        import webbrowser
+
+        webbrowser.open(f"file:///{svg_path}")
+
+    async def action_mode_switcher(self) -> None:
+        self.prompt.mode_switcher.focus()
+
+    def refresh_block_cursor(self) -> None:
+        if (cursor_block := self.cursor_block_child) is not None:
+            self.window.focus()
+            self.cursor.visible = True
+            self.cursor.follow(cursor_block)
+            self.call_after_refresh(
+                self.window.scroll_to_center, cursor_block, immediate=True
+            )
+        else:
+            self.cursor.visible = False
+            self.window.anchor(False)
+            self.window.scroll_end(duration=2 / 10)
+            self.cursor.follow(None)
+            self.prompt.focus()
+        self.refresh_bindings()
+
+    async def slash_command(self, text: str) -> bool:
+        """Give A2TUI the opertunity to process slash commands.
+
+        Args:
+            text: The prompt, including the slash in the first position.
+
+        Returns:
+            `True` if A2TUI has processed the slash command, `False` if it should
+                be forwarded to the agent.
+        """
+        command, _, parameters = text[1:].partition(" ")
+        if command == "about":
+            from tui import about
+            from tui.widgets.markdown_note import MarkdownNote
+
+            app = self.app
+            about_md = about.render(app)
+            await self.post(MarkdownNote(about_md, classes="about"))
+            self.app.copy_to_clipboard(about_md)
+            self.notify(
+                "A copy of /about has been placed in your clipboard",
+                title="/about",
+            )
+            return True
+        elif command == "clear":
+            try:
+                line_count = max(0, int(parameters) if parameters.strip() else 0)
+            except ValueError:
+                self.notify(
+                    "Unable to clear—a number was expected",
+                    title="/clear",
+                    severity="error",
+                )
+                return True
+            if line_count == 0:
+                contents = self.contents
+                self.cursor_offset = -1
+                self.cursor.visible = False
+                self.cursor.follow(None)
+                contents.refresh()
+                await contents.remove_children(list(contents.children))
+                if self.window.scroll_y >= self.window.max_scroll_y:
+                    self.call_later(self.window.anchor)
+            else:
+                await self.prune_window(line_count, line_count)
+            return True
+        elif command == "trace":
+            self.app.action_trace()
+            return True
+        elif command == "engine":
+            self.app.push_screen("store")
+            return True
+        elif command == "cls":
+            return await self._handle_cls_command(parameters)
+        elif command == "exit":
+            if self.session_start_time is not None:
+                session_time = monotonic() - self.session_start_time
+                session_id = getattr(self.agent, "session_id", None) or self._agent_session_id or ""
+                self.app._exit_metrics = {
+                    "session_id": session_id,
+                    "tool_call_total": self._tool_call_total,
+                    "tool_call_success": self._tool_call_success,
+                    "tool_call_failed": self._tool_call_failed,
+                    "turn_count": self._turn_count,
+                    "shell_count": self._shell_count,
+                    "wall_time": session_time,
+                    "agent_title": self.agent_title or "Agent",
+                }
+            if self.agent is not None:
+                await self.agent.stop()
+            self.app.exit()
+            return True
+        elif command == "session":
+            return await self._handle_session_command(parameters)
+        elif command == "aidlc":
+            return await self._handle_aidlc_command(parameters)
+        elif command == "diff":
+            return await self._handle_diff_command()
+        elif command == "ide":
+            return await self._handle_ide_command(parameters)
+        return await self._handle_tui_session_project_dispatch(command, parameters)
+
+    async def _handle_diff_command(self) -> bool:
+        from tui.screens.diff_explorer_screen import DiffExplorerScreen
+        self.app.push_screen(DiffExplorerScreen(project_dir=self.project_path))
+        return True
+
+    async def _handle_ide_command(self, parameters: str) -> bool:
+        from tui.screens.ide_screen import IdeScreen
+        filepath = parameters.strip() if parameters.strip() else None
+        self.app.push_screen(
+            IdeScreen(project_dir=self.project_path, filepath=filepath)
+        )
+        return True
+
+    async def _handle_cls_command(self, parameters: str) -> bool:
+        import asyncio
+        import re
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        parts = parameters.strip().split()
+        args = ["cdh", "cls", "search", "--json"]
+        has_request_id = False
+        has_function = False
+
+        i = 0
+        while i < len(parts):
+            part = parts[i]
+            if part in ("--request-id", "--rid"):
+                if i + 1 < len(parts):
+                    args.extend(["--request-id", parts[i + 1]])
+                    has_request_id = True
+                    i += 2
+                else:
+                    self.notify("Missing value for --request-id", title="/cls", severity="error")
+                    return True
+            elif part == "--function":
+                if i + 1 < len(parts):
+                    args.extend(["--function", parts[i + 1]])
+                    has_function = True
+                    i += 2
+                else:
+                    self.notify("Missing value for --function", title="/cls", severity="error")
+                    return True
+            elif part == "--keyword":
+                if i + 1 < len(parts):
+                    args.extend(["--keyword", parts[i + 1]])
+                    i += 2
+                else:
+                    self.notify("Missing value for --keyword", title="/cls", severity="error")
+                    return True
+            elif part == "--limit":
+                if i + 1 < len(parts):
+                    args.extend(["--limit", parts[i + 1]])
+                    i += 2
+                else:
+                    self.notify("Missing value for --limit", title="/cls", severity="error")
+                    return True
+            elif part == "--region":
+                if i + 1 < len(parts):
+                    args.extend(["--region", parts[i + 1]])
+                    i += 2
+                else:
+                    self.notify("Missing value for --region", title="/cls", severity="error")
+                    return True
+            elif part == "--env":
+                if i + 1 < len(parts):
+                    args.extend(["--env", parts[i + 1]])
+                    i += 2
+                else:
+                    self.notify("Missing value for --env", title="/cls", severity="error")
+                    return True
+            elif part.startswith("-"):
+                self.notify(f"Unknown option: {part}", title="/cls", severity="error")
+                return True
+            else:
+                self.notify(f"Unexpected argument: {part}", title="/cls", severity="error")
+                return True
+
+        if not has_request_id and not has_function:
+            self.notify(
+                "/cls requires --request-id or --function\n"
+                "Usage: /cls --request-id <ID> --function <NAME>\n"
+                "       /cls --function <NAME> --keyword <KW>",
+                title="/cls",
+                severity="error"
+            )
+            return True
+
+        try:
+            self.app.push_screen("terminal", run=f"cdh cls search --help")
+
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                self.notify(f"CLS search failed: {error_msg}", title="/cls", severity="error")
+                return True
+
+            import json
+            results = json.loads(stdout.decode()) if stdout else []
+
+            if not results:
+                self.notify("No logs found", title="/cls")
+                return True
+
+            lines = [f"Found {len(results)} log entries:"]
+            for log in results[:20]:
+                time_str = log.get("time", "?")
+                msg = log.get("message", "")
+                req_id = log.get("request_id", "")
+                func = log.get("function", "")
+                level = log.get("level", "INFO")
+                duration = log.get("duration_ms", 0)
+
+                header = f"[{time_str}]"
+                if req_id:
+                    header += f" {req_id[:20]}..."
+                if func:
+                    header += f" {func}"
+                header += f" [{level}]"
+                if duration:
+                    header += f" {duration}ms"
+
+                lines.append(header)
+                if msg:
+                    lines.append(f"  {msg[:200]}")
+
+            if len(results) > 20:
+                lines.append(f"... and {len(results) - 20} more entries")
+
+            from tui.widgets.markdown_note import MarkdownNote
+            content = "```\n" + "\n".join(lines) + "\n```"
+            await self.post(MarkdownNote(content, classes="cls-results"))
+            self.app.copy_to_clipboard(content)
+            self.notify(
+                f"Found {len(results)} logs — copied to clipboard",
+                title="/cls"
+            )
+
+        except FileNotFoundError:
+            self.notify(
+                "cdh command not found. Install with: pip install -e .",
+                title="/cls",
+                severity="error"
+            )
+        except json.JSONDecodeError:
+            self.notify("Failed to parse CLS output", title="/cls", severity="error")
+        except Exception as e:
+            self.notify(f"Error: {e}", title="/cls", severity="error")
+
+        return True
+
+    async def _handle_tui_session_project_dispatch(
+        self, command: str, parameters: str
+    ) -> bool:
+        if await platform_commands.dispatch(self, command, parameters):
+            return True
+        return False
+
+    async def _handle_session_command(self, parameters: str) -> bool:
+        parts = parameters.strip().split(maxsplit=1)
+        sub_cmd = parts[0] if parts else ""
+        arg = parts[1] if len(parts) > 1 else ""
+
+        if sub_cmd == "list":
+            self.app.push_screen("sessions")
+            return True
+        elif sub_cmd == "load":
+            if not arg:
+                self.notify("Session ID required", title="/session load", severity="error")
+                return True
+            try:
+                session_pk = int(arg)
+            except ValueError:
+                self.notify("Invalid session ID", title="/session load", severity="error")
+                return True
+            self.post_message(messages.SessionLoad(session_pk))
+            return True
+        elif sub_cmd == "new":
+            if self._agent_data is not None:
+                self.post_message(
+                    messages.SessionNew(
+                        self.working_directory,
+                        self._agent_data["identity"],
+                        arg,
+                    )
+                )
+                return True
+            return False
+        elif sub_cmd == "close":
+            if self.turn == "agent" and self.agent is not None:
+                await self.agent.cancel()
+            if self.screen.id is not None:
+                self.post_message(messages.SessionClose(self.screen.id))
+                return True
+            return False
+        elif sub_cmd == "rename":
+            name = arg.strip()
+            if not name:
+                self.notify(
+                    "Expected a name for the session.\n"
+                    'For example: "add comments to blog"',
+                    title="/session rename",
+                    severity="error",
+                )
+                return True
+            if self.agent is not None:
+                await self.agent.set_session_name(name)
+                self.flash(f"Renamed session to [b]'{name}'", style="success")
+            return True
+        else:
+            self.notify(
+                "Usage: /session <list|load|new|close|rename>",
+                title="/session",
+                severity="error",
+            )
+            return True
+
+    def _emit_aidlc_state(self, target: Path) -> None:
+        from cdh.project_loader import CdhProjectLoader
+
+        cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+        if cdh_dir is None:
+            return
+        state = CdhProjectLoader.load_project_state(cdh_dir)
+        self.post_message(acp_messages.AIDLCState(
+            current_phase=state.get("current_phase", ""),
+            completed_phases=state.get("completed_phases", []),
+            gate_results=state.get("gate_results", {}),
+        ))
+
+    def _current_aidlc_phase(self) -> str:
+        from pathlib import Path
+        from cdh.project_loader import CdhProjectLoader
+
+        target = self.app.project_dir or Path.cwd()
+        cdh_dir = CdhProjectLoader.find_cdh_dir(target)
+        if cdh_dir is None:
+            return "—"
+        state = CdhProjectLoader.load_project_state(cdh_dir)
+        return state.get("current_phase", "—")
+
+    async def _handle_aidlc_command(self, parameters: str) -> bool:
+        parts = parameters.strip().split(maxsplit=1)
+        sub_cmd = parts[0] if parts else ""
+        rest = parts[1] if len(parts) > 1 else ""
+
+        # --- /aidlc project <list|new|init|check|load> ---
+        if sub_cmd == "project":
+            sub_parts = rest.strip().split(maxsplit=3)
+            sub_sub = sub_parts[0] if sub_parts else ""
+            sub_name = sub_parts[1] if len(sub_parts) > 1 else ""
+            sub_path = sub_parts[2] if len(sub_parts) > 2 else ""
+            sub_extra = sub_parts[3] if len(sub_parts) > 3 else ""
+
+            if not sub_sub:
+                self.app.action_projects()
+                return True
+
+            if sub_sub == "list":
+                from pathlib import Path
+                projects_dir = Path.home() / ".cdh" / "projects"
+                if not projects_dir.exists():
+                    self.notify("No projects found", title="/aidlc project list")
+                    return True
+                project_files = list(projects_dir.glob("*.yaml")) + list(projects_dir.glob("*.json"))
+                if not project_files:
+                    self.notify("No projects found", title="/aidlc project list")
+                    return True
+                lines = ["Projects:"]
+                for pf in sorted(project_files):
+                    lines.append(f"  {pf.stem}")
+                self.notify("\n".join(lines), title="/aidlc project list")
+                return True
+
+            elif sub_sub == "load":
+                if not sub_name:
+                    self.notify("Project name required", title="/aidlc project load", severity="error")
+                    return True
+                from pathlib import Path
+                from cdh.config import write_active_project
+                projects_dir = Path.home() / ".cdh" / "projects"
+                project_file = None
+                for ext in ["yaml", "yml", "json"]:
+                    pf = projects_dir / f"{sub_name}.{ext}"
+                    if pf.exists():
+                        project_file = pf
+                        break
+                if not project_file:
+                    self.notify(f"Project '{sub_name}' not found", title="/aidlc project load", severity="error")
+                    return True
+                import yaml
+                proj_data = yaml.safe_load(project_file.read_text()) if project_file.suffix in [".yaml", ".yml"] else __import__("json").loads(project_file.read_text())
+                project_path = proj_data.get("path", ".")
+                write_active_project(sub_name, project_path)
+                new_project_dir = Path(project_path) if project_path else Path.cwd()
+                self.app.project_dir = new_project_dir
+                self._emit_aidlc_state(new_project_dir)
+                self.post_message(messages.ProjectDirectoryUpdated(project_dir=new_project_dir))
+                launched = self.app._launch_new_session_for_project(new_project_dir)
+                suffix = " (new session opened)" if launched else ""
+                self.flash(f"Switched to project: {sub_name}{suffix}", style="success")
+                return True
+
+            elif sub_sub == "new":
+                if not sub_name:
+                    self.notify(
+                        "Usage: /aidlc project new <name> [path] [components]\n"
+                        "  components: comma-separated ids (web,backend,native,etc.) or 'all'",
+                        title="/aidlc project new", severity="error",
+                    )
+                    return True
+                from pathlib import Path
+                from cdh.config import write_active_project
+                from cdh.project_loader import CdhProjectLoader
+                from cdh.scaffold import scaffold_dlc_project, COMPONENT_BY_ID
+                import yaml
+                projects_dir = Path.home() / ".cdh" / "projects"
+                projects_dir.mkdir(parents=True, exist_ok=True)
+                project_path = sub_path or str(Path.cwd())
+                ws = Path(project_path).expanduser().resolve()
+
+                selected = []
+                if sub_extra:
+                    if sub_extra == "all":
+                        selected = list(COMPONENT_BY_ID.keys())
+                    else:
+                        selected = [c.strip() for c in sub_extra.split(",") if c.strip()]
+                        unknown = [c for c in selected if c not in COMPONENT_BY_ID]
+                        if unknown:
+                            valid = ", ".join(sorted(COMPONENT_BY_ID.keys()))
+                            self.notify(
+                                f"Unknown components: {', '.join(unknown)}. Valid: {valid}",
+                                title="/aidlc project new", severity="error",
+                            )
+                            return True
+
+                scaffold_dlc_project(ws, sub_name, components=selected if selected else None)
+                CdhProjectLoader.init_project(ws, sub_name)
+                proj_data = {"name": sub_name, "path": str(ws), "description": ""}
+                project_file = projects_dir / f"{sub_name}.yaml"
+                project_file.write_text(yaml.dump(proj_data))
+                write_active_project(sub_name, str(ws))
+                self.app.project_dir = ws
+                self._emit_aidlc_state(ws)
+                self.post_message(messages.ProjectDirectoryUpdated(project_dir=ws))
+                launched = self.app._launch_new_session_for_project(ws)
+                session_suffix = " (new session opened)" if launched else ""
+                components_suffix = f" (components: {', '.join(selected)})" if selected else ""
+                self.flash(
+                    f"Created and switched to AIDLC project: {sub_name}{components_suffix}{session_suffix}",
+                    style="success",
+                )
+                return True
+
+            elif sub_sub == "init":
+                from pathlib import Path
+                from cdh.config import write_active_project
+                from cdh.project_loader import CdhProjectLoader
+                from cdh.scaffold import init_dlc_project as _init_dlc_project
+                import yaml
+                target = Path(sub_name or ".").expanduser().resolve()
+                project_name = target.name
+                projects_dir = Path.home() / ".cdh" / "projects"
+                projects_dir.mkdir(parents=True, exist_ok=True)
+                proj_file = projects_dir / f"{project_name}.yaml"
+                if proj_file.exists():
+                    self.notify(
+                        f"Project '{project_name}' already exists",
+                        title="/aidlc project init",
+                        severity="error",
+                    )
+                    return True
+                _init_dlc_project(target, project_name)
+                CdhProjectLoader.init_project(target, project_name)
+                proj_data = {"name": project_name, "path": str(target), "description": ""}
+                proj_file.write_text(yaml.dump(proj_data))
+                write_active_project(project_name, str(target))
+                self.app.project_dir = target
+                self._emit_aidlc_state(target)
+                self.post_message(messages.ProjectDirectoryUpdated(project_dir=target))
+                launched = self.app._launch_new_session_for_project(target)
+                session_suffix = " (new session opened)" if launched else ""
+                self.flash(f"Initialized AIDLC project in: {target}{session_suffix}", style="success")
+                return True
+
+            elif sub_sub == "check":
+                from pathlib import Path
+                from cdh.scaffold import check_dlc_project as _check_dlc_project
+                target = Path(sub_name or ".").expanduser().resolve()
+                result = _check_dlc_project(target)
+                if result["valid"]:
+                    lines = [f"\u2713 Valid AIDLC project: {result['name']}"]
+                    lines.append(f"  Location: {result['path']}")
+                    if result["components"]:
+                        lines.append(f"  Components: {', '.join(result['components'])}")
+                    else:
+                        lines.append("  Components: (none)")
+                    lines.append(
+                        f"  CDH state: \u2713 initialized" if result["has_cdh"]
+                        else "  CDH state: \u2717 not initialized"
+                    )
+                else:
+                    lines = [f"\u2717 Not a valid AIDLC project: {target}"]
+                for s in result["suggestions"]:
+                    lines.append(f"  \u2022 {s}")
+                self.notify("\n".join(lines), title="/aidlc project check")
+                return True
+
+            else:
+                self.notify(
+                    "Usage: /aidlc project <list|new|init|check|load> [args]",
+                    title="/aidlc project",
+                    severity="error",
+                )
+                return True
+
+        # --- /aidlc phase <phase> ---
+        elif sub_cmd == "phase":
+            from pathlib import Path
+            from cdh.project_loader import CdhProjectLoader
+
+            rest_parts = rest.strip().split(maxsplit=1)
+            target_phase = rest_parts[0] if rest_parts else ""
+            valid_phases = {"init", "understand", "plan", "verify", "deliver"}
+            if not target_phase or target_phase not in valid_phases:
+                phases_list = "|".join(sorted(valid_phases))
+                self.notify(
+                    f"Usage: /aidlc phase <{phases_list}>\nCurrent: {self._current_aidlc_phase()}",
+                    title="/aidlc phase",
+                    severity="error",
+                )
+                return True
+            target = self.app.project_dir or Path.cwd()
+            ok = CdhProjectLoader.advance_phase(target, target_phase)
+            if ok:
+                self.flash(f"Phase: {target_phase}", style="success")
+                self._emit_aidlc_state(target)
+            else:
+                self.notify(
+                    "No .cdh/ directory found or invalid phase transition. "
+                    "Phases must advance forward in sequence "
+                    "(init\u2192understand\u2192plan\u2192verify\u2192deliver). "
+                    "Use 'init' to reset.\n"
+                    f"Current: {self._current_aidlc_phase()}",
+                    title="/aidlc phase",
+                    severity="error",
+                )
+            return True
+
+        # --- /aidlc gate <name> <passed|failed> ---
+        elif sub_cmd == "gate":
+            from pathlib import Path
+            from cdh.project_loader import CdhProjectLoader
+
+            rest_parts = rest.strip().split(maxsplit=1)
+            gate_name = rest_parts[0] if rest_parts else ""
+            gate_status = rest_parts[1] if len(rest_parts) > 1 else ""
+            if not gate_name or gate_status not in ("passed", "failed"):
+                self.notify(
+                    "Usage: /aidlc gate <name> <passed|failed>",
+                    title="/aidlc gate",
+                    severity="error",
+                )
+                return True
+            target = self.app.project_dir or Path.cwd()
+            ok = CdhProjectLoader.record_gate_result(target, gate_name, gate_status)
+            if ok:
+                self.flash(f"Gate '{gate_name}': {gate_status}", style="success")
+                self._emit_aidlc_state(target)
+            else:
+                self.notify(
+                    "No .cdh/ directory found. Run /aidlc project init first.",
+                    title="/aidlc gate",
+                    severity="error",
+                )
+            return True
+
+        # --- /aidlc sync  or  /aidlc update ---
+        elif sub_cmd in ("sync", "update"):
+            from pathlib import Path
+            from cdh.scaffold import (
+                _regenerate_agents_and_claude_md,
+                scaffold_dlc_project as _scaffold_dlc_project,
+            )
+            from cdh.project_loader import CdhProjectLoader
+
+            target = self.app.project_dir or Path.cwd()
+            project_yaml = target / "aidlc" / "project.yaml"
+            if project_yaml.exists():
+                _regenerate_agents_and_claude_md(target)
+                self.flash("Regenerated AGENTS.md and CLAUDE.md", style="success")
+            else:
+                project_name = target.name
+                _scaffold_dlc_project(target, project_name)
+                CdhProjectLoader.init_project(target, project_name)
+                self.flash(
+                    "Initialized AIDLC project and regenerated AGENTS.md/CLAUDE.md",
+                    style="success",
+                )
+            self._emit_aidlc_state(target)
+            return True
+
+        else:
+            self.notify(
+                "Usage: /aidlc project <list|new|init|check|load> [args]\n"
+                "       /aidlc phase <phase>\n"
+                "       /aidlc gate <name> <passed|failed>\n"
+                "       /aidlc sync|update",
+                title="/aidlc",
+                severity="error",
+            )
+            return True
+
+        return False

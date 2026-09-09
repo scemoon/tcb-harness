@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+import json
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from pathlib import Path
+from typing import Optional
+
+
+class MemoryLayer(Enum):
+    L0_CONVERSATION = "l0_conversation"
+
+
+@dataclass
+class MemoryEntry:
+    id: str
+    layer: MemoryLayer
+    content: str
+    timestamp: str
+    metadata: dict = field(default_factory=dict)
+    parent_id: Optional[str] = None
+    result_ref: Optional[str] = None
+
+    @classmethod
+    def create(
+        cls,
+        layer: MemoryLayer,
+        content: str,
+        metadata: Optional[dict] = None,
+        parent_id: Optional[str] = None,
+    ) -> "MemoryEntry":
+        return cls(
+            id=str(uuid.uuid4())[:16],
+            layer=layer,
+            content=content,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            metadata=metadata or {},
+            parent_id=parent_id,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "layer": self.layer.value,
+            "content": self.content,
+            "timestamp": self.timestamp,
+            "metadata": self.metadata,
+            "parent_id": self.parent_id,
+            "result_ref": self.result_ref,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MemoryEntry":
+        return cls(
+            id=data["id"],
+            layer=MemoryLayer(data["layer"]),
+            content=data["content"],
+            timestamp=data["timestamp"],
+            metadata=data.get("metadata", {}),
+            parent_id=data.get("parent_id"),
+            result_ref=data.get("result_ref"),
+        )
+
+
+class MemoryPyramid:
+    def __init__(self, storage_path: Optional[Path] = None):
+        from onecode.config import ONECODE_DIR
+        self.storage_path = storage_path or (ONECODE_DIR / "memory")
+        self.storage_path.mkdir(parents=True, exist_ok=True)
+        self._layers = {layer: [] for layer in MemoryLayer}
+        self._load_index()
+
+    def _layer_dir(self, layer: MemoryLayer) -> Path:
+        return self.storage_path / layer.value
+
+    def _load_index(self) -> None:
+        index_file = self.storage_path / "index.json"
+        if index_file.exists():
+            try:
+                data = json.loads(index_file.read_text(encoding="utf-8"))
+                for layer_str, entries in data.items():
+                    layer = MemoryLayer(layer_str)
+                    self._layers[layer] = [MemoryEntry.from_dict(e) for e in entries]
+            except Exception:
+                pass
+
+    def _save_index(self) -> None:
+        index_file = self.storage_path / "index.json"
+        data = {layer.value: [e.to_dict() for e in entries] for layer, entries in self._layers.items()}
+        index_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def add(
+        self,
+        layer: MemoryLayer,
+        content: str,
+        metadata: Optional[dict] = None,
+        parent_id: Optional[str] = None,
+        result_ref: Optional[str] = None,
+    ) -> MemoryEntry:
+        entry = MemoryEntry.create(layer, content, metadata, parent_id)
+        entry.result_ref = result_ref
+        self._layers[layer].append(entry)
+        self._save_index()
+        self._write_content(layer, entry)
+        return entry
+
+    def _write_content(self, layer: MemoryLayer, entry: MemoryEntry) -> None:
+        layer_dir = self._layer_dir(layer)
+        layer_dir.mkdir(parents=True, exist_ok=True)
+        content_file = layer_dir / f"{entry.id}.md"
+        content_file.write_text(entry.content, encoding="utf-8")
+
+    def get(self, layer: MemoryLayer, entry_id: str) -> Optional[MemoryEntry]:
+        for entry in self._layers[layer]:
+            if entry.id == entry_id:
+                return entry
+        return None
+
+    def get_content(self, entry: MemoryEntry) -> str:
+        layer_dir = self._layer_dir(entry.layer)
+        content_file = layer_dir / f"{entry.id}.md"
+        if content_file.exists():
+            return content_file.read_text(encoding="utf-8")
+        return entry.content
+
+    def list_by_layer(self, layer: MemoryLayer) -> list[MemoryEntry]:
+        return list(self._layers.get(layer, []))
+
+    def list_recent(self, layer: MemoryLayer, limit: int = 10) -> list[MemoryEntry]:
+        entries = self._layers.get(layer, [])
+        return sorted(entries, key=lambda e: e.timestamp, reverse=True)[:limit]
+
+    def remove(self, layer: MemoryLayer, entry_id: str) -> bool:
+        entries = self._layers.get(layer, [])
+        for i, entry in enumerate(entries):
+            if entry.id == entry_id:
+                content_file = self._layer_dir(layer) / f"{entry_id}.md"
+                if content_file.exists():
+                    content_file.unlink()
+                self._layers[layer].pop(i)
+                self._save_index()
+                return True
+        return False

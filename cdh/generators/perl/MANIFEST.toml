@@ -1,0 +1,14 @@
+# Plugin manifest for perl
+[plugin]
+name = "perl"
+display_name = "Perl"
+file_extension = ".pm"
+mime_type = "text/x-perl"
+default_outdir = "perl"
+output_filename_template = "{name}}.pm"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

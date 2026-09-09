@@ -1,0 +1,14 @@
+// Auto-generated from {{.SourceFile}}
+using System;
+using System.Collections.Generic;
+using System.Text.Json.Serialization;
+
+namespace {{.PackageName}}
+{
+{{range .Types}}    public class {{.Name}}
+    {
+{{range .Properties}}        [JsonPropertyName("{{.JsonName}}")]
+        public {{.NullableType}} {{.Name}} { get; set; }
+{{end}}    }
+
+{{end}}}

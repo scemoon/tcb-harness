@@ -1,0 +1,14 @@
+# Plugin manifest for r
+[plugin]
+name = "r"
+display_name = "R"
+file_extension = ".R"
+mime_type = "text/x-r"
+default_outdir = "r"
+output_filename_template = "{name}}.R"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid", "email"]

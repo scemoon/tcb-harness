@@ -1,0 +1,9 @@
+// Auto-generated from {{.SourceFile}}
+package {{.PackageName}}
+
+{{.Imports}}
+{{range .Types}}type {{.Name}} struct {
+{{range .Properties}}	{{.Name}} {{.Type}} `json:"{{.JsonName}}{{if .IsNullable}},omitempty{{end}}"`
+{{end}}}
+
+{{end}}

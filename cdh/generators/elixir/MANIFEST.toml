@@ -1,0 +1,17 @@
+[plugin]
+name = "elixir"
+display_name = "Elixir"
+file_extension = ".ex"
+mime_type = "text/x-elixir"
+default_outdir = "elixir"
+output_filename_template = "{name}.ex"
+package_name_default = "types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid"]
+
+[imports]
+date-time = "use Ecto.Schema"
+uuid = "use Ecto.UUID"

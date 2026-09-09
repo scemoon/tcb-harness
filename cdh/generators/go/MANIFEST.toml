@@ -1,0 +1,18 @@
+[plugin]
+name = "go"
+display_name = "Go"
+file_extension = ".go"
+mime_type = "text/x-go"
+default_outdir = "go"
+output_filename_template = "{name}.go"
+package_name_default = "types"
+
+[features]
+enums = true
+allOf = true
+oneOf = true
+anyOf = true
+nullable = true
+readOnly = true
+writeOnly = true
+format_hints = ["date-time", "uuid", "email", "uri", "double"]

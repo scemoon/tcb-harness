@@ -1,0 +1,16 @@
+#!/bin/bash
+# Auto-generated from {{.SourceFile}}
+# shellcheck disable=SC2086
+
+{{range .Types}}
+# {{.Name}}
+{{.Name}}() {
+{{range .Properties}}    local {{.Name}}="$1"
+{{end}}    local json
+    json=$(printf '{
+{{range .Properties}}        "{{.JsonName}}": "%s",
+{{end}}    }' {{range .Properties}}"${{.Name}}"{{end}})
+
+    echo "$json"
+}
+{{end}}

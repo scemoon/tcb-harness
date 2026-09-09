@@ -1,0 +1,17 @@
+// Auto-generated from {{.SourceFile}}
+namespace Types
+
+open System.Text.Json.Serialization
+
+{{range .Types}}
+type {{.Name}} = {
+{{range .Properties}}    {{.Name}}: {{if .IsNullable}}{{.Type}} option{{else}}{{.Type}}{{end}}{{end}}
+}
+with
+    [<JsonPropertyName "{{.JsonName}}">]
+    member this.ToJson() = null
+
+module {{.Name}} =
+    let fromJson (json: string) = Unchecked.defaultof<{{.Name}}>
+    let toJson (x: {{.Name}}) = ""
+{{end}}

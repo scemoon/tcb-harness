@@ -1,0 +1,7 @@
+// Auto-generated from {{.SourceFile}}
+{{range .Types}}{{if .Description}}/** {{.Description}} */
+{{end}}export interface {{.Name}} {
+{{range .Properties}}  {{.JsonName}}{{if .IsNullable}}?{{end}}: {{.Type}};
+{{end}}}
+
+{{end}}

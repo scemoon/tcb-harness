@@ -1,0 +1,13 @@
+// Auto-generated from {{.SourceFile}}
+syntax = "proto3";
+
+package {{.PackageName}};
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+{{range .Types}}message {{.Name}} {
+{{range .Properties}}  {{.Type}} {{.Name}} = {{.Index}};
+{{end}}}
+
+{{end}}

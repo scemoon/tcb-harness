@@ -1,0 +1,18 @@
+[plugin]
+name = "swift"
+display_name = "Swift"
+file_extension = ".swift"
+mime_type = "text/x-swift"
+default_outdir = "swift"
+output_filename_template = "{name}.swift"
+package_name_default = "Types"
+
+[features]
+enums = true
+allOf = true
+oneOf = true
+anyOf = true
+nullable = true
+readOnly = true
+writeOnly = true
+format_hints = ["date-time", "uuid", "email", "uri", "double"]

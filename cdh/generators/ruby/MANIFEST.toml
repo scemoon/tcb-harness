@@ -1,0 +1,17 @@
+[plugin]
+name = "ruby"
+display_name = "Ruby"
+file_extension = ".rb"
+mime_type = "text/x-ruby"
+default_outdir = "ruby"
+output_filename_template = "{name}.rb"
+package_name_default = "Types"
+
+[features]
+enums = true
+nullable = true
+format_hints = ["date-time", "uuid"]
+
+[imports]
+date-time = "require 'time'"
+uuid = "require 'uuid'"

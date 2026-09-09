@@ -1,0 +1,14 @@
+# Plugin manifest for bash
+[plugin]
+name = "bash"
+display_name = "Bash"
+file_extension = ".sh"
+mime_type = "text/x-sh"
+default_outdir = "bash"
+output_filename_template = "{name}}.sh"
+package_name_default = "types"
+
+[features]
+enums = false
+nullable = false
+format_hints = ["date-time", "uuid"]

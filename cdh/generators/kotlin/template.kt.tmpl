@@ -1,0 +1,12 @@
+// Auto-generated from {{.SourceFile}}
+package {{.PackageName}}
+
+import java.time.Instant
+import java.util.UUID
+
+{{range .Types}}
+data class {{.Name}}(
+{{range .Properties}}    val {{.Name}}: {{.NullableType}}{{if .IsNullable}} = null{{end}},
+{{end}})
+
+{{end}}
