@@ -39,7 +39,6 @@ AI-DLC 是面向 **monorepo 多组件栈** 的 AI 驱动开发生命周期框架
 |------|------|------|-------------|--------|
 | NATIVE | Mobile | `apps/native/` | `NATIVE-FR-NNN` | React Native / Flutter |
 | DESKTOP | Desktop | `apps/desktop/` | `DESKTOP-FR-NNN` | Electron / Tauri |
-| WEB | Browser | `apps/web/` | `WEB-FR-NNN` | React / Vue / Svelte |
 | BE | Service | `apps/backend/` | `BE-FR-NNN` | Python / Node / Go |
 | WXA | WeChat Mini | `apps/wxa/` | `WXA-FR-NNN` | WeChat Mini Program |
 | MYA | Alipay Mini | `apps/mya/` | `MYA-FR-NNN` | Alipay Mini Program |
@@ -259,9 +258,6 @@ Approved Spec + BDD Features
 ### Component: backend (BE-FR-*)
 - Architecture, Data model, API surface, State machine
 
-### Component: web (WEB-FR-*)
-- Architecture, Routes, Data flow
-
 ### Integration
 - Flow, Contract refs, Failure modes, Backward compat
 ```
@@ -280,8 +276,8 @@ units:
     depends_on: [int-contract-1, be-unit-1]
   - id: cross-stack-1
     fr: INT-FR-001
-    affects: [web, backend]
-    depends_on: [be-unit-2, web-unit-1]
+    affects: [backend]
+    depends_on: [be-unit-2]
     layer: cross-stack
 ```
 
@@ -388,17 +384,16 @@ All Verify gates passed
 `deploy_stack --preview` 部署整体栈：
 
 1. `backend` 先部署（functions + DB migrate）
-2. 所有客户端（`web`, `native`, `desktop`, `wxa`, `mya`, `tta`）并行部署，构建时注入 `BACKEND_URL`
+2. 所有客户端（`native`, `desktop`, `wxa`, `mya`, `tta`）并行部署，构建时注入 `BACKEND_URL`
 3. 输出：`STACK_URL` (= `BACKEND_URL`) + 各组件 URL
 
 ### 9.4 Stack BVT 检查项
 
 1. Backend `/health` 返回 200
-2. Web 首页返回 200 / shell 加载
-3. Native/desktop/mini-program 启动探活
-4. 核心 cross-stack 流（login）成功
-5. 数据库可达
-6. 错误率 < 0.1%
+2. Native/desktop/mini-program 启动探活
+3. 核心 cross-stack 流（login）成功
+4. 数据库可达
+5. 错误率 < 0.1%
 7. 延迟 p99 < 500ms
 8. Contract diff 归档
 
@@ -490,7 +485,6 @@ All Verify gates passed
 ├── apps/
 │   ├── native/          # NATIVE-FR-*   Mobile (Flutter/Dart)
 │   ├── desktop/         # DESKTOP-FR-*  Desktop (Electron/TypeScript)
-│   ├── web/             # WEB-FR-*      Browser (Next.js/TypeScript)
 │   ├── backend/         # BE-FR-*       Service (Python/Node/Go)
 │   ├── wxa/             # WXA-FR-*      WeChat Mini Program
 │   ├── mya/             # MYA-FR-*      Alipay Mini Program
@@ -538,7 +532,6 @@ apps/{component}/
 | 组件 | 语言 | 框架 | 测试 |
 |------|------|------|------|
 | Backend | Python/Node/Go | FastAPI/Express/Gin | pytest-bdd |
-| Web | TypeScript | React/Vue/Svelte | Vitest/Jest + Cucumber.js |
 | Native | TypeScript/Dart | React Native/Flutter | Detox/Maestro |
 | Desktop | TypeScript/Rust | Electron/Tauri | Spectron/WebDriverIO |
 | WXA | JavaScript | WeChat Mini | Jest/miniprogram-automator |
@@ -701,8 +694,8 @@ ai-dlc-skill/
 │   ├── bdd.md                       # Behavior-Driven Development
 │   └── tdd.md                       # Test-Driven Development
 │
-├── components/                      # 7 个组件开发指南
-│   ├── backend.md, web.md, native.md, desktop.md
+├── components/                      # 6 个组件开发指南
+│   ├── backend.md, native.md, desktop.md
 │   ├── wxa.md, mya.md, tta.md
 │
 ├── architecture/
