@@ -14,6 +14,7 @@ node_modules/
 dist/
 .nuxt/
 .cache/
+npm/npm_pkg/*.tgz
 
 # IDE
 .vscode/
