@@ -7,6 +7,7 @@ build/
 .venv/
 venv/
 *.egg
+uv.lock
 
 # Node
 node_modules/
@@ -15,6 +16,7 @@ dist/
 .nuxt/
 .cache/
 npm/npm_pkg/*.tgz
+npm/package-lock.json
 
 # IDE
 .vscode/
